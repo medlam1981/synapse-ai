@@ -102,7 +102,8 @@ class GGUFModelClient {
                         .optJSONObject("delta") ?: continue
 
                     // Handle thinking/reasoning content
-                    val reasoningContent = delta.optString("reasoning_content", "")
+                    // Note: optString returns "null" for JSON null, so check with isNull first
+                    val reasoningContent = if (delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content", "")
                     if (reasoningContent.isNotEmpty()) {
                         if (!thinking) {
                             thinking = true
@@ -113,7 +114,7 @@ class GGUFModelClient {
                     }
 
                     // Handle regular content
-                    val content = delta.optString("content", "")
+                    val content = if (delta.isNull("content")) "" else delta.optString("content", "")
                     if (content.isNotEmpty()) {
                         if (thinking) {
                             thinking = false

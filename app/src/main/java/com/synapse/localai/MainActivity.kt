@@ -84,10 +84,10 @@ fun ChatApp(viewModel: AgentViewModel) {
         viewModel.loadConfig(context)
     }
 
-    // Auto-scroll on new messages AND during streaming
+    // Auto-scroll to bottom of last message during streaming
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.logs.size - 1)
+            listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = Int.MAX_VALUE)
         }
     }
 
