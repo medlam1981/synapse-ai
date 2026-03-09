@@ -14,11 +14,11 @@ configurations.all {
 }
 
 android {
-    namespace = "com.droidrun.agent"
+    namespace = "com.synapse.localai"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.droidrun.agent"
+        applicationId = "com.synapse.localai"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

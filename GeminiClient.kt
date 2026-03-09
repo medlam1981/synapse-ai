@@ -1,5 +1,5 @@
 
-package com.droidrun.agent
+package com.synapse.localai
 
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType

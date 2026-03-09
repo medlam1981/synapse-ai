@@ -1,4 +1,4 @@
-package com.droidrun.agent
+package com.synapse.localai
 
 import java.io.File
 import android.content.Context

@@ -93,7 +93,7 @@ All inference runs on-device. No data leaves your phone.
 | Property | Value |
 |----------|-------|
 | **App Name** | Synapse AI |
-| **Package** | `com.droidrun.agent` |
+| **Package** | `com.synapse.localai` |
 | **Version** | 1.0-SYNAPSE |
 | **Min SDK** | 26 (Android 8.0 Oreo) |
 | **Target SDK** | 34 (Android 14) |
@@ -246,7 +246,7 @@ synapse-ai/
 │   ├── build.gradle.kts          # App build config & dependencies
 │   ├── src/main/
 │   │   ├── AndroidManifest.xml   # Permissions & app config
-│   │   ├── java/com/droidrun/agent/
+│   │   ├── java/com/synapse/localai/
 │   │   │   ├── MainActivity.kt       # Compose UI & chat screen
 │   │   │   ├── AgentViewModel.kt      # ViewModel & business logic
 │   │   │   ├── GGUFModelClient.kt     # GGUF HTTP streaming client

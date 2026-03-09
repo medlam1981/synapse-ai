@@ -1,5 +1,5 @@
 
-package com.droidrun.agent
+package com.synapse.localai
 
 import android.content.Intent
 import android.net.Uri

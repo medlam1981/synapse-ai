@@ -1,4 +1,4 @@
-package com.droidrun.agent
+package com.synapse.localai
 
 import android.content.Context
 import android.util.Log
