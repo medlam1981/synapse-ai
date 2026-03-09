@@ -54,6 +54,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onPause() {
+        super.onPause()
+        viewModel.saveConversation(this)
+    }
 }
 
 @Composable
@@ -87,7 +92,7 @@ fun ChatApp(viewModel: AgentViewModel) {
     // Auto-scroll to bottom of last message during streaming
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = Int.MAX_VALUE)
+            listState.scrollToItem(uiState.logs.size - 1, scrollOffset = Int.MAX_VALUE)
         }
     }
 
@@ -167,13 +172,25 @@ fun ChatApp(viewModel: AgentViewModel) {
                     }
                 }
             }
-            IconButton(
-                onClick = { showSettings = true },
-                modifier = Modifier
-                    .background(NeonPurple.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                    .border(1.dp, NeonPurple.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-            ) {
-                Text("\u2699", fontSize = 20.sp, color = NeonPurple.copy(alpha = 0.7f))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                IconButton(
+                    onClick = { viewModel.clearConversation(context) },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(Color(0xFFEF4444).copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                ) {
+                    Text("🗑", fontSize = 16.sp)
+                }
+                IconButton(
+                    onClick = { showSettings = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(NeonPurple.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                        .border(1.dp, NeonPurple.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                ) {
+                    Text("\u2699", fontSize = 20.sp, color = NeonPurple.copy(alpha = 0.7f))
+                }
             }
         }
 

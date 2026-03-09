@@ -11,12 +11,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.*
 
 enum class ModelType { LITERTLM, GGUF }
 
 data class AgentConfig(
     val useLocalModel: Boolean = true,
-    val localModelPath: String = "/sdcard/Download/gemma3-1b.litertlm"
+    val localModelPath: String = ""
 )
 
 data class AgentUiState(
@@ -34,6 +38,7 @@ class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "AgentViewModel"
+        private const val MAX_HISTORY_MESSAGES = 20
 
         fun detectModelType(path: String): ModelType {
             val ext = path.substringAfterLast('.', "").lowercase()
@@ -51,18 +56,29 @@ class AgentViewModel : ViewModel() {
     private var ggufClient: GGUFModelClient? = null
     private var currentJob: Job? = null
 
+    // Conversation history for context (role + content pairs)
+    private val conversationHistory = mutableListOf<Pair<String, String>>()
+
     // ========== CONFIG ==========
 
     fun loadConfig(context: Context) {
         val prefs = prefs(context)
+        val savedPath = prefs.getString("local_model_path", null)
         val config = AgentConfig(
-            useLocalModel = prefs.getBoolean("use_local_model", true),
-            localModelPath = prefs.getString("local_model_path", "/sdcard/Download/gemma3-1b.litertlm") ?: "/sdcard/Download/gemma3-1b.litertlm"
+            useLocalModel = savedPath != null,
+            localModelPath = savedPath ?: ""
         )
         _uiState.update { it.copy(config = config) }
-        addSystemLog("Synapse AI initialized.")
 
-        if (config.useLocalModel) {
+        // Restore saved conversation
+        val restored = restoreConversation(prefs)
+        if (restored) {
+            addSystemLog("Welcome back! Previous conversation restored. 🧠")
+        } else {
+            addSystemLog("Welcome to Synapse AI! 🧠\nGo to ⚙️ Settings to select and load an AI model.")
+        }
+
+        if (config.useLocalModel && config.localModelPath.isNotBlank()) {
             loadModel(context, config.localModelPath)
         }
     }
@@ -121,10 +137,15 @@ class AgentViewModel : ViewModel() {
             try {
                 val client = GGUFModelClient()
                 ggufClient = client
-                client.loadModel(path, contextLength = 512) {
-                    _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
-                    addSystemLog("> GGUF model loaded: $modelName ✓")
-                }
+                client.loadModel(
+                    path = path,
+                    contextLength = 2048,
+                    onStatus = { status -> addSystemLog("> $status") },
+                    onLoaded = {
+                        _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                        addSystemLog("> GGUF model loaded: $modelName ✓")
+                    }
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "GGUF load failed", e)
                 _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
@@ -144,12 +165,34 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
     }
 
+    // ========== SYSTEM PROMPT WITH TIME ==========
+
+    private fun buildSystemPrompt(): String {
+        val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", Locale.ENGLISH).format(Date())
+        val tz = TimeZone.getDefault().displayName
+        return """You are Synapse AI, a powerful and friendly local AI assistant running on the user's Android device.
+
+Current date and time: $now
+Timezone: $tz
+Device: Android (local on-device inference)
+
+Instructions:
+- Answer questions clearly, thoroughly, and helpfully.
+- You have full knowledge of the conversation history. Use it to maintain context.
+- If asked about the time, date, or day, use the current date/time provided above.
+- Be honest about your limitations: you run locally and cannot browse the internet or access external services.
+- Never stop mid-sentence. Always complete your thoughts and answers fully.
+- If a response is long, structure it with headings, bullet points, or numbered lists.
+- Be friendly, informative, and conversational."""
+    }
+
     // ========== CHAT ==========
 
     fun sendCommand(command: String) {
         if (command.isBlank() || _uiState.value.isProcessing) return
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
+        conversationHistory.add("user" to command)
         _uiState.update { it.copy(isProcessing = true) }
 
         currentJob = viewModelScope.launch {
@@ -164,27 +207,41 @@ class AgentViewModel : ViewModel() {
                 addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
                 var fullResponse = ""
+                val systemPrompt = buildSystemPrompt()
 
                 when (modelType) {
                     ModelType.LITERTLM -> {
-                        litertlmClient.generateResponseStream(command, LOCAL_CHAT_PROMPT)
+                        // LiteRT-LM: build context from history
+                        val contextPrompt = buildContextForLitertlm(command)
+                        litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
                             .collect { chunk ->
                                 fullResponse += chunk
                                 updateStreamingLog(responseId, fullResponse)
                             }
                     }
                     ModelType.GGUF -> {
-                        ggufClient!!.generateStream(command, LOCAL_CHAT_PROMPT)
-                            .collect { chunk ->
-                                fullResponse += chunk
-                                updateStreamingLog(responseId, fullResponse)
-                            }
+                        // GGUF: send full conversation history via messages API
+                        ggufClient!!.generateStreamWithHistory(
+                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
+                            systemPrompt
+                        ).collect { chunk ->
+                            fullResponse += chunk
+                            updateStreamingLog(responseId, fullResponse)
+                        }
                     }
                 }
 
                 if (fullResponse.isBlank()) {
                     _uiState.update { state -> state.copy(logs = state.logs.filter { it.id != responseId }) }
                     addLog(LogEntry(sender = "SYSTEM", text = "Model returned empty response.", isError = true))
+                } else {
+                    // Save assistant response to history
+                    val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
+                    conversationHistory.add("assistant" to cleanResponse)
+                    // Trim history to keep memory manageable
+                    while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                        conversationHistory.removeAt(0)
+                    }
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -197,6 +254,22 @@ class AgentViewModel : ViewModel() {
                 _uiState.update { it.copy(isProcessing = false) }
             }
         }
+    }
+
+    private fun buildContextForLitertlm(currentMessage: String): String {
+        // For LiteRT-LM, build a simple text context from recent history
+        val recent = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).dropLast(1) // exclude current
+        if (recent.isEmpty()) return currentMessage
+
+        val sb = StringBuilder()
+        sb.appendLine("Previous conversation:")
+        for ((role, content) in recent) {
+            val label = if (role == "user") "User" else "Assistant"
+            sb.appendLine("$label: $content")
+        }
+        sb.appendLine()
+        sb.appendLine("User: $currentMessage")
+        return sb.toString()
     }
 
     private fun updateStreamingLog(responseId: String, text: String) {
@@ -216,6 +289,70 @@ class AgentViewModel : ViewModel() {
         addLog(LogEntry(sender = "SYSTEM", text = "■ Stopped."))
     }
 
+    // ========== CONVERSATION PERSISTENCE ==========
+
+    fun saveConversation(context: Context) {
+        val prefs = prefs(context)
+        val logs = _uiState.value.logs.filter { it.sender != "SYSTEM" }
+        val jsonArray = JSONArray()
+        for (log in logs.takeLast(50)) {
+            jsonArray.put(JSONObject().put("sender", log.sender).put("text", log.text))
+        }
+        // Save history pairs too
+        val histArray = JSONArray()
+        for ((role, content) in conversationHistory.takeLast(MAX_HISTORY_MESSAGES)) {
+            histArray.put(JSONObject().put("role", role).put("content", content))
+        }
+        prefs.edit()
+            .putString("saved_logs", jsonArray.toString())
+            .putString("saved_history", histArray.toString())
+            .apply()
+        Log.d(TAG, "Conversation saved (${logs.size} messages)")
+    }
+
+    private fun restoreConversation(prefs: SharedPreferences): Boolean {
+        val logsJson = prefs.getString("saved_logs", null) ?: return false
+        val histJson = prefs.getString("saved_history", null)
+
+        try {
+            val jsonArray = JSONArray(logsJson)
+            if (jsonArray.length() == 0) return false
+
+            val restoredLogs = mutableListOf<LogEntry>()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                restoredLogs.add(LogEntry(
+                    sender = obj.getString("sender"),
+                    text = obj.getString("text")
+                ))
+            }
+            _uiState.update { it.copy(logs = restoredLogs) }
+
+            // Restore history pairs
+            if (histJson != null) {
+                val histArray = JSONArray(histJson)
+                conversationHistory.clear()
+                for (i in 0 until histArray.length()) {
+                    val obj = histArray.getJSONObject(i)
+                    conversationHistory.add(obj.getString("role") to obj.getString("content"))
+                }
+            }
+
+            Log.d(TAG, "Conversation restored (${restoredLogs.size} messages, ${conversationHistory.size} history)")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore conversation", e)
+            return false
+        }
+    }
+
+    fun clearConversation(context: Context) {
+        conversationHistory.clear()
+        _uiState.update { it.copy(logs = emptyList()) }
+        prefs(context).edit().remove("saved_logs").remove("saved_history").apply()
+        addSystemLog("Conversation cleared. 🗑️")
+    }
+
     // ========== HELPERS ==========
 
     private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
@@ -229,8 +366,3 @@ class AgentViewModel : ViewModel() {
         closeAllModels()
     }
 }
-
-private const val LOCAL_CHAT_PROMPT = """You are Synapse AI, a helpful assistant.
-Answer questions clearly and concisely.
-Be friendly and informative.
-If you don't know something, say so honestly."""
