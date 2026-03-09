@@ -1,0 +1,49 @@
+# Android
+*.iml
+.gradle/
+/local.properties
+.idea/
+*.apk
+*.aab
+*.ap_
+*.dex
+/build/
+/app/build/
+/captures
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# AAR libraries (large binary)
+app/libs/*.aar
+
+# Node modules
+node_modules/
+package-lock.json
+dist/
+dist-ssr/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Secrets
+*.keystore
+*.jks
+google-services.json
+
+# Models (large files)
+*.gguf
+*.litertlm
+
+# Session artifacts
+migrated_prompt_history/
