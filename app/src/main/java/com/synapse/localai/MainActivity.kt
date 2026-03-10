@@ -80,7 +80,6 @@ fun SynapseAITheme(content: @Composable () -> Unit) {
 @Composable
 fun ChatApp(viewModel: AgentViewModel) {
     val uiState by viewModel.uiState.collectAsState()
-    var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
@@ -92,7 +91,7 @@ fun ChatApp(viewModel: AgentViewModel) {
     // Auto-scroll to bottom of last message during streaming
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
-            listState.scrollToItem(uiState.logs.size - 1, scrollOffset = Int.MAX_VALUE)
+            listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = Int.MAX_VALUE)
         }
     }
 
@@ -172,7 +171,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 IconButton(
                     onClick = { viewModel.clearConversation(context) },
                     modifier = Modifier
@@ -254,72 +253,87 @@ fun ChatApp(viewModel: AgentViewModel) {
             }
         }
 
-        // Input Area
-        Box(
+        // Input Area (isolated to prevent streaming recomposition lag)
+        ChatInputBar(
+            isProcessing = uiState.isProcessing,
+            onSend = { text -> viewModel.sendCommand(text) },
+            onStop = { viewModel.stopAgent() }
+        )
+    }
+}
+
+@Composable
+private fun ChatInputBar(
+    isProcessing: Boolean,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit
+) {
+    var inputText by remember { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, DarkNavy.copy(alpha = 0.95f), DarkNavy)
+                )
+            )
+    ) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.Transparent, DarkNavy.copy(alpha = 0.95f), DarkNavy)
-                    )
-                )
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .navigationBarsPadding(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                    .navigationBarsPadding(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    placeholder = {
-                        Text(
-                            "Ask me anything...",
-                            color = Color.White.copy(alpha = 0.15f),
-                            fontSize = 13.sp
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = NeonCyan.copy(alpha = 0.3f),
-                        unfocusedBorderColor = NeonPurple.copy(alpha = 0.1f),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        cursorColor = NeonCyan,
-                        focusedContainerColor = MidNavy.copy(alpha = 0.5f),
-                        unfocusedContainerColor = DarkCard.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(20.dp),
-                    singleLine = false,
-                    maxLines = 3
-                )
-                Button(
-                    onClick = {
-                        if (uiState.isProcessing) {
-                            viewModel.stopAgent()
-                        } else if (inputText.isNotBlank()) {
-                            viewModel.sendCommand(inputText.trim())
-                            inputText = ""
-                        }
-                    },
-                    enabled = inputText.isNotBlank() || uiState.isProcessing,
-                    modifier = Modifier.size(52.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (uiState.isProcessing) Color(0xFFFF3B30) else NeonCyan,
-                        disabledContainerColor = NeonCyan.copy(alpha = 0.15f)
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
+            OutlinedTextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                placeholder = {
                     Text(
-                        if (uiState.isProcessing) "\u25A0" else "\u25B6",
-                        fontSize = 18.sp,
-                        color = Color.White
+                        "Ask me anything...",
+                        color = Color.White.copy(alpha = 0.15f),
+                        fontSize = 13.sp
                     )
-                }
+                },
+                modifier = Modifier.weight(1f),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NeonCyan.copy(alpha = 0.3f),
+                    unfocusedBorderColor = NeonPurple.copy(alpha = 0.1f),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = NeonCyan,
+                    focusedContainerColor = MidNavy.copy(alpha = 0.5f),
+                    unfocusedContainerColor = DarkCard.copy(alpha = 0.5f)
+                ),
+                shape = RoundedCornerShape(20.dp),
+                singleLine = false,
+                maxLines = 3
+            )
+            Button(
+                onClick = {
+                    if (isProcessing) {
+                        onStop()
+                    } else if (inputText.isNotBlank()) {
+                        onSend(inputText.trim())
+                        inputText = ""
+                    }
+                },
+                enabled = inputText.isNotBlank() || isProcessing,
+                modifier = Modifier.size(52.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isProcessing) Color(0xFFFF3B30) else NeonCyan,
+                    disabledContainerColor = NeonCyan.copy(alpha = 0.15f)
+                ),
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    if (isProcessing) "\u25A0" else "\u25B6",
+                    fontSize = 18.sp,
+                    color = Color.White
+                )
             }
         }
     }

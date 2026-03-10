@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +18,14 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 enum class ModelType { LITERTLM, GGUF }
+
+data class ScheduledTask(
+    val id: String = UUID.randomUUID().toString(),
+    val description: String,
+    val command: String,
+    val executeAt: Long, // timestamp in millis
+    val status: String = "pending" // pending, running, done, failed
+)
 
 data class AgentConfig(
     val useLocalModel: Boolean = true,
@@ -62,6 +71,8 @@ class AgentViewModel : ViewModel() {
     private val litertlmClient: LocalModelClient = LocalModelClient.shared
     private var ggufClient: GGUFModelClient? = null
     private var currentJob: Job? = null
+    private var schedulerJob: Job? = null
+    private val scheduledTasks = mutableListOf<ScheduledTask>()
 
     // Conversation history for context (role + content pairs)
     private val conversationHistory = mutableListOf<Pair<String, String>>()
@@ -210,63 +221,68 @@ class AgentViewModel : ViewModel() {
     private fun buildSystemPrompt(): String {
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", Locale.ENGLISH).format(Date())
         val hasA11y = SynapseAccessibilityService.isConnected
+
+        // Show pending scheduled tasks
+        val taskList = synchronized(scheduledTasks) {
+            scheduledTasks.filter { it.status == "pending" }
+        }
+        val taskInfo = if (taskList.isNotEmpty()) {
+            val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+            "\nPending tasks: " + taskList.joinToString(", ") { "${it.description}@${fmt.format(Date(it.executeAt))}" }
+        } else ""
+
         val toolsSection = if (hasA11y) """
 
 You control this Android device. Use >>> commands to act.
 
-STEP 1: Read screen first.
-STEP 2: Do one action.
-STEP 3: Read screen again to verify.
+WORKFLOW: Read screen → Think → Act → Read screen again.
 
 TOOLS:
->>> SCREEN_TREE          — See all screen elements with index numbers
+>>> SCREEN_TREE          — See screen elements with indices
 >>> READ_SCREEN          — Read screen text
->>> LAUNCH <app>         — Open app (e.g. >>> LAUNCH Settings)
->>> TAP_INDEX <n>        — Tap element by index number
+>>> LAUNCH <app>         — Open app
+>>> TAP_INDEX <n>        — Tap element by index
 >>> CLICK_TEXT <text>    — Tap text on screen
 >>> CLICK <x> <y>       — Tap coordinates
->>> TYPE <text>          — Type in focused field
->>> BACK                 — Go back
->>> HOME                 — Go home
->>> SWIPE_UP             — Swipe up
->>> SWIPE_DOWN           — Swipe down
->>> SCROLL UP            — Scroll up
->>> SCROLL DOWN          — Scroll down
->>> OPEN_SETTINGS        — Open Settings app
->>> OPEN_WIFI            — Open WiFi settings
->>> OPEN_BLUETOOTH       — Open Bluetooth settings
->>> OPEN_DISPLAY         — Open Display settings
->>> OPEN_SOUND           — Open Sound settings
->>> OPEN_BATTERY         — Open Battery settings
+>>> TYPE <text>          — Type in field
+>>> BACK / HOME          — Navigate
+>>> SWIPE_UP / SWIPE_DOWN / SWIPE_LEFT / SWIPE_RIGHT
+>>> SCROLL UP / SCROLL DOWN
+>>> OPEN_SETTINGS / OPEN_WIFI / OPEN_BLUETOOTH / OPEN_DISPLAY / OPEN_SOUND / OPEN_BATTERY
 >>> NOTIFICATIONS        — Pull down notifications
 >>> VOLUME <0-100>       — Set volume
 >>> BRIGHTNESS <0-100>   — Set brightness
->>> PACKAGES             — List installed apps
+>>> PACKAGES             — List apps
 >>> STOP_APP <app>       — Force stop app
 >>> OPEN_URL <url>       — Open URL
 >>> LONG_PRESS <x> <y>  — Long press
 >>> SWIPE <x1> <y1> <x2> <y2>
->>> APPEND <text>        — Append text
->>> DELETE <n>           — Delete chars
->>> CLEAR                — Clear field
->>> RECENTS              — Recent apps
->>> HUD_REFRESH          — Refresh element indices
+>>> APPEND <text> / DELETE <n> / CLEAR
+>>> RECENTS / HUD_REFRESH
+>>> SCHEDULE <minutes> <task description> — Schedule task for later
+>>> LIST_TASKS           — Show scheduled tasks
+>>> CANCEL_TASK <name>   — Cancel a scheduled task
 
 RULES:
-- ALWAYS use >>> SCREEN_TREE before tapping anything
-- Use >>> TAP_INDEX with the number from SCREEN_TREE
-- One command per line, each starting with >>>
+- Use >>> SCREEN_TREE before tapping
+- Use >>> TAP_INDEX with numbers from SCREEN_TREE
+- One >>> command per line
+- Think carefully, then act
 
-Example task "enable WiFi":
+Example "enable WiFi":
 >>> OPEN_WIFI
 >>> SCREEN_TREE
-Then find the WiFi toggle index and:
->>> TAP_INDEX <n>""" else ""
+(read result, find toggle index)
+>>> TAP_INDEX <n>
 
-        return """You are Synapse AI, an AI assistant on this Android device.
-Time: $now${if (hasA11y) "\nDevice Control: ENABLED" else ""}
-You answer questions and can control the device using >>> commands.
-Always complete your answers. Be helpful and concise.$toolsSection"""
+Example "remind me in 30 minutes to check email":
+>>> SCHEDULE 30 LAUNCH Gmail""" else ""
+
+        return """You are Synapse AI, an intelligent agent on this Android device.
+Time: $now$taskInfo${if (hasA11y) "\nDevice Control: ENABLED" else ""}
+You think step-by-step, make decisions, and execute tasks on the device.
+You can schedule tasks for later using >>> SCHEDULE <minutes> <task>.
+Always complete your answers.$toolsSection"""
     }
 
     // ========== CHAT ==========
@@ -685,6 +701,30 @@ Always complete your answers. Be helpful and concise.$toolsSection"""
             "OPEN_SOUND" -> { service.openSoundSettings(); "Opened Sound Settings" }
             "OPEN_BATTERY" -> { service.openBatterySettings(); "Opened Battery Settings" }
 
+            // --- TASK SCHEDULING ---
+            "SCHEDULE" -> {
+                // Format: SCHEDULE <minutes> <command to run>
+                // e.g. SCHEDULE 30 OPEN_WIFI
+                val scheduleParts = args.split(" ", limit = 2)
+                val minutes = scheduleParts.getOrNull(0)?.toIntOrNull()
+                val taskCmd = scheduleParts.getOrNull(1)?.trim()
+                if (minutes != null && !taskCmd.isNullOrBlank()) {
+                    scheduleTask(taskCmd, taskCmd, minutes)
+                } else {
+                    "Usage: SCHEDULE <minutes> <description or command>"
+                }
+            }
+            "LIST_TASKS" -> {
+                listScheduledTasks()
+            }
+            "CANCEL_TASK" -> {
+                if (args.isNotBlank() && cancelScheduledTask(args)) {
+                    "Cancelled task: $args"
+                } else {
+                    "No pending task found matching: $args"
+                }
+            }
+
             else -> {
                 Log.w(TAG, "Unknown tool: $action")
                 null
@@ -708,7 +748,13 @@ Always complete your answers. Be helpful and concise.$toolsSection"""
         return sb.toString()
     }
 
+    private var lastStreamUpdate = 0L
+
     private fun updateStreamingLog(responseId: String, text: String) {
+        val now = System.currentTimeMillis()
+        // Throttle UI updates to every 100ms to reduce recomposition during streaming
+        if (now - lastStreamUpdate < 100 && text.length > 10) return
+        lastStreamUpdate = now
         _uiState.update { state ->
             val updatedLogs = state.logs.map { log ->
                 if (log.id == responseId) log.copy(text = text.trim()) else log
@@ -790,6 +836,70 @@ Always complete your answers. Be helpful and concise.$toolsSection"""
         addSystemLog("Conversation cleared. 🗑️")
     }
 
+    // ========== TASK SCHEDULING ==========
+
+    fun startScheduler() {
+        if (schedulerJob != null) return
+        schedulerJob = viewModelScope.launch {
+            while (true) {
+                delay(10_000) // Check every 10 seconds
+                checkScheduledTasks()
+            }
+        }
+        Log.i(TAG, "Task scheduler started")
+    }
+
+    private fun checkScheduledTasks() {
+        val now = System.currentTimeMillis()
+        val readyTasks = synchronized(scheduledTasks) {
+            scheduledTasks.filter { it.status == "pending" && it.executeAt <= now }
+        }
+        for (task in readyTasks) {
+            synchronized(scheduledTasks) {
+                val idx = scheduledTasks.indexOfFirst { it.id == task.id }
+                if (idx >= 0) scheduledTasks[idx] = task.copy(status = "running")
+            }
+            addSystemLog("⏰ Running scheduled task: ${task.description}")
+            sendCommand(task.command)
+            synchronized(scheduledTasks) {
+                val idx = scheduledTasks.indexOfFirst { it.id == task.id }
+                if (idx >= 0) scheduledTasks[idx] = scheduledTasks[idx].copy(status = "done")
+            }
+        }
+    }
+
+    fun scheduleTask(description: String, command: String, delayMinutes: Int): String {
+        val executeAt = System.currentTimeMillis() + (delayMinutes * 60_000L)
+        val task = ScheduledTask(
+            description = description,
+            command = command,
+            executeAt = executeAt
+        )
+        synchronized(scheduledTasks) { scheduledTasks.add(task) }
+        startScheduler()
+        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(executeAt))
+        Log.i(TAG, "Task scheduled: '${task.description}' at $timeStr")
+        return "Scheduled '${task.description}' for $timeStr (in ${delayMinutes}min)"
+    }
+
+    fun listScheduledTasks(): String {
+        val tasks = synchronized(scheduledTasks) { scheduledTasks.toList() }
+        if (tasks.isEmpty()) return "No scheduled tasks"
+        val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        return tasks.joinToString("\n") { t ->
+            "[${t.status}] ${t.description} — ${fmt.format(Date(t.executeAt))}"
+        }
+    }
+
+    fun cancelScheduledTask(description: String): Boolean {
+        return synchronized(scheduledTasks) {
+            val idx = scheduledTasks.indexOfFirst {
+                it.status == "pending" && it.description.contains(description, ignoreCase = true)
+            }
+            if (idx >= 0) { scheduledTasks.removeAt(idx); true } else false
+        }
+    }
+
     // ========== HELPERS ==========
 
     private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
@@ -800,6 +910,7 @@ Always complete your answers. Be helpful and concise.$toolsSection"""
 
     override fun onCleared() {
         super.onCleared()
+        schedulerJob?.cancel()
         closeAllModels()
     }
 }
