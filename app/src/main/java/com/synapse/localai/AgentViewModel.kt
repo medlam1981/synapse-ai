@@ -54,7 +54,7 @@ class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "AgentViewModel"
-        private const val MAX_HISTORY_MESSAGES = 20
+        private const val MAX_HISTORY_MESSAGES = 12
 
         fun detectModelType(path: String): ModelType {
             val ext = path.substringAfterLast('.', "").lowercase()
@@ -308,7 +308,7 @@ Always complete your answers.$toolsSection"""
                 val responseId = java.util.UUID.randomUUID().toString()
                 addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
-                var fullResponse = ""
+                val responseSb = StringBuilder(512)
                 val systemPrompt = buildSystemPrompt()
 
                 when (modelType) {
@@ -316,8 +316,8 @@ Always complete your answers.$toolsSection"""
                         val contextPrompt = buildContextForLitertlm(command)
                         litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
                             .collect { chunk ->
-                                fullResponse += chunk
-                                updateStreamingLog(responseId, fullResponse)
+                                responseSb.append(chunk)
+                                updateStreamingLog(responseId, responseSb.toString())
                             }
                     }
                     ModelType.GGUF -> {
@@ -325,12 +325,13 @@ Always complete your answers.$toolsSection"""
                             conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
                             systemPrompt
                         ).collect { chunk ->
-                            fullResponse += chunk
-                            updateStreamingLog(responseId, fullResponse)
+                            responseSb.append(chunk)
+                            updateStreamingLog(responseId, responseSb.toString())
                         }
                     }
                 }
 
+                val fullResponse = responseSb.toString()
                 if (fullResponse.isBlank()) {
                     _uiState.update { state -> state.copy(logs = state.logs.filter { it.id != responseId }) }
                     addLog(LogEntry(sender = "SYSTEM", text = "Model returned empty response.", isError = true))
@@ -411,7 +412,7 @@ Always complete your answers.$toolsSection"""
         // After UI actions, auto-capture screen state so model can see what happened
         if (hadUIAction) {
             try {
-                val screenData = service.getCompactScreenTreeJson().take(2000)
+                val screenData = service.getCompactScreenTreeJson().take(1200)
                 feedbackParts.add("[SCREEN after actions]\n$screenData")
             } catch (e: Exception) {
                 Log.e(TAG, "Auto screen capture failed", e)
@@ -439,11 +440,11 @@ Always complete your answers.$toolsSection"""
     /** Get the actual data output for feedback commands */
     private fun getToolFeedbackData(service: SynapseAccessibilityService, action: String): String? {
         return when (action) {
-            "SCREEN_TREE" -> service.getCompactScreenTreeJson().take(2000)
-            "READ_SCREEN" -> service.getScreenText().take(1500)
+            "SCREEN_TREE" -> service.getCompactScreenTreeJson().take(1200)
+            "READ_SCREEN" -> service.getScreenText().take(1000)
             "SCREEN_SUMMARY" -> service.getScreenSummary()
             "CURRENT_APP" -> service.getCurrentPackage()
-            "PACKAGES" -> service.getInstalledPackages().take(1500)
+            "PACKAGES" -> service.getInstalledPackages().take(1000)
             else -> null
         }
     }
@@ -470,13 +471,14 @@ Always complete your answers.$toolsSection"""
             var fullResponse = ""
             try {
                 val modelType = _uiState.value.activeModelType ?: break
+                val responseSb = StringBuilder(512)
                 when (modelType) {
                     ModelType.LITERTLM -> {
                         val contextPrompt = buildContextForLitertlm(feedbackMsg)
                         litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
                             .collect { chunk ->
-                                fullResponse += chunk
-                                updateStreamingLog(responseId, fullResponse)
+                                responseSb.append(chunk)
+                                updateStreamingLog(responseId, responseSb.toString())
                             }
                     }
                     ModelType.GGUF -> {
@@ -484,11 +486,12 @@ Always complete your answers.$toolsSection"""
                             conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
                             systemPrompt
                         ).collect { chunk ->
-                            fullResponse += chunk
-                            updateStreamingLog(responseId, fullResponse)
+                            responseSb.append(chunk)
+                            updateStreamingLog(responseId, responseSb.toString())
                         }
                     }
                 }
+                fullResponse = responseSb.toString()
             } catch (e: Exception) {
                 Log.e(TAG, "Feedback loop error: ${e.message}")
                 break
@@ -770,6 +773,25 @@ Always complete your answers.$toolsSection"""
         SynapseAccessibilityService.instance?.restoreKeyboard()
         _uiState.update { it.copy(isProcessing = false) }
         addLog(LogEntry(sender = "SYSTEM", text = "■ Stopped."))
+    }
+
+    /** Called by Activity.onTrimMemory to reduce memory usage under pressure */
+    fun trimMemory(aggressive: Boolean) {
+        Log.w(TAG, "trimMemory aggressive=$aggressive, history=${conversationHistory.size}, logs=${_uiState.value.logs.size}")
+        if (aggressive) {
+            // Keep only last 4 messages in history
+            while (conversationHistory.size > 4) conversationHistory.removeAt(0)
+            // Keep only last 10 log entries in UI
+            _uiState.update { state ->
+                state.copy(logs = state.logs.takeLast(10))
+            }
+        } else {
+            // Keep only last 8 messages
+            while (conversationHistory.size > 8) conversationHistory.removeAt(0)
+            _uiState.update { state ->
+                state.copy(logs = state.logs.takeLast(20))
+            }
+        }
     }
 
     // ========== CONVERSATION PERSISTENCE ==========

@@ -1,6 +1,8 @@
 package com.synapse.localai
 
+import android.content.ComponentCallbacks2
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
@@ -45,6 +47,7 @@ data class LogEntry(
 
 class MainActivity : ComponentActivity() {
     private val viewModel = AgentViewModel()
+    private companion object { private const val TAG = "SynapseMain" }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +61,21 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         viewModel.saveConversation(this)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        Log.w(TAG, "onTrimMemory level=$level")
+        when {
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+                // System is critically low on memory - trim conversation history aggressively
+                viewModel.trimMemory(aggressive = true)
+                System.gc()
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
+                viewModel.trimMemory(aggressive = false)
+            }
+        }
     }
 }
 

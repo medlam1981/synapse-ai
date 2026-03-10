@@ -196,7 +196,7 @@ class GGUFModelClient {
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
-            .put("max_tokens", 2048)
+            .put("max_tokens", 1024)
             .put("temperature", 0.7)
             .put("stream", true)
 
