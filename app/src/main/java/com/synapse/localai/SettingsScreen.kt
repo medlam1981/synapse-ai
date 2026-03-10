@@ -2,6 +2,8 @@ package com.synapse.localai
 
 import java.io.File
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -331,6 +333,83 @@ fun SettingsScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
+            }
+
+            // Device Control Card
+            val a11yConnected = SynapseAccessibilityService.isConnected
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkCard),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("DEVICE CONTROL", color = NeonMagenta, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        if (a11yConnected) Color(0xFF34D399) else Color(0xFFEF4444),
+                                        RoundedCornerShape(4.dp)
+                                    )
+                            )
+                            Text(
+                                if (a11yConnected) "Active" else "Disabled",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Divider(color = NeonMagenta.copy(alpha = 0.1f))
+
+                    Text(
+                        if (a11yConnected)
+                            "✓ Accessibility Service is active.\nSynapse AI can control the device: launch apps, tap, scroll, type, read screen."
+                        else
+                            "Enable the Accessibility Service to allow Synapse AI to control your device.\nThis enables: launching apps, tapping, scrolling, typing text, and reading screen content.",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp
+                    )
+
+                    if (a11yConnected) {
+                        Text(
+                            "Available tools: LAUNCH, CLICK, CLICK_TEXT, SCROLL, TYPE, BACK, HOME, RECENTS, READ_SCREEN, SCREEN_TREE, SWIPE, LONG_PRESS",
+                            color = NeonCyan.copy(alpha = 0.3f),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (a11yConnected) NeonMagenta.copy(alpha = 0.15f) else NeonMagenta
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            if (a11yConnected) "Open Accessibility Settings" else "⚡ Enable Accessibility Service",
+                            color = if (a11yConnected) NeonMagenta else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(32.dp))

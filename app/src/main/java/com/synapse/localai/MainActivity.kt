@@ -173,6 +173,18 @@ fun ChatApp(viewModel: AgentViewModel) {
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Accessibility status indicator
+                if (SynapseAccessibilityService.isConnected) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(NeonMagenta.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                            .border(1.dp, NeonMagenta.copy(alpha = 0.2f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("⚡", fontSize = 16.sp)
+                    }
+                }
                 IconButton(
                     onClick = { viewModel.clearConversation(context) },
                     modifier = Modifier

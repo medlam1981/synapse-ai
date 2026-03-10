@@ -31,7 +31,8 @@ data class AgentUiState(
     val localModelLoading: Boolean = false,
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
-    val streamVersion: Int = 0
+    val streamVersion: Int = 0,
+    val accessibilityConnected: Boolean = false
 )
 
 class AgentViewModel : ViewModel() {
@@ -171,11 +172,41 @@ class AgentViewModel : ViewModel() {
     private fun buildSystemPrompt(): String {
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", Locale.ENGLISH).format(Date())
         val tz = TimeZone.getDefault().displayName
+        val hasA11y = SynapseAccessibilityService.isConnected
+        val toolsSection = if (hasA11y) """
+
+You also have DEVICE CONTROL capabilities via these tools. When the user asks you to perform an action on the device, respond with the tool command on its own line prefixed with >>>.
+
+Available tools:
+>>> LAUNCH <app_name>          — Open an app (e.g. >>> LAUNCH Chrome)
+>>> CLICK <x> <y>             — Tap screen at coordinates
+>>> CLICK_TEXT <text>          — Tap on visible text/button
+>>> SCROLL UP                  — Scroll the screen up
+>>> SCROLL DOWN                — Scroll the screen down
+>>> TYPE <text>                — Type text into focused field
+>>> BACK                       — Press back button
+>>> HOME                       — Go to home screen
+>>> RECENTS                    — Open recent apps
+>>> NOTIFICATIONS              — Open notification shade
+>>> READ_SCREEN                — Read all text visible on screen
+>>> SCREEN_TREE                — Get UI element tree with coordinates
+>>> LONG_PRESS <x> <y>        — Long press at coordinates
+>>> SWIPE <x1> <y1> <x2> <y2> — Swipe from point to point
+
+Rules for tool use:
+- Put each tool command on its own line starting with >>>
+- You can use multiple tools in one response
+- After each tool, explain what you did
+- You can combine chat text with tool commands
+- If user asks to do something on the device, use the tools above
+- For clicking buttons, prefer CLICK_TEXT when you know the text
+- Use READ_SCREEN or SCREEN_TREE to see what's on screen first""" else ""
+
         return """You are Synapse AI, a powerful and friendly local AI assistant running on the user's Android device.
 
 Current date and time: $now
 Timezone: $tz
-Device: Android (local on-device inference)
+Device: Android (local on-device inference)${if (hasA11y) "\nDevice Control: ENABLED (Accessibility Service active)" else "\nDevice Control: DISABLED (enable in Android Accessibility Settings)"}
 
 Instructions:
 - Answer questions clearly, thoroughly, and helpfully.
@@ -184,7 +215,7 @@ Instructions:
 - Be honest about your limitations: you run locally and cannot browse the internet or access external services.
 - Never stop mid-sentence. Always complete your thoughts and answers fully.
 - If a response is long, structure it with headings, bullet points, or numbered lists.
-- Be friendly, informative, and conversational."""
+- Be friendly, informative, and conversational.$toolsSection"""
     }
 
     // ========== CHAT ==========
@@ -194,7 +225,7 @@ Instructions:
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
         conversationHistory.add("user" to command)
-        _uiState.update { it.copy(isProcessing = true) }
+        _uiState.update { it.copy(isProcessing = true, accessibilityConnected = SynapseAccessibilityService.isConnected) }
 
         currentJob = viewModelScope.launch {
             try {
@@ -212,7 +243,6 @@ Instructions:
 
                 when (modelType) {
                     ModelType.LITERTLM -> {
-                        // LiteRT-LM: build context from history
                         val contextPrompt = buildContextForLitertlm(command)
                         litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
                             .collect { chunk ->
@@ -221,7 +251,6 @@ Instructions:
                             }
                     }
                     ModelType.GGUF -> {
-                        // GGUF: send full conversation history via messages API
                         ggufClient!!.generateStreamWithHistory(
                             conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
                             systemPrompt
@@ -236,13 +265,14 @@ Instructions:
                     _uiState.update { state -> state.copy(logs = state.logs.filter { it.id != responseId }) }
                     addLog(LogEntry(sender = "SYSTEM", text = "Model returned empty response.", isError = true))
                 } else {
-                    // Save assistant response to history
                     val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
                     conversationHistory.add("assistant" to cleanResponse)
-                    // Trim history to keep memory manageable
                     while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
                         conversationHistory.removeAt(0)
                     }
+
+                    // Execute any tool commands in the response
+                    executeToolCommands(fullResponse)
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -253,6 +283,113 @@ Instructions:
             } finally {
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
+            }
+        }
+    }
+
+    // ========== TOOL EXECUTION ==========
+
+    private suspend fun executeToolCommands(response: String) {
+        val service = SynapseAccessibilityService.instance ?: return
+
+        val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
+        if (toolLines.isEmpty()) return
+
+        for (line in toolLines) {
+            val cmd = line.trimStart().removePrefix(">>>").trim()
+            if (cmd.isEmpty()) continue
+
+            try {
+                val result = executeOneCommand(service, cmd)
+                if (result != null) {
+                    addSystemLog("⚡ $result")
+                }
+                // Small delay between actions for UI to update
+                kotlinx.coroutines.delay(300)
+            } catch (e: Exception) {
+                Log.e(TAG, "Tool exec failed: $cmd", e)
+                addSystemLog("⚠ Tool error: ${e.message}")
+            }
+        }
+    }
+
+    private suspend fun executeOneCommand(service: SynapseAccessibilityService, cmd: String): String? {
+        val parts = cmd.split(" ", limit = 2)
+        val action = parts[0].uppercase()
+        val args = if (parts.size > 1) parts[1].trim() else ""
+
+        return when (action) {
+            "LAUNCH" -> {
+                val ok = service.launchApp(args)
+                if (ok) "Launched: $args" else "App not found: $args"
+            }
+            "CLICK" -> {
+                val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
+                if (coords.size >= 2) {
+                    service.performClick(coords[0], coords[1])
+                    kotlinx.coroutines.delay(200)
+                    "Clicked at (${coords[0].toInt()}, ${coords[1].toInt()})"
+                } else null
+            }
+            "CLICK_TEXT" -> {
+                val ok = service.clickByText(args)
+                if (ok) "Clicked: \"$args\"" else "Text not found: \"$args\""
+            }
+            "SCROLL" -> {
+                val ok = service.scrollScreen(args)
+                if (ok) "Scrolled $args" else "Scroll failed"
+            }
+            "TYPE" -> {
+                val ok = service.typeText(args)
+                if (ok) "Typed text" else "No editable field focused"
+            }
+            "BACK" -> {
+                service.goBack()
+                "Pressed Back"
+            }
+            "HOME" -> {
+                service.goHome()
+                "Pressed Home"
+            }
+            "RECENTS" -> {
+                service.openRecents()
+                "Opened Recents"
+            }
+            "NOTIFICATIONS" -> {
+                service.openNotifications()
+                "Opened Notifications"
+            }
+            "READ_SCREEN" -> {
+                val text = service.getScreenText()
+                val preview = text.take(500)
+                addLog(LogEntry(sender = "SYSTEM", text = "📱 Screen text:\n$preview${if (text.length > 500) "\n..." else ""}"))
+                null
+            }
+            "SCREEN_TREE" -> {
+                val tree = service.getScreenTree()
+                val preview = tree.take(800)
+                addLog(LogEntry(sender = "SYSTEM", text = "🌳 UI Tree:\n$preview${if (tree.length > 800) "\n..." else ""}"))
+                null
+            }
+            "LONG_PRESS" -> {
+                val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
+                if (coords.size >= 2) {
+                    service.performLongPress(coords[0], coords[1])
+                    kotlinx.coroutines.delay(1300)
+                    "Long pressed at (${coords[0].toInt()}, ${coords[1].toInt()})"
+                } else null
+            }
+            "SWIPE" -> {
+                val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
+                if (coords.size >= 4) {
+                    service.performSwipe(coords[0], coords[1], coords[2], coords[3])
+                    kotlinx.coroutines.delay(500)
+                    "Swiped (${coords[0].toInt()},${coords[1].toInt()}) → (${coords[2].toInt()},${coords[3].toInt()})"
+                } else null
+            }
+            else -> {
+                Log.w(TAG, "Unknown tool: $action")
+                null
             }
         }
     }
