@@ -83,6 +83,9 @@ class AgentViewModel : ViewModel() {
         )
         _uiState.update { it.copy(config = config) }
 
+        // Apply overlay settings
+        applyOverlayConfig(config)
+
         // Restore saved conversation
         val restored = restoreConversation(prefs)
         if (restored) {
@@ -109,6 +112,10 @@ class AgentViewModel : ViewModel() {
             .putFloat("overlay_size", config.overlaySize)
             .apply()
         _uiState.update { it.copy(config = config) }
+
+        // Apply overlay settings
+        applyOverlayConfig(config)
+
         addSystemLog("> Config saved.")
 
         if (config.useLocalModel) {
@@ -118,6 +125,15 @@ class AgentViewModel : ViewModel() {
             }
         } else {
             closeAllModels()
+        }
+    }
+
+    private fun applyOverlayConfig(config: AgentConfig) {
+        val service = SynapseAccessibilityService.instance ?: return
+        service.setOverlayScale(config.overlaySize)
+        service.setOverlayEnabled(config.overlayEnabled)
+        if (config.overlayEnabled) {
+            service.refreshOverlay()
         }
     }
 
@@ -215,6 +231,10 @@ Available tools:
 >>> TAP_INDEX <n>                 — Tap element by index (from SCREEN_TREE)
 >>> LONG_PRESS <x> <y>           — Long press at coordinates
 >>> SWIPE <x1> <y1> <x2> <y2>   — Swipe between two points
+>>> SWIPE_UP                      — Swipe up from center
+>>> SWIPE_DOWN                    — Swipe down from center
+>>> SWIPE_LEFT                    — Swipe left from center
+>>> SWIPE_RIGHT                   — Swipe right from center
 
 — TEXT INPUT —
 >>> TYPE <text>                   — Set text in focused field
@@ -227,14 +247,22 @@ Available tools:
 >>> HOME                          — Go to home screen
 >>> RECENTS                       — Open recent apps
 >>> NOTIFICATIONS                 — Open notification shade
->>> SCROLL UP                     — Scroll the screen up
->>> SCROLL DOWN                   — Scroll the screen down
+>>> SCROLL UP                     — Scroll up (uses scrollable element)
+>>> SCROLL DOWN                   — Scroll down
+>>> SCROLL LEFT                   — Scroll left
+>>> SCROLL RIGHT                  — Scroll right
 
 — DEVICE STATE —
 >>> READ_SCREEN                   — Read all text visible on screen
 >>> SCREEN_TREE                   — Get UI element tree with indices
+>>> SCREEN_SUMMARY                — Quick screen state overview
 >>> SCREENSHOT                    — Take a screenshot (base64)
 >>> CURRENT_APP                   — Get current foreground app
+
+— HUD OVERLAY —
+>>> HUD_ON                        — Enable HUD overlay (shows element indices on screen)
+>>> HUD_OFF                       — Disable HUD overlay
+>>> HUD_REFRESH                   — Refresh HUD overlay with current screen elements
 
 — SYSTEM SETTINGS —
 >>> VOLUME <0-100>                — Set media volume
@@ -251,8 +279,11 @@ Rules:
 - You can use multiple tools in one response
 - After each tool, briefly explain what you did
 - For clicking buttons, prefer CLICK_TEXT when you know the text
-- Use READ_SCREEN or SCREEN_TREE to see what's on screen first
-- For apps, use their common name (Chrome, Settings, WhatsApp)""" else ""
+- Use SCREEN_TREE or SCREEN_SUMMARY to see what's on screen first
+- TAP_INDEX is the most precise way to tap (uses element index from SCREEN_TREE)
+- Use SWIPE_UP/DOWN/LEFT/RIGHT for easy navigation
+- For apps, use their common name (Chrome, Settings, WhatsApp)
+- When navigating, use SCREEN_TREE → TAP_INDEX workflow for precision""" else ""
 
         return """You are Synapse AI, a powerful and friendly local AI assistant running on the user's Android device.
 
@@ -462,6 +493,28 @@ Instructions:
                 if (ok) "Scrolled $args" else "Scroll failed"
             }
 
+            // --- DIRECTIONAL SWIPE ---
+            "SWIPE_UP" -> {
+                service.swipeDirection("UP")
+                kotlinx.coroutines.delay(500)
+                "Swiped up"
+            }
+            "SWIPE_DOWN" -> {
+                service.swipeDirection("DOWN")
+                kotlinx.coroutines.delay(500)
+                "Swiped down"
+            }
+            "SWIPE_LEFT" -> {
+                service.swipeDirection("LEFT")
+                kotlinx.coroutines.delay(500)
+                "Swiped left"
+            }
+            "SWIPE_RIGHT" -> {
+                service.swipeDirection("RIGHT")
+                kotlinx.coroutines.delay(500)
+                "Swiped right"
+            }
+
             // --- DEVICE STATE ---
             "READ_SCREEN" -> {
                 val text = service.getScreenText()
@@ -470,9 +523,14 @@ Instructions:
                 null
             }
             "SCREEN_TREE" -> {
-                val tree = service.getScreenTree()
-                val preview = tree.take(800)
-                addLog(LogEntry(sender = "SYSTEM", text = "🌳 UI Tree:\n$preview${if (tree.length > 800) "\n..." else ""}"))
+                val tree = service.getCompactScreenTreeJson()
+                val preview = tree.take(1200)
+                addLog(LogEntry(sender = "SYSTEM", text = "🌳 UI Tree:\n$preview${if (tree.length > 1200) "\n..." else ""}"))
+                null
+            }
+            "SCREEN_SUMMARY" -> {
+                val summary = service.getScreenSummary()
+                addLog(LogEntry(sender = "SYSTEM", text = "📊 $summary"))
                 null
             }
             "SCREENSHOT" -> {
@@ -491,6 +549,21 @@ Instructions:
             "CURRENT_APP" -> {
                 val pkg = service.getCurrentPackage()
                 if (pkg.isNotEmpty()) "Current app: $pkg" else "Could not detect current app"
+            }
+
+            // --- HUD OVERLAY ---
+            "HUD_ON" -> {
+                service.setOverlayEnabled(true)
+                service.refreshOverlay()
+                "HUD overlay enabled"
+            }
+            "HUD_OFF" -> {
+                service.setOverlayEnabled(false)
+                "HUD overlay disabled"
+            }
+            "HUD_REFRESH" -> {
+                service.refreshOverlay()
+                "HUD overlay refreshed (${service.overlayManager?.getElementCount() ?: 0} elements)"
             }
 
             // --- SYSTEM SETTINGS ---

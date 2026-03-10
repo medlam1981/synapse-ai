@@ -379,6 +379,77 @@ fun SettingsScreen(
                 )
             }
 
+            // ═══════ HUD OVERLAY SECTION ═══════
+            val overlayActive = SynapseAccessibilityService.instance?.isOverlayEnabled() == true
+            var overlayEnabled by remember(config.overlayEnabled) { mutableStateOf(config.overlayEnabled) }
+            var overlaySize by remember(config.overlaySize) { mutableStateOf(config.overlaySize) }
+
+            SettingsCard(
+                title = "HUD OVERLAY",
+                titleColor = Color(0xFF90CAF9),
+                statusDot = if (overlayActive) Color(0xFF34D399) else Color(0xFFEF4444),
+                statusText = if (overlayActive) "Active" else "Off"
+            ) {
+                Text(
+                    "Display colored index boxes on screen elements.\nThe agent uses these indices for precise tapping via TAP_INDEX.",
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable HUD Overlay", color = Color.White, fontSize = 13.sp)
+                    Switch(
+                        checked = overlayEnabled,
+                        onCheckedChange = { checked ->
+                            overlayEnabled = checked
+                            val newConfig = config.copy(overlayEnabled = checked)
+                            viewModel.saveConfig(context, newConfig)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF90CAF9),
+                            checkedTrackColor = Color(0xFF90CAF9).copy(alpha = 0.3f),
+                            uncheckedThumbColor = Color.White.copy(alpha = 0.4f),
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                        )
+                    )
+                }
+
+                Text(
+                    "HUD Size: ${(overlaySize * 100).toInt()}%",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Slider(
+                    value = overlaySize,
+                    onValueChange = { overlaySize = it },
+                    onValueChangeFinished = {
+                        val newConfig = config.copy(overlaySize = overlaySize)
+                        viewModel.saveConfig(context, newConfig)
+                    },
+                    valueRange = 0.5f..2.0f,
+                    steps = 5,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF90CAF9),
+                        activeTrackColor = Color(0xFF90CAF9).copy(alpha = 0.6f),
+                        inactiveTrackColor = Color.White.copy(alpha = 0.08f)
+                    )
+                )
+
+                Text(
+                    "50% — 100% — 150% — 200%",
+                    color = Color.White.copy(alpha = 0.15f),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
             // ═══════ DEVICE CONTROL SECTION ═══════
             val a11yConnected = SynapseAccessibilityService.isConnected
             SettingsCard(title = "DEVICE CONTROL", titleColor = NeonMagenta, statusDot = if (a11yConnected) Color(0xFF34D399) else Color(0xFFEF4444), statusText = if (a11yConnected) "Active" else "Disabled") {

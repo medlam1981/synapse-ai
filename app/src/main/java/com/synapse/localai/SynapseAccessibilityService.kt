@@ -21,6 +21,10 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "SynapseA11y"
+        private const val MIN_ELEMENT_SIZE = 5
+        private const val MAX_COMPACT_NODES = 500
+        private const val MAX_DEPTH = 15
+        private const val VISIBILITY_THRESHOLD = 0.01f
 
         @Volatile
         var instance: SynapseAccessibilityService? = null
@@ -29,9 +33,14 @@ class SynapseAccessibilityService : AccessibilityService() {
         val isConnected: Boolean get() = instance != null
     }
 
+    var overlayManager: OverlayManager? = null
+        private set
+    private var overlayEnabled = false
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        overlayManager = OverlayManager(this)
         Log.i(TAG, "Accessibility service connected")
     }
 
@@ -41,15 +50,100 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        overlayManager?.hideOverlay()
+        overlayManager = null
         instance = null
         Log.i(TAG, "Accessibility service destroyed")
+    }
+
+    // ===== HUD OVERLAY CONTROL =====
+
+    fun setOverlayEnabled(enabled: Boolean) {
+        overlayEnabled = enabled
+        if (enabled) {
+            overlayManager?.showOverlay()
+        } else {
+            overlayManager?.hideOverlay()
+        }
+    }
+
+    fun setOverlayScale(scale: Float) {
+        overlayManager?.setHudScaleFactor(scale)
+    }
+
+    fun isOverlayEnabled(): Boolean = overlayEnabled
+
+    /** Refresh HUD overlay with current screen elements */
+    fun refreshOverlay() {
+        if (!overlayEnabled) return
+        val om = overlayManager ?: return
+        om.clearElements()
+
+        val root = rootInActiveWindow ?: return
+        val screenBounds = getScreenBounds()
+        var indexCounter = 0
+        indexCounter = populateOverlayElements(root, om, screenBounds, 0, indexCounter)
+        root.recycle()
+        om.refreshOverlay()
+        Log.d(TAG, "Overlay refreshed: ${om.getElementCount()} elements")
+    }
+
+    private fun populateOverlayElements(
+        node: AccessibilityNodeInfo, om: OverlayManager,
+        screenBounds: Rect, depth: Int, startIndex: Int
+    ): Int {
+        if (depth > MAX_DEPTH) return startIndex
+        var idx = startIndex
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+
+        if (rect.width() >= MIN_ELEMENT_SIZE && rect.height() >= MIN_ELEMENT_SIZE) {
+            val visiblePct = getVisiblePercentage(rect, screenBounds)
+            if (visiblePct >= VISIBILITY_THRESHOLD) {
+                val isInteractive = node.isClickable || node.isEditable || node.isCheckable || node.isFocusable
+                val text = node.text?.toString() ?: ""
+                val desc = node.contentDescription?.toString() ?: ""
+                val hasContent = text.isNotEmpty() || desc.isNotEmpty()
+
+                if (isInteractive || hasContent) {
+                    val cls = node.className?.toString()?.substringAfterLast('.') ?: ""
+                    val label = if (text.isNotEmpty()) text.take(40) else desc.take(40)
+                    om.addElement(rect, cls, label, depth, idx)
+                    idx++
+                }
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            idx = populateOverlayElements(child, om, screenBounds, depth + 1, idx)
+            child.recycle()
+        }
+        return idx
+    }
+
+    private fun getScreenBounds(): Rect {
+        val dm = resources.displayMetrics
+        return Rect(0, 0, dm.widthPixels, dm.heightPixels)
+    }
+
+    private fun getVisiblePercentage(rect: Rect, screenBounds: Rect): Float {
+        val area = rect.width() * rect.height()
+        if (area <= 0) return 0f
+        if (rect.left <= 0 && rect.top <= 0 && rect.right >= screenBounds.right && rect.bottom >= screenBounds.bottom) return 1f
+        val vl = maxOf(rect.left, screenBounds.left)
+        val vt = maxOf(rect.top, screenBounds.top)
+        val vr = minOf(rect.right, screenBounds.right)
+        val vb = minOf(rect.bottom, screenBounds.bottom)
+        val va = maxOf(0, vr - vl) * maxOf(0, vb - vt)
+        return va.toFloat() / area.toFloat()
     }
 
     // ===== SCREEN READING =====
 
     private var lastIndexedElements = mutableListOf<IndexedElement>()
 
-    data class IndexedElement(val index: Int, val rect: Rect, val text: String)
+    data class IndexedElement(val index: Int, val rect: Rect, val text: String, val node: AccessibilityNodeInfo? = null)
 
     fun getScreenTree(): String {
         val root = rootInActiveWindow ?: return "[No active window]"
@@ -58,7 +152,89 @@ class SynapseAccessibilityService : AccessibilityService() {
         var idx = 0
         idx = traverseTree(root, sb, 0, idx)
         root.recycle()
+
+        // Auto-refresh HUD overlay
+        if (overlayEnabled) refreshOverlay()
+
         return sb.toString()
+    }
+
+    /** Build compact JSON tree (like neural-agent's AccessibilityTreeBuilder) */
+    fun getCompactScreenTreeJson(): String {
+        val root = rootInActiveWindow ?: return "{\"error\":\"No active window\"}"
+        val screenBounds = getScreenBounds()
+        lastIndexedElements.clear()
+        val counter = java.util.concurrent.atomic.AtomicInteger(0)
+        val indexRef = intArrayOf(0)
+        val tree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef)
+        root.recycle()
+
+        if (overlayEnabled) refreshOverlay()
+
+        return tree?.toString(2) ?: "{}"
+    }
+
+    private fun buildCompactTreeJson(
+        node: AccessibilityNodeInfo, screenBounds: Rect,
+        depth: Int, nodeCount: java.util.concurrent.atomic.AtomicInteger,
+        indexRef: IntArray
+    ): JSONObject? {
+        if (depth > MAX_DEPTH || nodeCount.get() > MAX_COMPACT_NODES) return null
+
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+
+        val className = node.className?.toString() ?: ""
+        if (screenBounds.width() > 0) {
+            val vp = getVisiblePercentage(rect, screenBounds)
+            if (vp < VISIBILITY_THRESHOLD) return null
+        }
+
+        val childrenArray = JSONArray()
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val childJson = buildCompactTreeJson(child, screenBounds, depth + 1, nodeCount, indexRef)
+            child.recycle()
+            if (childJson != null) childrenArray.put(childJson)
+        }
+
+        val text = node.text?.toString() ?: ""
+        val desc = node.contentDescription?.toString() ?: ""
+        val resId = node.viewIdResourceName ?: ""
+        val isClickable = node.isClickable
+        val isEditable = node.isEditable
+        val isFocusable = node.isFocusable
+
+        val isMeaningful = text.isNotEmpty() || desc.isNotEmpty() || resId.isNotEmpty() ||
+                isClickable || isEditable || isFocusable
+
+        if (!isMeaningful && childrenArray.length() == 0) return null
+        nodeCount.incrementAndGet()
+
+        val isInteractive = isClickable || isEditable || node.isCheckable || isFocusable
+        val elementIndex = if ((isInteractive || text.isNotEmpty() || desc.isNotEmpty()) &&
+            rect.width() >= MIN_ELEMENT_SIZE && rect.height() >= MIN_ELEMENT_SIZE) {
+            val idx = indexRef[0]
+            indexRef[0]++
+            val label = if (text.isNotEmpty()) text.take(80) else desc.take(80)
+            lastIndexedElements.add(IndexedElement(idx, Rect(rect), label))
+            idx
+        } else -1
+
+        return JSONObject().apply {
+            if (resId.isNotEmpty()) put("id", resId.substringAfterLast('/'))
+            if (text.isNotEmpty()) put("text", text.take(120))
+            if (desc.isNotEmpty()) put("desc", desc.take(120))
+            put("class", className.substringAfterLast('.'))
+            put("bounds", "[${rect.left},${rect.top}][${rect.right},${rect.bottom}]")
+            if (elementIndex >= 0) put("idx", elementIndex)
+            if (isClickable) put("clickable", true)
+            if (isEditable) put("editable", true)
+            if (isFocusable) put("focusable", true)
+            if (node.isFocused) put("focused", true)
+            if (node.isScrollable) put("scrollable", true)
+            if (childrenArray.length() > 0) put("children", childrenArray)
+        }
     }
 
     private fun traverseTree(node: AccessibilityNodeInfo, sb: StringBuilder, depth: Int, startIndex: Int): Int {
@@ -87,7 +263,6 @@ class SynapseAccessibilityService : AccessibilityService() {
             val flagStr = if (flags.isNotEmpty()) " [${flags.joinToString(",")}]" else ""
             val idStr = if (id.isNotEmpty()) " #$id" else ""
 
-            // Add index prefix for interactive elements
             if (isInteractive && rect.width() > 2 && rect.height() > 2) {
                 sb.appendLine("$indent[$idx] $cls$idStr ($rect)$flagStr ${label.take(80)}")
                 lastIndexedElements.add(IndexedElement(idx, rect, label.take(80)))
@@ -106,7 +281,6 @@ class SynapseAccessibilityService : AccessibilityService() {
     }
 
     fun clickByIndex(index: Int): Boolean {
-        // If index matches a cached element, click its center
         val element = lastIndexedElements.find { it.index == index }
         if (element != null) {
             val cx = element.rect.centerX().toFloat()
@@ -114,7 +288,6 @@ class SynapseAccessibilityService : AccessibilityService() {
             performClick(cx, cy)
             return true
         }
-        // Fallback: rebuild tree and try again
         getScreenTree()
         val retryElement = lastIndexedElements.find { it.index == index }
         if (retryElement != null) {
@@ -132,6 +305,54 @@ class SynapseAccessibilityService : AccessibilityService() {
         extractText(root, texts)
         root.recycle()
         return texts.joinToString("\n")
+    }
+
+    /** Get a summary of the screen state (like neural-agent's getPhoneState) */
+    fun getScreenSummary(): String {
+        val root = rootInActiveWindow ?: return "No active window"
+        val pkg = root.packageName?.toString() ?: "unknown"
+        val sb = StringBuilder()
+        sb.appendLine("App: $pkg")
+
+        // Find focused element
+        val focused = findFocusedEditable(root)
+        if (focused != null) {
+            val focusText = focused.text?.toString() ?: ""
+            val focusHint = focused.hintText?.toString() ?: ""
+            sb.appendLine("Focused: editable field" + if (focusText.isNotEmpty()) " text=\"$focusText\"" else "" + if (focusHint.isNotEmpty()) " hint=\"$focusHint\"" else "")
+            focused.recycle()
+        }
+
+        // Count interactive elements
+        var clickableCount = 0
+        var textCount = 0
+        var scrollableCount = 0
+        countElements(root, object : ElementCounter {
+            override fun onClickable() { clickableCount++ }
+            override fun onText() { textCount++ }
+            override fun onScrollable() { scrollableCount++ }
+        })
+
+        sb.appendLine("Elements: $clickableCount clickable, $textCount text, $scrollableCount scrollable")
+        root.recycle()
+        return sb.toString()
+    }
+
+    private interface ElementCounter {
+        fun onClickable()
+        fun onText()
+        fun onScrollable()
+    }
+
+    private fun countElements(node: AccessibilityNodeInfo, counter: ElementCounter) {
+        if (node.isClickable) counter.onClickable()
+        if ((node.text?.toString() ?: "").isNotEmpty()) counter.onText()
+        if (node.isScrollable) counter.onScrollable()
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            countElements(child, counter)
+            child.recycle()
+        }
     }
 
     private fun extractText(node: AccessibilityNodeInfo, texts: MutableList<String>) {
@@ -192,7 +413,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         }, null)
     }
 
-    // ===== SCROLL =====
+    // ===== SCROLL & DIRECTIONAL SWIPE =====
 
     fun scrollScreen(direction: String): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -208,17 +429,36 @@ class SynapseAccessibilityService : AccessibilityService() {
             return result
         }
         // Fallback: gesture swipe to scroll
-        val midX = 540f
+        val dm = resources.displayMetrics
+        val midX = dm.widthPixels / 2f
+        val midY = dm.heightPixels / 2f
         val path = Path()
-        if (direction.uppercase() == "UP") {
-            path.moveTo(midX, 600f); path.lineTo(midX, 1400f)
-        } else {
-            path.moveTo(midX, 1400f); path.lineTo(midX, 600f)
+        when (direction.uppercase()) {
+            "UP" -> { path.moveTo(midX, midY + 300); path.lineTo(midX, midY - 300) }
+            "DOWN" -> { path.moveTo(midX, midY - 300); path.lineTo(midX, midY + 300) }
+            "LEFT" -> { path.moveTo(midX + 300, midY); path.lineTo(midX - 300, midY) }
+            "RIGHT" -> { path.moveTo(midX - 300, midY); path.lineTo(midX + 300, midY) }
+            else -> { path.moveTo(midX, midY + 300); path.lineTo(midX, midY - 300) }
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 400))
             .build()
         return dispatchGesture(gesture, null, null)
+    }
+
+    /** Directional swipe: swipe up/down/left/right from screen center */
+    fun swipeDirection(direction: String, distance: Int = 600, durationMs: Long = 500): Boolean {
+        val dm = resources.displayMetrics
+        val cx = dm.widthPixels / 2f
+        val cy = dm.heightPixels / 2f
+        val half = distance / 2f
+        return when (direction.uppercase()) {
+            "UP" -> { performSwipe(cx, cy + half, cx, cy - half, durationMs); true }
+            "DOWN" -> { performSwipe(cx, cy - half, cx, cy + half, durationMs); true }
+            "LEFT" -> { performSwipe(cx + half, cy, cx - half, cy, durationMs); true }
+            "RIGHT" -> { performSwipe(cx - half, cy, cx + half, cy, durationMs); true }
+            else -> false
+        }
     }
 
     private fun findScrollable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
