@@ -130,11 +130,9 @@ class AgentViewModel : ViewModel() {
 
     private fun applyOverlayConfig(config: AgentConfig) {
         val service = SynapseAccessibilityService.instance ?: return
+        // Scale first, then visual display toggle (data collection always runs)
         service.setOverlayScale(config.overlaySize)
-        service.setOverlayEnabled(config.overlayEnabled)
-        if (config.overlayEnabled) {
-            service.refreshOverlay()
-        }
+        service.setOverlayVisible(config.overlayEnabled)
     }
 
     fun loadModel(context: Context, path: String) {
@@ -209,32 +207,44 @@ class AgentViewModel : ViewModel() {
 
     // ========== SYSTEM PROMPT WITH TIME ==========
 
-    private fun buildSystemPrompt(): String {
+     private fun buildSystemPrompt(): String {
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", Locale.ENGLISH).format(Date())
         val tz = TimeZone.getDefault().displayName
         val hasA11y = SynapseAccessibilityService.isConnected
         val toolsSection = if (hasA11y) """
 
-You have DEVICE CONTROL capabilities. When the user asks you to perform an action on the device, respond with the tool command on its own line prefixed with >>>.
+You have DEVICE CONTROL capabilities. You can see, navigate, and interact with the device like a human would.
+
+The HUD overlay is always active — every screen element has an index number. Use SCREEN_TREE to read the current screen state at any time.
+
+HOW TO WORK — Think like a human using a phone:
+1. OBSERVE: Use >>> SCREEN_TREE to see what's on screen
+2. THINK: Analyze the elements and decide what to tap/type
+3. ACT: Execute ONE action (tap, swipe, type, etc.)
+4. OBSERVE AGAIN: Use >>> SCREEN_TREE to verify the result
+5. REPEAT until the task is complete
 
 Available tools:
 — APP CONTROL —
->>> LAUNCH <app_name>             — Open an app (e.g. >>> LAUNCH Chrome)
+>>> LAUNCH <app_name>             — Open an app (e.g. >>> LAUNCH Settings)
 >>> STOP_APP <app_name>           — Force stop an app
 >>> PACKAGES                      — List all installed apps
 >>> OPEN_URL <url>                — Open a URL in browser
 >>> APP_SETTINGS <app_name>       — Open app info/settings page
 
+— SCREEN READING —
+>>> READ_SCREEN                   — Read all text visible on screen
+>>> SCREEN_TREE                   — Get UI element tree with indices [MOST IMPORTANT]
+>>> SCREEN_SUMMARY                — Quick screen state overview
+>>> CURRENT_APP                   — Get current foreground app
+
 — GESTURES —
->>> CLICK <x> <y>                — Tap screen at coordinates
 >>> CLICK_TEXT <text>             — Tap on visible text/button
->>> TAP_INDEX <n>                 — Tap element by index (from SCREEN_TREE)
+>>> TAP_INDEX <n>                 — Tap element by index (from SCREEN_TREE) [PREFERRED]
+>>> CLICK <x> <y>                — Tap screen at coordinates
 >>> LONG_PRESS <x> <y>           — Long press at coordinates
 >>> SWIPE <x1> <y1> <x2> <y2>   — Swipe between two points
->>> SWIPE_UP                      — Swipe up from center
->>> SWIPE_DOWN                    — Swipe down from center
->>> SWIPE_LEFT                    — Swipe left from center
->>> SWIPE_RIGHT                   — Swipe right from center
+>>> SWIPE_UP / SWIPE_DOWN / SWIPE_LEFT / SWIPE_RIGHT
 
 — TEXT INPUT —
 >>> TYPE <text>                   — Set text in focused field
@@ -247,55 +257,51 @@ Available tools:
 >>> HOME                          — Go to home screen
 >>> RECENTS                       — Open recent apps
 >>> NOTIFICATIONS                 — Open notification shade
->>> SCROLL UP                     — Scroll up (uses scrollable element)
->>> SCROLL DOWN                   — Scroll down
->>> SCROLL LEFT                   — Scroll left
->>> SCROLL RIGHT                  — Scroll right
-
-— DEVICE STATE —
->>> READ_SCREEN                   — Read all text visible on screen
->>> SCREEN_TREE                   — Get UI element tree with indices
->>> SCREEN_SUMMARY                — Quick screen state overview
->>> SCREENSHOT                    — Take a screenshot (base64)
->>> CURRENT_APP                   — Get current foreground app
+>>> SCROLL UP / DOWN / LEFT / RIGHT — Scroll in direction
 
 — HUD OVERLAY —
->>> HUD_ON                        — Enable HUD overlay (shows element indices on screen)
->>> HUD_OFF                       — Disable HUD overlay
->>> HUD_REFRESH                   — Refresh HUD overlay with current screen elements
+>>> HUD_REFRESH                   — Force refresh element indices
 
 — SYSTEM SETTINGS —
 >>> VOLUME <0-100>                — Set media volume
 >>> BRIGHTNESS <0-100>            — Set screen brightness
->>> OPEN_SETTINGS                 — Open Android settings
->>> OPEN_WIFI                     — Open WiFi settings
->>> OPEN_BLUETOOTH                — Open Bluetooth settings
->>> OPEN_DISPLAY                  — Open display settings
->>> OPEN_SOUND                    — Open sound settings
->>> OPEN_BATTERY                  — Open battery settings
+>>> OPEN_SETTINGS / OPEN_WIFI / OPEN_BLUETOOTH / OPEN_DISPLAY / OPEN_SOUND / OPEN_BATTERY
 
 Rules:
-- Put each command on its own line starting with >>>
-- You can use multiple tools in one response
-- After each tool, briefly explain what you did
-- For clicking buttons, prefer CLICK_TEXT when you know the text
-- Use SCREEN_TREE or SCREEN_SUMMARY to see what's on screen first
-- TAP_INDEX is the most precise way to tap (uses element index from SCREEN_TREE)
-- Use SWIPE_UP/DOWN/LEFT/RIGHT for easy navigation
-- For apps, use their common name (Chrome, Settings, WhatsApp)
-- When navigating, use SCREEN_TREE → TAP_INDEX workflow for precision""" else ""
+- ALWAYS use SCREEN_TREE before ANY tap or click — never guess what's on screen
+- Use TAP_INDEX (not coordinates) whenever possible — it's more reliable
+- Execute ONE action at a time, then observe the result
+- If an element isn't visible, try scrolling to find it
+- Put each >>> command on its own line
+- After each action, wait for the tool result before deciding the next step
 
-        return """You are Synapse AI, a powerful and friendly local AI assistant running on the user's Android device.
+Example — "Open Settings and find Android version":
+I'll open Settings and navigate to the Android version info.
+>>> LAUNCH Settings
+>>> SCREEN_TREE
+
+(After reading tree: found "About phone" at index 12)
+I can see the Settings screen. Let me tap "About phone".
+>>> TAP_INDEX 12
+>>> SCREEN_TREE
+
+(After reading tree: found "Android version" showing "13")
+I found the information. Your Android version is 13.""" else ""
+
+        return """You are Synapse AI, an autonomous AI agent running on the user's Android device.
 
 Current date and time: $now
 Timezone: $tz
 Device: Android (local on-device inference)${if (hasA11y) "\nDevice Control: ENABLED (Accessibility Service active)" else "\nDevice Control: DISABLED (enable in Android Accessibility Settings)"}
 
 Instructions:
+- You are an autonomous agent who can observe and control the device like a human would.
+- Always read the screen FIRST before taking any action.
+- Think step by step: observe → analyze → act → verify.
 - Answer questions clearly, thoroughly, and helpfully.
 - You have full knowledge of the conversation history. Use it to maintain context.
 - If asked about the time, date, or day, use the current date/time provided above.
-- Be honest about your limitations: you run locally and cannot browse the internet or access external services.
+- Be honest about your limitations: you run locally and cannot browse the internet.
 - Never stop mid-sentence. Always complete your thoughts and answers fully.
 - If a response is long, structure it with headings, bullet points, or numbered lists.
 - Be friendly, informative, and conversational.$toolsSection"""
@@ -309,6 +315,9 @@ Instructions:
         addLog(LogEntry(sender = "USER", text = command))
         conversationHistory.add("user" to command)
         _uiState.update { it.copy(isProcessing = true, accessibilityConnected = SynapseAccessibilityService.isConnected) }
+
+        // Switch to Synapse keyboard when agent starts thinking
+        SynapseAccessibilityService.instance?.switchToSynapseKeyboard()
 
         currentJob = viewModelScope.launch {
             try {
@@ -354,8 +363,11 @@ Instructions:
                         conversationHistory.removeAt(0)
                     }
 
-                    // Execute any tool commands in the response
-                    executeToolCommands(fullResponse)
+                    // Execute tool commands and feed results back to model
+                    val toolFeedback = executeToolCommandsWithFeedback(fullResponse)
+                    if (toolFeedback != null) {
+                        runToolFeedbackLoop(toolFeedback, systemPrompt, 5)
+                    }
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -364,21 +376,23 @@ Instructions:
                 Log.e(TAG, "sendCommand error", e)
                 addLog(LogEntry(sender = "SYSTEM", text = "ERROR: ${e.message}", isError = true))
             } finally {
+                // Restore original keyboard when agent finishes
+                SynapseAccessibilityService.instance?.restoreKeyboard()
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
             }
         }
     }
 
-    // ========== TOOL EXECUTION ==========
+    // ========== TOOL EXECUTION WITH FEEDBACK LOOP ==========
 
-    private suspend fun executeToolCommands(response: String) {
-        val service = SynapseAccessibilityService.instance ?: return
-
-        // Look for >>> commands first
+    /** Execute tools and return feedback string if model needs to see results, null otherwise */
+    private suspend fun executeToolCommandsWithFeedback(response: String): String? {
+        val service = SynapseAccessibilityService.instance ?: return null
         val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
+        if (toolLines.isEmpty()) return null
 
-        if (toolLines.isEmpty()) return
+        val feedbackParts = mutableListOf<String>()
 
         for (line in toolLines) {
             val cmd = line.trimStart().removePrefix(">>>").trim()
@@ -389,11 +403,122 @@ Instructions:
                 if (result != null) {
                     addSystemLog("⚡ $result")
                 }
+
+                // Collect screen data results for feedback to model
+                val action = cmd.split(" ", limit = 2)[0].uppercase()
+
+                // After UI-changing actions, wait for screen to settle
+                if (action in UI_CHANGING_COMMANDS) {
+                    kotlinx.coroutines.delay(800)
+                }
+
+                if (action in FEEDBACK_COMMANDS) {
+                    val feedbackData = getToolFeedbackData(service, action)
+                    if (feedbackData != null) {
+                        feedbackParts.add("[$action result]\n$feedbackData")
+                    }
+                }
+
                 kotlinx.coroutines.delay(300)
             } catch (e: Exception) {
                 Log.e(TAG, "Tool exec failed: $cmd", e)
                 addSystemLog("⚠ Tool error: ${e.message}")
             }
+        }
+
+        return if (feedbackParts.isNotEmpty()) feedbackParts.joinToString("\n\n") else null
+    }
+
+    /** Commands that produce data the model needs to see */
+    private val FEEDBACK_COMMANDS = setOf(
+        "SCREEN_TREE", "READ_SCREEN", "SCREEN_SUMMARY", "CURRENT_APP", "PACKAGES"
+    )
+
+    /** Commands that change the UI and need time to settle */
+    private val UI_CHANGING_COMMANDS = setOf(
+        "LAUNCH", "TAP_INDEX", "CLICK", "CLICK_TEXT", "LONG_PRESS",
+        "SWIPE", "SWIPE_UP", "SWIPE_DOWN", "SWIPE_LEFT", "SWIPE_RIGHT",
+        "BACK", "HOME", "RECENTS", "NOTIFICATIONS",
+        "SCROLL", "TYPE", "APPEND", "CLEAR"
+    )
+
+    /** Get the actual data output for feedback commands */
+    private fun getToolFeedbackData(service: SynapseAccessibilityService, action: String): String? {
+        return when (action) {
+            "SCREEN_TREE" -> service.getCompactScreenTreeJson().take(2000)
+            "READ_SCREEN" -> service.getScreenText().take(1500)
+            "SCREEN_SUMMARY" -> service.getScreenSummary()
+            "CURRENT_APP" -> service.getCurrentPackage()
+            "PACKAGES" -> service.getInstalledPackages().take(1500)
+            else -> null
+        }
+    }
+
+    /** Run feedback loop: feed tool results back to model, let it respond, repeat */
+    private suspend fun runToolFeedbackLoop(initialFeedback: String, systemPrompt: String, maxIterations: Int) {
+        var feedback = initialFeedback
+        var iterations = 0
+
+        while (iterations < maxIterations) {
+            iterations++
+
+            // Add tool results as a user message for the model to process
+            val feedbackMsg = "[Tool Results - analyze and continue]\n$feedback"
+            conversationHistory.add("user" to feedbackMsg)
+            while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                conversationHistory.removeAt(0)
+            }
+
+            // Generate model response
+            val responseId = java.util.UUID.randomUUID().toString()
+            addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
+
+            var fullResponse = ""
+            try {
+                val modelType = _uiState.value.activeModelType ?: break
+                when (modelType) {
+                    ModelType.LITERTLM -> {
+                        val contextPrompt = buildContextForLitertlm(feedbackMsg)
+                        litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
+                            .collect { chunk ->
+                                fullResponse += chunk
+                                updateStreamingLog(responseId, fullResponse)
+                            }
+                    }
+                    ModelType.GGUF -> {
+                        ggufClient!!.generateStreamWithHistory(
+                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
+                            systemPrompt
+                        ).collect { chunk ->
+                            fullResponse += chunk
+                            updateStreamingLog(responseId, fullResponse)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Feedback loop error: ${e.message}")
+                break
+            }
+
+            if (fullResponse.isBlank()) {
+                _uiState.update { state -> state.copy(logs = state.logs.filter { it.id != responseId }) }
+                break
+            }
+
+            val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
+            conversationHistory.add("assistant" to cleanResponse)
+            while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                conversationHistory.removeAt(0)
+            }
+
+            // Execute any new tool commands
+            val newFeedback = executeToolCommandsWithFeedback(fullResponse)
+            if (newFeedback == null) break // No more tool commands, done
+            feedback = newFeedback
+        }
+
+        if (iterations >= maxIterations) {
+            addSystemLog("⚠ Agent reached max tool steps ($maxIterations)")
         }
     }
 
@@ -552,15 +677,6 @@ Instructions:
             }
 
             // --- HUD OVERLAY ---
-            "HUD_ON" -> {
-                service.setOverlayEnabled(true)
-                service.refreshOverlay()
-                "HUD overlay enabled"
-            }
-            "HUD_OFF" -> {
-                service.setOverlayEnabled(false)
-                "HUD overlay disabled"
-            }
             "HUD_REFRESH" -> {
                 service.refreshOverlay()
                 "HUD overlay refreshed (${service.overlayManager?.getElementCount() ?: 0} elements)"
@@ -627,6 +743,7 @@ Instructions:
         ggufClient?.stop()
         currentJob?.cancel()
         currentJob = null
+        SynapseAccessibilityService.instance?.restoreKeyboard()
         _uiState.update { it.copy(isProcessing = false) }
         addLog(LogEntry(sender = "SYSTEM", text = "■ Stopped."))
     }

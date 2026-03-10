@@ -380,18 +380,18 @@ fun SettingsScreen(
             }
 
             // ═══════ HUD OVERLAY SECTION ═══════
-            val overlayActive = SynapseAccessibilityService.instance?.isOverlayEnabled() == true
+            val overlayVisible = SynapseAccessibilityService.instance?.isOverlayVisible() == true
             var overlayEnabled by remember(config.overlayEnabled) { mutableStateOf(config.overlayEnabled) }
             var overlaySize by remember(config.overlaySize) { mutableStateOf(config.overlaySize) }
 
             SettingsCard(
                 title = "HUD OVERLAY",
                 titleColor = Color(0xFF90CAF9),
-                statusDot = if (overlayActive) Color(0xFF34D399) else Color(0xFFEF4444),
-                statusText = if (overlayActive) "Active" else "Off"
+                statusDot = if (overlayVisible) Color(0xFF34D399) else Color(0xFFEF4444),
+                statusText = if (overlayVisible) "Visible" else "Hidden"
             ) {
                 Text(
-                    "Display colored index boxes on screen elements.\nThe agent uses these indices for precise tapping via TAP_INDEX.",
+                    "Show/hide colored index boxes on screen elements.\nThe agent always sees element data regardless of display.",
                     color = Color.White.copy(alpha = 0.4f),
                     fontSize = 11.sp,
                     lineHeight = 16.sp
@@ -402,7 +402,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Enable HUD Overlay", color = Color.White, fontSize = 13.sp)
+                    Text("Show HUD Display", color = Color.White, fontSize = 13.sp)
                     Switch(
                         checked = overlayEnabled,
                         onCheckedChange = { checked ->

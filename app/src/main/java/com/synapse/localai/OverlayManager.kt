@@ -13,9 +13,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicBoolean
 
 class OverlayManager(private val context: Context) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -25,15 +23,13 @@ class OverlayManager(private val context: Context) {
     private var isOverlayVisible = false
     private var isDrawingEnabled = true
     private var elementIndexCounter = 0
-    private val isOverlayReady = AtomicBoolean(false)
 
-    private var positionOffsetY = 0
     private var hudScaleFactor: Float = 1.0f
 
     companion object {
         private const val TAG = "SynapseHUD"
-        private const val INITIAL_STROKE_WIDTH = 2f
-        private const val INITIAL_TEXT_SIZE = 28f
+        private const val INITIAL_STROKE_WIDTH = 3f
+        private const val INITIAL_TEXT_SIZE = 24f
 
         private val COLOR_SCHEME = arrayOf(
             Color.rgb(0, 122, 255),    // Blue
@@ -58,37 +54,38 @@ class OverlayManager(private val context: Context) {
 
     fun setHudScaleFactor(scale: Float) {
         hudScaleFactor = scale.coerceIn(0.5f, 2.0f)
-        overlayView?.apply {
-            boxPaint.strokeWidth = INITIAL_STROKE_WIDTH * hudScaleFactor
-            textPaint.textSize = INITIAL_TEXT_SIZE * hudScaleFactor
-        }
+        overlayView?.updateScale(hudScaleFactor)
+        if (isOverlayVisible && isDrawingEnabled) refreshOverlay()
+    }
+
+    /** Controls whether colored boxes are drawn. Data collection is unaffected. */
+    fun setDrawingEnabled(enabled: Boolean) {
+        isDrawingEnabled = enabled
+        Log.i(TAG, "Overlay drawing enabled: $enabled")
         refreshOverlay()
     }
 
     fun showOverlay() {
-        if (overlayView != null) {
-            try {
-                overlayView?.parent ?: run {
-                    overlayView = null
-                    createAndAddOverlay()
-                    return
-                }
-            } catch (e: Exception) {
-                overlayView = null
-                createAndAddOverlay()
-                return
+        handler.post {
+            if (overlayView != null && overlayView?.parent != null) {
+                isOverlayVisible = true
+                Log.d(TAG, "showOverlay: already visible")
+                return@post
             }
-            isOverlayReady.set(true)
-            return
+            // Remove stale view if any
+            overlayView?.let {
+                try { if (it.parent != null) windowManager.removeView(it) } catch (_: Exception) {}
+                overlayView = null
+            }
+            createAndAddOverlay()
         }
-        createAndAddOverlay()
     }
 
     private fun createAndAddOverlay() {
         try {
-            overlayView = OverlayView(context).apply {
-                setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            }
+            val view = OverlayView(context)
+            overlayView = view
+
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -96,8 +93,7 @@ class OverlayManager(private val context: Context) {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
             params.gravity = Gravity.TOP or Gravity.START
@@ -106,27 +102,13 @@ class OverlayManager(private val context: Context) {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
 
-            handler.post {
-                try {
-                    windowManager.addView(overlayView, params)
-                    isOverlayVisible = true
-                    handler.postDelayed({
-                        if (overlayView?.parent != null) {
-                            isOverlayReady.set(true)
-                        }
-                    }, 100)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error adding overlay: ${e.message}", e)
-                    overlayView = null
-                    isOverlayVisible = false
-                    isOverlayReady.set(false)
-                }
-            }
+            windowManager.addView(view, params)
+            isOverlayVisible = true
+            Log.i(TAG, "Overlay created and added to WindowManager")
         } catch (e: Exception) {
             Log.e(TAG, "Error creating overlay: ${e.message}", e)
             overlayView = null
             isOverlayVisible = false
-            isOverlayReady.set(false)
         }
     }
 
@@ -134,62 +116,50 @@ class OverlayManager(private val context: Context) {
         handler.post {
             try {
                 overlayView?.let {
-                    if (it.parent != null) {
-                        windowManager.removeView(it)
-                    }
-                    overlayView = null
+                    if (it.parent != null) windowManager.removeView(it)
                 }
-                isOverlayVisible = false
-                isOverlayReady.set(false)
             } catch (e: Exception) {
-                if (e is IllegalArgumentException && e.message?.contains("not attached") == true) {
-                    overlayView = null
-                    isOverlayVisible = false
-                    isOverlayReady.set(false)
-                } else {
-                    Log.e(TAG, "Error removing overlay: ${e.message}", e)
-                }
+                Log.e(TAG, "Error removing overlay: ${e.message}")
             }
+            overlayView = null
+            isOverlayVisible = false
+            elementRects.clear()
+            Log.d(TAG, "Overlay hidden")
         }
     }
 
     fun clearElements() {
         elementRects.clear()
         elementIndexCounter = 0
-        refreshOverlay()
     }
 
     fun addElement(rect: Rect, type: String, text: String, depth: Int = 0, index: Int? = null) {
-        val correctedRect = Rect(rect).apply { offset(0, positionOffsetY) }
         val elementIndex = index ?: elementIndexCounter++
         val colorFromScheme = COLOR_SCHEME[elementIndex % COLOR_SCHEME.size]
-        elementRects.add(ElementInfo(correctedRect, type, text, depth, colorFromScheme, elementIndex))
+        elementRects.add(ElementInfo(Rect(rect), type, text, depth, colorFromScheme, elementIndex))
     }
 
     fun refreshOverlay() {
-        handler.post { overlayView?.invalidate() }
+        handler.post {
+            overlayView?.invalidate()
+        }
     }
 
     fun getElementCount(): Int = elementRects.size
-
-    fun setDrawingEnabled(enabled: Boolean) {
-        isDrawingEnabled = enabled
-        refreshOverlay()
-    }
-
     fun isVisible(): Boolean = isOverlayVisible
 
-    inner class OverlayView(context: Context) : FrameLayout(context) {
-        var boxPaint = Paint().apply {
+    inner class OverlayView(context: Context) : View(context) {
+        private var boxPaint = Paint().apply {
             style = Paint.Style.STROKE
             strokeWidth = INITIAL_STROKE_WIDTH * hudScaleFactor
             isAntiAlias = true
         }
 
-        var textPaint = Paint().apply {
+        private var textPaint = Paint().apply {
             color = Color.WHITE
             textSize = INITIAL_TEXT_SIZE * hudScaleFactor
             isAntiAlias = true
+            isFakeBoldText = true
         }
 
         private val textBackgroundPaint = Paint().apply {
@@ -198,50 +168,51 @@ class OverlayManager(private val context: Context) {
         }
 
         init {
-            setWillNotDraw(false)
             setBackgroundColor(Color.TRANSPARENT)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setLayerType(LAYER_TYPE_SOFTWARE, null)
+        }
+
+        fun updateScale(scale: Float) {
+            boxPaint.strokeWidth = INITIAL_STROKE_WIDTH * scale
+            textPaint.textSize = INITIAL_TEXT_SIZE * scale
         }
 
         override fun onDraw(canvas: Canvas) {
-            if (!isOverlayVisible || !isDrawingEnabled) return
             super.onDraw(canvas)
-            if (elementRects.isEmpty()) return
+            if (!isOverlayVisible || !isDrawingEnabled) return
 
-            val sortedElements = elementRects.sortedBy { it.depth }
-            for (elementInfo in sortedElements) {
-                drawElement(canvas, elementInfo)
+            val elements = elementRects.toList()
+            if (elements.isEmpty()) return
+
+            for (info in elements.sortedBy { it.depth }) {
+                drawElement(canvas, info)
             }
         }
 
         private fun drawElement(canvas: Canvas, info: ElementInfo) {
+            if (info.rect.width() <= 0 || info.rect.height() <= 0) return
             try {
-                if (info.rect.width() <= 0 || info.rect.height() <= 0) return
+                boxPaint.color = info.color
+                textBackgroundPaint.color = Color.argb(200,
+                    Color.red(info.color), Color.green(info.color), Color.blue(info.color))
 
-                val c = Color.argb(255, Color.red(info.color), Color.green(info.color), Color.blue(info.color))
-                boxPaint.color = c
-                textBackgroundPaint.color = Color.argb(200, Color.red(info.color), Color.green(info.color), Color.blue(info.color))
-
+                // Draw element border
                 canvas.drawRect(info.rect, boxPaint)
 
-                val displayText = "${info.index}"
-                val textWidth = textPaint.measureText(displayText)
-                val textHeight = INITIAL_TEXT_SIZE * hudScaleFactor + 4f
+                // Draw index label in top-right corner
+                val label = "${info.index}"
+                val tw = textPaint.measureText(label)
+                val th = INITIAL_TEXT_SIZE * hudScaleFactor
+                val pad = 3f
+                val lx = info.rect.right - tw - pad * 2
+                val ly = info.rect.top.toFloat()
 
-                val textX = info.rect.right - textWidth - 4f
-                val textY = info.rect.top + textHeight
-
-                val bgPad = 4f
-                val bgRect = Rect(
-                    (textX - bgPad).toInt(),
-                    (textY - textHeight).toInt(),
-                    (textX + textWidth + bgPad).toInt(),
-                    (textY + bgPad).toInt()
-                )
-                canvas.drawRect(bgRect, textBackgroundPaint)
-                canvas.drawText(displayText, textX, textY - bgPad, textPaint)
+                // Background for label
+                canvas.drawRect(lx - pad, ly, lx + tw + pad, ly + th + pad * 2, textBackgroundPaint)
+                // Label text
+                canvas.drawText(label, lx, ly + th, textPaint)
             } catch (e: Exception) {
-                Log.e(TAG, "Error drawing element ${info.index}: ${e.message}")
+                Log.e(TAG, "Draw error #${info.index}: ${e.message}")
             }
         }
     }

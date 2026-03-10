@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">Synapse AI</string>
     <string name="accessibility_service_description">Synapse AI agent: reads screen content and performs device actions (tap, swipe, scroll, type) to assist you with tasks.</string>
+    <string name="keyboard_label">Synapse AI Keyboard</string>
+    <string name="keyboard_name">Synapse AI Keyboard</string>
 </resources>

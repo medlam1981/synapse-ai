@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -30,12 +31,12 @@ class SynapseAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "SynapseA11y"
         private const val MIN_ELEMENT_SIZE = 5
-        private const val MAX_COMPACT_NODES = 500
-        private const val MAX_DEPTH = 15
+        private const val MAX_COMPACT_NODES = 300
+        private const val MAX_DEPTH = 12
         private const val VISIBILITY_THRESHOLD = 0.01f
-        private const val REFRESH_INTERVAL_MS = 600L
-        private const val MIN_FRAME_TIME_MS = 200L
-        private const val POST_CHANGE_DELAY_MS = 400L
+        private const val REFRESH_INTERVAL_MS = 2000L
+        private const val MIN_FRAME_TIME_MS = 500L
+        private const val POST_CHANGE_DELAY_MS = 600L
         private const val NOTIFICATION_CHANNEL_ID = "synapse_agent"
         private const val NOTIFICATION_ID = 999
 
@@ -48,21 +49,20 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     var overlayManager: OverlayManager? = null
         private set
-    private var overlayEnabled = false
+    private var overlayVisible = false // Controls visual display only (user toggle)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastUpdateTime = 0L
     private var currentPackageName = ""
     private val isProcessing = AtomicBoolean(false)
+    private var wakeLock: PowerManager.WakeLock? = null
 
-    // Periodic refresh runnable
+    // Periodic refresh — ALWAYS runs to keep element data fresh for the agent
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (overlayEnabled) {
-                val now = System.currentTimeMillis()
-                if (now - lastUpdateTime >= MIN_FRAME_TIME_MS) {
-                    refreshOverlayInternal()
-                    lastUpdateTime = now
-                }
+            val now = System.currentTimeMillis()
+            if (now - lastUpdateTime >= MIN_FRAME_TIME_MS) {
+                refreshOverlayInternal()
+                lastUpdateTime = now
             }
             mainHandler.postDelayed(this, REFRESH_INTERVAL_MS)
         }
@@ -72,31 +72,33 @@ class SynapseAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         overlayManager = OverlayManager(this)
+        // Always show overlay (agent always needs it), but drawing controlled by overlayVisible
+        overlayManager?.showOverlay()
         startForegroundNotification()
+        acquireWakeLock()
         startPeriodicUpdates()
-        Log.i(TAG, "Accessibility service connected + foreground started")
+        Log.i(TAG, "Accessibility service connected, overlay active, periodic updates ON")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!overlayEnabled || event == null) return
+        if (event == null) return
         val eventPkg = event.packageName?.toString() ?: return
 
-        // Skip our own overlay events
+        // Skip our own package events
         if (eventPkg == packageName) return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // App or activity changed — delay then refresh
                 if (eventPkg != currentPackageName) {
                     currentPackageName = eventPkg
                     overlayManager?.clearElements()
                     overlayManager?.refreshOverlay()
+                    Log.d(TAG, "Window changed to: $eventPkg")
                 }
                 mainHandler.removeCallbacks(refreshRunnable)
                 mainHandler.postDelayed(refreshRunnable, POST_CHANGE_DELAY_MS)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // Content changed — debounced refresh
                 val now = System.currentTimeMillis()
                 if (now - lastUpdateTime >= MIN_FRAME_TIME_MS) {
                     refreshOverlayInternal()
@@ -115,8 +117,33 @@ class SynapseAccessibilityService : AccessibilityService() {
         stopPeriodicUpdates()
         overlayManager?.hideOverlay()
         overlayManager = null
+        releaseWakeLock()
         instance = null
         Log.i(TAG, "Accessibility service destroyed")
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "synapse:agent_wake_lock"
+            ).apply {
+                acquire(24 * 60 * 60 * 1000L) // 24 hours max
+            }
+            Log.i(TAG, "Wake lock acquired")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire wake lock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let {
+                if (it.isHeld) it.release()
+            }
+            wakeLock = null
+        } catch (_: Exception) {}
     }
 
     private fun startPeriodicUpdates() {
@@ -173,43 +200,71 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     // ===== HUD OVERLAY CONTROL =====
 
-    fun setOverlayEnabled(enabled: Boolean) {
-        overlayEnabled = enabled
-        if (enabled) {
-            overlayManager?.showOverlay()
-            refreshOverlayInternal()
-        } else {
-            overlayManager?.clearElements()
-            overlayManager?.hideOverlay()
-        }
+    /** Controls visual display of colored boxes. Data collection always runs. */
+    fun setOverlayVisible(visible: Boolean) {
+        overlayVisible = visible
+        Log.i(TAG, "Overlay display visible: $visible")
+        overlayManager?.setDrawingEnabled(visible)
+        overlayManager?.refreshOverlay()
     }
 
     fun setOverlayScale(scale: Float) {
         overlayManager?.setHudScaleFactor(scale)
     }
 
-    fun isOverlayEnabled(): Boolean = overlayEnabled
+    fun isOverlayVisible(): Boolean = overlayVisible
 
     /** Public refresh — called by agent commands */
     fun refreshOverlay() {
-        if (!overlayEnabled) return
         refreshOverlayInternal()
     }
 
-    /** Internal refresh with processing guard */
+    /** Internal refresh with processing guard — ALWAYS collects element data */
     private fun refreshOverlayInternal() {
         if (!isProcessing.compareAndSet(false, true)) return
         try {
-            val om = overlayManager ?: return
-            if (!overlayEnabled) return
-            om.clearElements()
+            val om = overlayManager ?: run {
+                Log.w(TAG, "refreshOverlay: overlayManager is null")
+                return
+            }
 
-            val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return
             val screenBounds = getScreenBounds()
             var indexCounter = 0
-            indexCounter = populateOverlayElements(root, om, screenBounds, 0, indexCounter)
-            root.recycle()
-            om.refreshOverlay()
+            val newElements = mutableListOf<OverlayManager.ElementInfo>()
+
+            // Use windows API to get elements from ALL visible windows
+            try {
+                val windowList = windows
+                if (windowList.isNotEmpty()) {
+                    for (window in windowList) {
+                        val root = window.root ?: continue
+                        indexCounter = collectElements(root, screenBounds, 0, indexCounter, newElements)
+                        root.recycle()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "windows API failed, falling back to rootInActiveWindow: ${e.message}")
+            }
+
+            // Fallback to rootInActiveWindow if windows API yielded nothing
+            if (newElements.isEmpty()) {
+                val root = try { rootInActiveWindow } catch (_: Exception) { null }
+                if (root != null) {
+                    indexCounter = collectElements(root, screenBounds, 0, indexCounter, newElements)
+                    root.recycle()
+                }
+            }
+
+            // Atomically swap elements — always update data
+            om.clearElements()
+            for (el in newElements) {
+                om.addElement(el.rect, el.type, el.text, el.depth, el.index)
+            }
+            om.refreshOverlay() // Will draw only if drawingEnabled
+
+            if (newElements.isNotEmpty()) {
+                Log.d(TAG, "HUD data: ${newElements.size} elements (visible=$overlayVisible)")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "refreshOverlay error: ${e.message}")
         } finally {
@@ -217,9 +272,10 @@ class SynapseAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun populateOverlayElements(
-        node: AccessibilityNodeInfo, om: OverlayManager,
-        screenBounds: Rect, depth: Int, startIndex: Int
+    /** Collect visible, meaningful elements from an accessibility tree */
+    private fun collectElements(
+        node: AccessibilityNodeInfo, screenBounds: Rect,
+        depth: Int, startIndex: Int, out: MutableList<OverlayManager.ElementInfo>
     ): Int {
         if (depth > MAX_DEPTH) return startIndex
         var idx = startIndex
@@ -237,7 +293,8 @@ class SynapseAccessibilityService : AccessibilityService() {
                 if (isInteractive || hasContent) {
                     val cls = node.className?.toString()?.substringAfterLast('.') ?: ""
                     val label = if (text.isNotEmpty()) text.take(40) else desc.take(40)
-                    om.addElement(rect, cls, label, depth, idx)
+                    val color = OVERLAY_COLORS[idx % OVERLAY_COLORS.size]
+                    out.add(OverlayManager.ElementInfo(Rect(rect), cls, label, depth, color, idx))
                     idx++
                 }
             }
@@ -245,11 +302,22 @@ class SynapseAccessibilityService : AccessibilityService() {
 
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            idx = populateOverlayElements(child, om, screenBounds, depth + 1, idx)
+            idx = collectElements(child, screenBounds, depth + 1, idx, out)
             child.recycle()
         }
         return idx
     }
+
+    private val OVERLAY_COLORS = arrayOf(
+        android.graphics.Color.rgb(0, 122, 255),
+        android.graphics.Color.rgb(255, 45, 85),
+        android.graphics.Color.rgb(52, 199, 89),
+        android.graphics.Color.rgb(255, 149, 0),
+        android.graphics.Color.rgb(175, 82, 222),
+        android.graphics.Color.rgb(255, 204, 0),
+        android.graphics.Color.rgb(90, 200, 250),
+        android.graphics.Color.rgb(88, 86, 214)
+    )
 
     private fun getScreenBounds(): Rect {
         val dm = resources.displayMetrics
@@ -283,7 +351,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         root.recycle()
 
         // Auto-refresh HUD overlay
-        if (overlayEnabled) refreshOverlay()
+        refreshOverlay()
 
         return sb.toString()
     }
@@ -298,7 +366,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         val tree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef)
         root.recycle()
 
-        if (overlayEnabled) refreshOverlay()
+        if (overlayVisible) refreshOverlay()
 
         return tree?.toString(2) ?: "{}"
     }
@@ -609,9 +677,36 @@ class SynapseAccessibilityService : AccessibilityService() {
     fun openNotifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
     fun openQuickSettings(): Boolean = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
 
-    // ===== TEXT INPUT =====
+    // ===== TEXT INPUT & KEYBOARD MANAGEMENT =====
+
+    private var savedImeId: String? = null
+
+    /** Called when agent starts thinking — switch to Synapse keyboard */
+    fun switchToSynapseKeyboard() {
+        if (savedImeId != null) return // Already switched
+        val currentIme = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        val myImeId = SynapseKeyboardIME.getImeId(this)
+        if (currentIme == myImeId) return // Already our keyboard
+        savedImeId = currentIme
+        Log.i(TAG, "Agent starting → switching IME to Synapse: $currentIme → $myImeId")
+        switchIme(myImeId)
+    }
+
+    /** Called when agent finishes — restore original keyboard */
+    fun restoreKeyboard() {
+        val oldIme = savedImeId ?: return
+        savedImeId = null
+        Log.i(TAG, "Agent done → restoring IME: $oldIme")
+        switchIme(oldIme)
+    }
 
     fun typeText(text: String): Boolean {
+        // Try IME first if available and selected
+        val ime = SynapseKeyboardIME.instance
+        if (ime != null && SynapseKeyboardIME.isSelected(this) && ime.hasInputConnection()) {
+            return ime.inputText(text, clear = true)
+        }
+        // Fallback to accessibility
         val root = rootInActiveWindow ?: return false
         val focused = findFocusedEditable(root)
         root.recycle()
@@ -624,6 +719,19 @@ class SynapseAccessibilityService : AccessibilityService() {
             return result
         }
         return false
+    }
+
+    /** Switch IME using su command */
+    private fun switchIme(imeId: String): Boolean {
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c",
+                "settings put secure default_input_method $imeId"))
+            Thread { proc.waitFor() }.apply { isDaemon = true; start() }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "switchIme failed: ${e.message}")
+            false
+        }
     }
 
     private fun findFocusedEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
