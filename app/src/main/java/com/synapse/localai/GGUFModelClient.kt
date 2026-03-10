@@ -1,5 +1,6 @@
 package com.synapse.localai
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -22,13 +23,14 @@ class GGUFModelClient {
     companion object {
         private const val TAG = "GGUFModel"
         private const val SERVER_URL = "http://127.0.0.1:8080"
-        private const val SERVER_BINARY = "/data/local/tmp/llama-server"
-        private const val SERVER_START_TIMEOUT_MS = 60_000L
+        private const val SERVER_LIB_NAME = "libllama_server.so"
+        private const val SERVER_START_TIMEOUT_MS = 90_000L
         private const val SERVER_POLL_INTERVAL_MS = 1_000L
     }
 
     private var modelPath: String? = null
     private var serverProcess: Process? = null
+    private var nativeLibDir: String? = null
 
     var isLoaded: Boolean = false
         private set
@@ -47,23 +49,45 @@ class GGUFModelClient {
         }
     }
 
+    private fun findServerBinary(): String? {
+        // Primary: bundled native lib
+        val nativeLib = nativeLibDir?.let { File(it, SERVER_LIB_NAME) }
+        if (nativeLib?.exists() == true) {
+            Log.d(TAG, "Found bundled server at: ${nativeLib.absolutePath}")
+            return nativeLib.absolutePath
+        }
+        // Fallback: legacy location
+        val legacy = File("/data/local/tmp/llama-server")
+        if (legacy.exists()) {
+            Log.d(TAG, "Found legacy server at: ${legacy.absolutePath}")
+            return legacy.absolutePath
+        }
+        return null
+    }
+
     private suspend fun startServer(modelPath: String): Boolean = withContext(Dispatchers.IO) {
         Log.d(TAG, "Attempting to start llama-server...")
 
-        val serverFile = File(SERVER_BINARY)
-        if (!serverFile.exists()) {
-            Log.e(TAG, "llama-server binary not found at $SERVER_BINARY")
+        val serverBinary = findServerBinary()
+        if (serverBinary == null) {
+            Log.e(TAG, "llama-server binary not found")
             return@withContext false
         }
 
         try {
-            // Use su to start the server as root (bypasses app seccomp restrictions)
-            val cmd = arrayOf(
-                "su", "-c",
-                "$SERVER_BINARY -m $modelPath -c 2048 -t 2 --host 127.0.0.1 --port 8080 &"
+            // Launch server directly (no su needed — binary is bundled in the app)
+            val pb = ProcessBuilder(
+                serverBinary,
+                "-m", modelPath,
+                "-c", "2048",
+                "-t", "2",
+                "--host", "127.0.0.1",
+                "--port", "8080",
+                "--reasoning-budget", "0"
             )
-            serverProcess = Runtime.getRuntime().exec(cmd)
-            Log.d(TAG, "Server process started via su")
+            pb.redirectErrorStream(true)
+            serverProcess = pb.start()
+            Log.d(TAG, "Server process started (pid via ProcessBuilder)")
 
             // Wait for server to become ready
             val startTime = System.currentTimeMillis()
@@ -72,6 +96,13 @@ class GGUFModelClient {
                 if (isServerRunning()) {
                     Log.d(TAG, "Server is ready! (took ${System.currentTimeMillis() - startTime}ms)")
                     return@withContext true
+                }
+                // Check if process died
+                if (serverProcess?.isAlive == false) {
+                    val exitCode = serverProcess!!.exitValue()
+                    val stderr = serverProcess!!.inputStream.bufferedReader().readText()
+                    Log.e(TAG, "Server process died with exit code $exitCode: $stderr")
+                    return@withContext false
                 }
             }
 
@@ -83,14 +114,15 @@ class GGUFModelClient {
         }
     }
 
-    suspend fun loadModel(path: String, contextLength: Int = 512, onStatus: (String) -> Unit = {}, onLoaded: () -> Unit = {}) {
+    suspend fun loadModel(context: Context, path: String, contextLength: Int = 512, onStatus: (String) -> Unit = {}, onLoaded: () -> Unit = {}) {
         Log.d(TAG, "Checking GGUF model: $path")
         val file = File(path)
         if (!file.exists()) throw IllegalArgumentException("Model not found: $path")
 
         modelPath = path
+        nativeLibDir = context.applicationInfo.nativeLibraryDir
 
-        // Check if server is already running
+        // Check if server is already running with correct model
         if (isServerRunning()) {
             isLoaded = true
             Log.d(TAG, "GGUF server already running, model ready")
@@ -106,10 +138,9 @@ class GGUFModelClient {
             Log.d(TAG, "GGUF server auto-started successfully")
             onLoaded()
         } else {
-            // Server couldn't start - still mark as loaded, will fail on inference
             isLoaded = true
-            Log.w(TAG, "Could not auto-start server. Model set but server not running.")
-            onStatus("⚠️ Server not started. Start manually via adb or Termux.")
+            Log.w(TAG, "Could not auto-start server.")
+            onStatus("⚠️ Server failed to start. Check model file permissions.")
             onLoaded()
         }
     }
@@ -163,7 +194,6 @@ class GGUFModelClient {
 
             val reader = BufferedReader(InputStreamReader(conn.inputStream))
             var line: String? = null
-            var thinking = false
 
             while (coroutineContext.isActive && reader.readLine().also { line = it } != null) {
                 val l = line ?: continue
@@ -177,24 +207,8 @@ class GGUFModelClient {
                         .getJSONObject(0)
                         .optJSONObject("delta") ?: continue
 
-                    // Handle thinking/reasoning content
-                    val reasoningContent = if (delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content", "")
-                    if (reasoningContent.isNotEmpty()) {
-                        if (!thinking) {
-                            thinking = true
-                            emit("💭 ")
-                        }
-                        emit(reasoningContent)
-                        continue
-                    }
-
-                    // Handle regular content
                     val content = if (delta.isNull("content")) "" else delta.optString("content", "")
                     if (content.isNotEmpty()) {
-                        if (thinking) {
-                            thinking = false
-                            emit("\n\n")
-                        }
                         emit(content)
                     }
                 } catch (_: Exception) {}

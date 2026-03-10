@@ -138,6 +138,7 @@ class AgentViewModel : ViewModel() {
                 val client = GGUFModelClient()
                 ggufClient = client
                 client.loadModel(
+                    context = context,
                     path = path,
                     contextLength = 2048,
                     onStatus = { status -> addSystemLog("> $status") },
