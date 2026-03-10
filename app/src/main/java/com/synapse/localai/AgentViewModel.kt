@@ -207,104 +207,66 @@ class AgentViewModel : ViewModel() {
 
     // ========== SYSTEM PROMPT WITH TIME ==========
 
-     private fun buildSystemPrompt(): String {
+    private fun buildSystemPrompt(): String {
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", Locale.ENGLISH).format(Date())
-        val tz = TimeZone.getDefault().displayName
         val hasA11y = SynapseAccessibilityService.isConnected
         val toolsSection = if (hasA11y) """
 
-You have DEVICE CONTROL capabilities. You can see, navigate, and interact with the device like a human would.
+You control this Android device. Use >>> commands to act.
 
-The HUD overlay is always active — every screen element has an index number. Use SCREEN_TREE to read the current screen state at any time.
+STEP 1: Read screen first.
+STEP 2: Do one action.
+STEP 3: Read screen again to verify.
 
-HOW TO WORK — Think like a human using a phone:
-1. OBSERVE: Use >>> SCREEN_TREE to see what's on screen
-2. THINK: Analyze the elements and decide what to tap/type
-3. ACT: Execute ONE action (tap, swipe, type, etc.)
-4. OBSERVE AGAIN: Use >>> SCREEN_TREE to verify the result
-5. REPEAT until the task is complete
+TOOLS:
+>>> SCREEN_TREE          — See all screen elements with index numbers
+>>> READ_SCREEN          — Read screen text
+>>> LAUNCH <app>         — Open app (e.g. >>> LAUNCH Settings)
+>>> TAP_INDEX <n>        — Tap element by index number
+>>> CLICK_TEXT <text>    — Tap text on screen
+>>> CLICK <x> <y>       — Tap coordinates
+>>> TYPE <text>          — Type in focused field
+>>> BACK                 — Go back
+>>> HOME                 — Go home
+>>> SWIPE_UP             — Swipe up
+>>> SWIPE_DOWN           — Swipe down
+>>> SCROLL UP            — Scroll up
+>>> SCROLL DOWN          — Scroll down
+>>> OPEN_SETTINGS        — Open Settings app
+>>> OPEN_WIFI            — Open WiFi settings
+>>> OPEN_BLUETOOTH       — Open Bluetooth settings
+>>> OPEN_DISPLAY         — Open Display settings
+>>> OPEN_SOUND           — Open Sound settings
+>>> OPEN_BATTERY         — Open Battery settings
+>>> NOTIFICATIONS        — Pull down notifications
+>>> VOLUME <0-100>       — Set volume
+>>> BRIGHTNESS <0-100>   — Set brightness
+>>> PACKAGES             — List installed apps
+>>> STOP_APP <app>       — Force stop app
+>>> OPEN_URL <url>       — Open URL
+>>> LONG_PRESS <x> <y>  — Long press
+>>> SWIPE <x1> <y1> <x2> <y2>
+>>> APPEND <text>        — Append text
+>>> DELETE <n>           — Delete chars
+>>> CLEAR                — Clear field
+>>> RECENTS              — Recent apps
+>>> HUD_REFRESH          — Refresh element indices
 
-Available tools:
-— APP CONTROL —
->>> LAUNCH <app_name>             — Open an app (e.g. >>> LAUNCH Settings)
->>> STOP_APP <app_name>           — Force stop an app
->>> PACKAGES                      — List all installed apps
->>> OPEN_URL <url>                — Open a URL in browser
->>> APP_SETTINGS <app_name>       — Open app info/settings page
+RULES:
+- ALWAYS use >>> SCREEN_TREE before tapping anything
+- Use >>> TAP_INDEX with the number from SCREEN_TREE
+- One command per line, each starting with >>>
 
-— SCREEN READING —
->>> READ_SCREEN                   — Read all text visible on screen
->>> SCREEN_TREE                   — Get UI element tree with indices [MOST IMPORTANT]
->>> SCREEN_SUMMARY                — Quick screen state overview
->>> CURRENT_APP                   — Get current foreground app
-
-— GESTURES —
->>> CLICK_TEXT <text>             — Tap on visible text/button
->>> TAP_INDEX <n>                 — Tap element by index (from SCREEN_TREE) [PREFERRED]
->>> CLICK <x> <y>                — Tap screen at coordinates
->>> LONG_PRESS <x> <y>           — Long press at coordinates
->>> SWIPE <x1> <y1> <x2> <y2>   — Swipe between two points
->>> SWIPE_UP / SWIPE_DOWN / SWIPE_LEFT / SWIPE_RIGHT
-
-— TEXT INPUT —
->>> TYPE <text>                   — Set text in focused field
->>> APPEND <text>                 — Append text to focused field
->>> DELETE <n>                    — Delete last n characters
->>> CLEAR                         — Clear focused text field
-
-— NAVIGATION —
->>> BACK                          — Press back button
->>> HOME                          — Go to home screen
->>> RECENTS                       — Open recent apps
->>> NOTIFICATIONS                 — Open notification shade
->>> SCROLL UP / DOWN / LEFT / RIGHT — Scroll in direction
-
-— HUD OVERLAY —
->>> HUD_REFRESH                   — Force refresh element indices
-
-— SYSTEM SETTINGS —
->>> VOLUME <0-100>                — Set media volume
->>> BRIGHTNESS <0-100>            — Set screen brightness
->>> OPEN_SETTINGS / OPEN_WIFI / OPEN_BLUETOOTH / OPEN_DISPLAY / OPEN_SOUND / OPEN_BATTERY
-
-Rules:
-- ALWAYS use SCREEN_TREE before ANY tap or click — never guess what's on screen
-- Use TAP_INDEX (not coordinates) whenever possible — it's more reliable
-- Execute ONE action at a time, then observe the result
-- If an element isn't visible, try scrolling to find it
-- Put each >>> command on its own line
-- After each action, wait for the tool result before deciding the next step
-
-Example — "Open Settings and find Android version":
-I'll open Settings and navigate to the Android version info.
->>> LAUNCH Settings
+Example task "enable WiFi":
+>>> OPEN_WIFI
 >>> SCREEN_TREE
+Then find the WiFi toggle index and:
+>>> TAP_INDEX <n>""" else ""
 
-(After reading tree: found "About phone" at index 12)
-I can see the Settings screen. Let me tap "About phone".
->>> TAP_INDEX 12
->>> SCREEN_TREE
-
-(After reading tree: found "Android version" showing "13")
-I found the information. Your Android version is 13.""" else ""
-
-        return """You are Synapse AI, an autonomous AI agent running on the user's Android device.
-
-Current date and time: $now
-Timezone: $tz
-Device: Android (local on-device inference)${if (hasA11y) "\nDevice Control: ENABLED (Accessibility Service active)" else "\nDevice Control: DISABLED (enable in Android Accessibility Settings)"}
-
-Instructions:
-- You are an autonomous agent who can observe and control the device like a human would.
-- Always read the screen FIRST before taking any action.
-- Think step by step: observe → analyze → act → verify.
-- Answer questions clearly, thoroughly, and helpfully.
-- You have full knowledge of the conversation history. Use it to maintain context.
-- If asked about the time, date, or day, use the current date/time provided above.
-- Be honest about your limitations: you run locally and cannot browse the internet.
-- Never stop mid-sentence. Always complete your thoughts and answers fully.
-- If a response is long, structure it with headings, bullet points, or numbered lists.
-- Be friendly, informative, and conversational.$toolsSection"""
+        return """You are Synapse AI, an AI assistant on this Android device.
+Time: $now${if (hasA11y) "\nDevice Control: ENABLED" else ""}
+You answer questions and can control the device using >>> commands.
+Always complete your answers. Be helpful and concise.$toolsSection"""
     }
 
     // ========== CHAT ==========
@@ -393,6 +355,7 @@ Instructions:
         if (toolLines.isEmpty()) return null
 
         val feedbackParts = mutableListOf<String>()
+        var hadUIAction = false
 
         for (line in toolLines) {
             val cmd = line.trimStart().removePrefix(">>>").trim()
@@ -402,27 +365,40 @@ Instructions:
                 val result = executeOneCommand(service, cmd)
                 if (result != null) {
                     addSystemLog("⚡ $result")
+                    feedbackParts.add("[${cmd.split(" ")[0].uppercase()}] $result")
                 }
 
-                // Collect screen data results for feedback to model
                 val action = cmd.split(" ", limit = 2)[0].uppercase()
 
                 // After UI-changing actions, wait for screen to settle
                 if (action in UI_CHANGING_COMMANDS) {
-                    kotlinx.coroutines.delay(800)
+                    kotlinx.coroutines.delay(1000)
+                    hadUIAction = true
                 }
 
+                // Collect explicit screen data feedback
                 if (action in FEEDBACK_COMMANDS) {
                     val feedbackData = getToolFeedbackData(service, action)
                     if (feedbackData != null) {
-                        feedbackParts.add("[$action result]\n$feedbackData")
+                        feedbackParts.add("[$action]\n$feedbackData")
                     }
                 }
 
-                kotlinx.coroutines.delay(300)
+                kotlinx.coroutines.delay(200)
             } catch (e: Exception) {
                 Log.e(TAG, "Tool exec failed: $cmd", e)
                 addSystemLog("⚠ Tool error: ${e.message}")
+                feedbackParts.add("[ERROR] $cmd: ${e.message}")
+            }
+        }
+
+        // After UI actions, auto-capture screen state so model can see what happened
+        if (hadUIAction) {
+            try {
+                val screenData = service.getCompactScreenTreeJson().take(2000)
+                feedbackParts.add("[SCREEN after actions]\n$screenData")
+            } catch (e: Exception) {
+                Log.e(TAG, "Auto screen capture failed", e)
             }
         }
 
@@ -439,7 +415,9 @@ Instructions:
         "LAUNCH", "TAP_INDEX", "CLICK", "CLICK_TEXT", "LONG_PRESS",
         "SWIPE", "SWIPE_UP", "SWIPE_DOWN", "SWIPE_LEFT", "SWIPE_RIGHT",
         "BACK", "HOME", "RECENTS", "NOTIFICATIONS",
-        "SCROLL", "TYPE", "APPEND", "CLEAR"
+        "SCROLL", "TYPE", "APPEND", "CLEAR",
+        "OPEN_SETTINGS", "OPEN_WIFI", "OPEN_BLUETOOTH", "OPEN_DISPLAY",
+        "OPEN_SOUND", "OPEN_BATTERY", "OPEN_URL", "APP_SETTINGS"
     )
 
     /** Get the actual data output for feedback commands */

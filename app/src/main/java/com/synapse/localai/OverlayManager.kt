@@ -21,7 +21,7 @@ class OverlayManager(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val elementRects = CopyOnWriteArrayList<ElementInfo>()
     private var isOverlayVisible = false
-    private var isDrawingEnabled = true
+    private var isDrawingEnabled = false
     private var elementIndexCounter = 0
 
     private var hudScaleFactor: Float = 1.0f
