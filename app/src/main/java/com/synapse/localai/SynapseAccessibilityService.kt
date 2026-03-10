@@ -3,19 +3,27 @@ package com.synapse.localai
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.ActivityManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SynapseAccessibilityService : AccessibilityService() {
 
@@ -25,6 +33,11 @@ class SynapseAccessibilityService : AccessibilityService() {
         private const val MAX_COMPACT_NODES = 500
         private const val MAX_DEPTH = 15
         private const val VISIBILITY_THRESHOLD = 0.01f
+        private const val REFRESH_INTERVAL_MS = 600L
+        private const val MIN_FRAME_TIME_MS = 200L
+        private const val POST_CHANGE_DELAY_MS = 400L
+        private const val NOTIFICATION_CHANNEL_ID = "synapse_agent"
+        private const val NOTIFICATION_ID = 999
 
         @Volatile
         var instance: SynapseAccessibilityService? = null
@@ -36,24 +49,126 @@ class SynapseAccessibilityService : AccessibilityService() {
     var overlayManager: OverlayManager? = null
         private set
     private var overlayEnabled = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var lastUpdateTime = 0L
+    private var currentPackageName = ""
+    private val isProcessing = AtomicBoolean(false)
+
+    // Periodic refresh runnable
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            if (overlayEnabled) {
+                val now = System.currentTimeMillis()
+                if (now - lastUpdateTime >= MIN_FRAME_TIME_MS) {
+                    refreshOverlayInternal()
+                    lastUpdateTime = now
+                }
+            }
+            mainHandler.postDelayed(this, REFRESH_INTERVAL_MS)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         overlayManager = OverlayManager(this)
-        Log.i(TAG, "Accessibility service connected")
+        startForegroundNotification()
+        startPeriodicUpdates()
+        Log.i(TAG, "Accessibility service connected + foreground started")
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!overlayEnabled || event == null) return
+        val eventPkg = event.packageName?.toString() ?: return
 
-    override fun onInterrupt() {}
+        // Skip our own overlay events
+        if (eventPkg == packageName) return
+
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // App or activity changed — delay then refresh
+                if (eventPkg != currentPackageName) {
+                    currentPackageName = eventPkg
+                    overlayManager?.clearElements()
+                    overlayManager?.refreshOverlay()
+                }
+                mainHandler.removeCallbacks(refreshRunnable)
+                mainHandler.postDelayed(refreshRunnable, POST_CHANGE_DELAY_MS)
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                // Content changed — debounced refresh
+                val now = System.currentTimeMillis()
+                if (now - lastUpdateTime >= MIN_FRAME_TIME_MS) {
+                    refreshOverlayInternal()
+                    lastUpdateTime = now
+                }
+            }
+        }
+    }
+
+    override fun onInterrupt() {
+        stopPeriodicUpdates()
+    }
 
     override fun onDestroy() {
         super.onDestroy()
+        stopPeriodicUpdates()
         overlayManager?.hideOverlay()
         overlayManager = null
         instance = null
         Log.i(TAG, "Accessibility service destroyed")
+    }
+
+    private fun startPeriodicUpdates() {
+        lastUpdateTime = System.currentTimeMillis()
+        mainHandler.postDelayed(refreshRunnable, REFRESH_INTERVAL_MS)
+    }
+
+    private fun stopPeriodicUpdates() {
+        mainHandler.removeCallbacks(refreshRunnable)
+    }
+
+    // ===== FOREGROUND NOTIFICATION =====
+
+    private fun startForegroundNotification() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    "Synapse AI Agent",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Keeps Synapse AI agent running in background"
+                    setShowBadge(false)
+                }
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.createNotificationChannel(channel)
+            }
+
+            val openIntent = Intent(this, MainActivity::class.java)
+            val pendingIntent = PendingIntent.getActivity(
+                this, 0, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
+                .setContentTitle("Synapse AI Active")
+                .setContentText("Agent running • Tap to open")
+                .setSmallIcon(android.R.drawable.ic_menu_manage)
+                .setOngoing(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            startForeground(NOTIFICATION_ID, notification)
+            Log.i(TAG, "Foreground notification started")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground notification: ${e.message}", e)
+        }
     }
 
     // ===== HUD OVERLAY CONTROL =====
@@ -62,7 +177,9 @@ class SynapseAccessibilityService : AccessibilityService() {
         overlayEnabled = enabled
         if (enabled) {
             overlayManager?.showOverlay()
+            refreshOverlayInternal()
         } else {
+            overlayManager?.clearElements()
             overlayManager?.hideOverlay()
         }
     }
@@ -73,19 +190,31 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     fun isOverlayEnabled(): Boolean = overlayEnabled
 
-    /** Refresh HUD overlay with current screen elements */
+    /** Public refresh — called by agent commands */
     fun refreshOverlay() {
         if (!overlayEnabled) return
-        val om = overlayManager ?: return
-        om.clearElements()
+        refreshOverlayInternal()
+    }
 
-        val root = rootInActiveWindow ?: return
-        val screenBounds = getScreenBounds()
-        var indexCounter = 0
-        indexCounter = populateOverlayElements(root, om, screenBounds, 0, indexCounter)
-        root.recycle()
-        om.refreshOverlay()
-        Log.d(TAG, "Overlay refreshed: ${om.getElementCount()} elements")
+    /** Internal refresh with processing guard */
+    private fun refreshOverlayInternal() {
+        if (!isProcessing.compareAndSet(false, true)) return
+        try {
+            val om = overlayManager ?: return
+            if (!overlayEnabled) return
+            om.clearElements()
+
+            val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return
+            val screenBounds = getScreenBounds()
+            var indexCounter = 0
+            indexCounter = populateOverlayElements(root, om, screenBounds, 0, indexCounter)
+            root.recycle()
+            om.refreshOverlay()
+        } catch (e: Exception) {
+            Log.e(TAG, "refreshOverlay error: ${e.message}")
+        } finally {
+            isProcessing.set(false)
+        }
     }
 
     private fun populateOverlayElements(
