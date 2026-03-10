@@ -22,7 +22,8 @@ class GGUFModelClient {
 
     companion object {
         private const val TAG = "GGUFModel"
-        private const val SERVER_URL = "http://127.0.0.1:8080"
+        private const val DEFAULT_HOST = "127.0.0.1"
+        private const val DEFAULT_PORT = 8080
         private const val SERVER_LIB_NAME = "libllama_server.so"
         private const val SERVER_START_TIMEOUT_MS = 90_000L
         private const val SERVER_POLL_INTERVAL_MS = 1_000L
@@ -32,12 +33,19 @@ class GGUFModelClient {
     private var serverProcess: Process? = null
     private var nativeLibDir: String? = null
 
+    var serverHost: String = DEFAULT_HOST
+    var serverPort: Int = DEFAULT_PORT
+    var contextLength: Int = 2048
+    var threadCount: Int = 2
+
+    private val serverUrl: String get() = "http://$serverHost:$serverPort"
+
     var isLoaded: Boolean = false
         private set
 
     private fun isServerRunning(): Boolean {
         return try {
-            val url = URL("$SERVER_URL/health")
+            val url = URL("$serverUrl/health")
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 2000
             conn.readTimeout = 2000
@@ -79,10 +87,10 @@ class GGUFModelClient {
             val pb = ProcessBuilder(
                 serverBinary,
                 "-m", modelPath,
-                "-c", "2048",
-                "-t", "2",
-                "--host", "127.0.0.1",
-                "--port", "8080",
+                "-c", contextLength.toString(),
+                "-t", threadCount.toString(),
+                "--host", serverHost,
+                "--port", serverPort.toString(),
                 "--reasoning-budget", "0"
             )
             pb.redirectErrorStream(true)
@@ -181,7 +189,7 @@ class GGUFModelClient {
             .put("temperature", 0.7)
             .put("stream", true)
 
-        val url = URL("$SERVER_URL/v1/chat/completions")
+        val url = URL("$serverUrl/v1/chat/completions")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true

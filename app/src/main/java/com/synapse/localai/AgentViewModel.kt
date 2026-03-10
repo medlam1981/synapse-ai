@@ -20,7 +20,13 @@ enum class ModelType { LITERTLM, GGUF }
 
 data class AgentConfig(
     val useLocalModel: Boolean = true,
-    val localModelPath: String = ""
+    val localModelPath: String = "",
+    val serverHost: String = "127.0.0.1",
+    val serverPort: Int = 8080,
+    val contextLength: Int = 2048,
+    val threadCount: Int = 2,
+    val overlayEnabled: Boolean = false,
+    val overlaySize: Float = 1.0f
 )
 
 data class AgentUiState(
@@ -67,7 +73,13 @@ class AgentViewModel : ViewModel() {
         val savedPath = prefs.getString("local_model_path", null)
         val config = AgentConfig(
             useLocalModel = savedPath != null,
-            localModelPath = savedPath ?: ""
+            localModelPath = savedPath ?: "",
+            serverHost = prefs.getString("server_host", "127.0.0.1") ?: "127.0.0.1",
+            serverPort = prefs.getInt("server_port", 8080),
+            contextLength = prefs.getInt("context_length", 2048),
+            threadCount = prefs.getInt("thread_count", 2),
+            overlayEnabled = prefs.getBoolean("overlay_enabled", false),
+            overlaySize = prefs.getFloat("overlay_size", 1.0f)
         )
         _uiState.update { it.copy(config = config) }
 
@@ -89,6 +101,12 @@ class AgentViewModel : ViewModel() {
         prefs(context).edit()
             .putBoolean("use_local_model", config.useLocalModel)
             .putString("local_model_path", config.localModelPath)
+            .putString("server_host", config.serverHost)
+            .putInt("server_port", config.serverPort)
+            .putInt("context_length", config.contextLength)
+            .putInt("thread_count", config.threadCount)
+            .putBoolean("overlay_enabled", config.overlayEnabled)
+            .putFloat("overlay_size", config.overlaySize)
             .apply()
         _uiState.update { it.copy(config = config) }
         addSystemLog("> Config saved.")
@@ -136,7 +154,13 @@ class AgentViewModel : ViewModel() {
     private fun loadGguf(context: Context, path: String, modelName: String) {
         viewModelScope.launch {
             try {
-                val client = GGUFModelClient()
+                val config = _uiState.value.config
+                val client = GGUFModelClient().apply {
+                    serverHost = config.serverHost
+                    serverPort = config.serverPort
+                    contextLength = config.contextLength
+                    threadCount = config.threadCount
+                }
                 ggufClient = client
                 client.loadModel(
                     context = context,
@@ -175,32 +199,60 @@ class AgentViewModel : ViewModel() {
         val hasA11y = SynapseAccessibilityService.isConnected
         val toolsSection = if (hasA11y) """
 
-You also have DEVICE CONTROL capabilities via these tools. When the user asks you to perform an action on the device, respond with the tool command on its own line prefixed with >>>.
+You have DEVICE CONTROL capabilities. When the user asks you to perform an action on the device, respond with the tool command on its own line prefixed with >>>.
 
 Available tools:
->>> LAUNCH <app_name>          — Open an app (e.g. >>> LAUNCH Chrome)
->>> CLICK <x> <y>             — Tap screen at coordinates
->>> CLICK_TEXT <text>          — Tap on visible text/button
->>> SCROLL UP                  — Scroll the screen up
->>> SCROLL DOWN                — Scroll the screen down
->>> TYPE <text>                — Type text into focused field
->>> BACK                       — Press back button
->>> HOME                       — Go to home screen
->>> RECENTS                    — Open recent apps
->>> NOTIFICATIONS              — Open notification shade
->>> READ_SCREEN                — Read all text visible on screen
->>> SCREEN_TREE                — Get UI element tree with coordinates
->>> LONG_PRESS <x> <y>        — Long press at coordinates
->>> SWIPE <x1> <y1> <x2> <y2> — Swipe from point to point
+— APP CONTROL —
+>>> LAUNCH <app_name>             — Open an app (e.g. >>> LAUNCH Chrome)
+>>> STOP_APP <app_name>           — Force stop an app
+>>> PACKAGES                      — List all installed apps
+>>> OPEN_URL <url>                — Open a URL in browser
+>>> APP_SETTINGS <app_name>       — Open app info/settings page
 
-Rules for tool use:
-- Put each tool command on its own line starting with >>>
+— GESTURES —
+>>> CLICK <x> <y>                — Tap screen at coordinates
+>>> CLICK_TEXT <text>             — Tap on visible text/button
+>>> TAP_INDEX <n>                 — Tap element by index (from SCREEN_TREE)
+>>> LONG_PRESS <x> <y>           — Long press at coordinates
+>>> SWIPE <x1> <y1> <x2> <y2>   — Swipe between two points
+
+— TEXT INPUT —
+>>> TYPE <text>                   — Set text in focused field
+>>> APPEND <text>                 — Append text to focused field
+>>> DELETE <n>                    — Delete last n characters
+>>> CLEAR                         — Clear focused text field
+
+— NAVIGATION —
+>>> BACK                          — Press back button
+>>> HOME                          — Go to home screen
+>>> RECENTS                       — Open recent apps
+>>> NOTIFICATIONS                 — Open notification shade
+>>> SCROLL UP                     — Scroll the screen up
+>>> SCROLL DOWN                   — Scroll the screen down
+
+— DEVICE STATE —
+>>> READ_SCREEN                   — Read all text visible on screen
+>>> SCREEN_TREE                   — Get UI element tree with indices
+>>> SCREENSHOT                    — Take a screenshot (base64)
+>>> CURRENT_APP                   — Get current foreground app
+
+— SYSTEM SETTINGS —
+>>> VOLUME <0-100>                — Set media volume
+>>> BRIGHTNESS <0-100>            — Set screen brightness
+>>> OPEN_SETTINGS                 — Open Android settings
+>>> OPEN_WIFI                     — Open WiFi settings
+>>> OPEN_BLUETOOTH                — Open Bluetooth settings
+>>> OPEN_DISPLAY                  — Open display settings
+>>> OPEN_SOUND                    — Open sound settings
+>>> OPEN_BATTERY                  — Open battery settings
+
+Rules:
+- Put each command on its own line starting with >>>
 - You can use multiple tools in one response
-- After each tool, explain what you did
-- You can combine chat text with tool commands
-- If user asks to do something on the device, use the tools above
+- After each tool, briefly explain what you did
 - For clicking buttons, prefer CLICK_TEXT when you know the text
-- Use READ_SCREEN or SCREEN_TREE to see what's on screen first""" else ""
+- Use READ_SCREEN or SCREEN_TREE to see what's on screen first
+- For apps, use their common name (Chrome, Settings, WhatsApp)""" else ""
 
         return """You are Synapse AI, a powerful and friendly local AI assistant running on the user's Android device.
 
@@ -292,7 +344,9 @@ Instructions:
     private suspend fun executeToolCommands(response: String) {
         val service = SynapseAccessibilityService.instance ?: return
 
+        // Look for >>> commands first
         val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
+
         if (toolLines.isEmpty()) return
 
         for (line in toolLines) {
@@ -304,7 +358,6 @@ Instructions:
                 if (result != null) {
                     addSystemLog("⚡ $result")
                 }
-                // Small delay between actions for UI to update
                 kotlinx.coroutines.delay(300)
             } catch (e: Exception) {
                 Log.e(TAG, "Tool exec failed: $cmd", e)
@@ -319,10 +372,31 @@ Instructions:
         val args = if (parts.size > 1) parts[1].trim() else ""
 
         return when (action) {
+            // --- APP CONTROL ---
             "LAUNCH" -> {
                 val ok = service.launchApp(args)
                 if (ok) "Launched: $args" else "App not found: $args"
             }
+            "STOP_APP" -> {
+                val ok = service.stopApp(args)
+                if (ok) "Stopped: $args" else "Failed to stop: $args"
+            }
+            "PACKAGES" -> {
+                val list = service.getInstalledPackages()
+                val preview = list.take(1200)
+                addLog(LogEntry(sender = "SYSTEM", text = "📦 Installed apps:\n$preview${if (list.length > 1200) "\n..." else ""}"))
+                null
+            }
+            "OPEN_URL" -> {
+                val ok = service.openUrl(args)
+                if (ok) "Opened URL: $args" else "Failed to open URL"
+            }
+            "APP_SETTINGS" -> {
+                val ok = service.openAppSettings(args)
+                if (ok) "Opened settings for: $args" else "Failed to open app settings"
+            }
+
+            // --- GESTURES ---
             "CLICK" -> {
                 val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
                 if (coords.size >= 2) {
@@ -335,41 +409,12 @@ Instructions:
                 val ok = service.clickByText(args)
                 if (ok) "Clicked: \"$args\"" else "Text not found: \"$args\""
             }
-            "SCROLL" -> {
-                val ok = service.scrollScreen(args)
-                if (ok) "Scrolled $args" else "Scroll failed"
-            }
-            "TYPE" -> {
-                val ok = service.typeText(args)
-                if (ok) "Typed text" else "No editable field focused"
-            }
-            "BACK" -> {
-                service.goBack()
-                "Pressed Back"
-            }
-            "HOME" -> {
-                service.goHome()
-                "Pressed Home"
-            }
-            "RECENTS" -> {
-                service.openRecents()
-                "Opened Recents"
-            }
-            "NOTIFICATIONS" -> {
-                service.openNotifications()
-                "Opened Notifications"
-            }
-            "READ_SCREEN" -> {
-                val text = service.getScreenText()
-                val preview = text.take(500)
-                addLog(LogEntry(sender = "SYSTEM", text = "📱 Screen text:\n$preview${if (text.length > 500) "\n..." else ""}"))
-                null
-            }
-            "SCREEN_TREE" -> {
-                val tree = service.getScreenTree()
-                val preview = tree.take(800)
-                addLog(LogEntry(sender = "SYSTEM", text = "🌳 UI Tree:\n$preview${if (tree.length > 800) "\n..." else ""}"))
-                null
+            "TAP_INDEX" -> {
+                val index = args.trim().toIntOrNull()
+                if (index != null) {
+                    val ok = service.clickByIndex(index)
+                    if (ok) "Tapped element #$index" else "Element #$index not found"
+                } else null
             }
             "LONG_PRESS" -> {
                 val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
@@ -387,6 +432,92 @@ Instructions:
                     "Swiped (${coords[0].toInt()},${coords[1].toInt()}) → (${coords[2].toInt()},${coords[3].toInt()})"
                 } else null
             }
+
+            // --- TEXT INPUT ---
+            "TYPE" -> {
+                val ok = service.typeText(args)
+                if (ok) "Typed text" else "No editable field focused"
+            }
+            "APPEND" -> {
+                val ok = service.appendText(args)
+                if (ok) "Appended text" else "No editable field focused"
+            }
+            "DELETE" -> {
+                val count = args.trim().toIntOrNull() ?: 1
+                val ok = service.deleteText(count)
+                if (ok) "Deleted $count char(s)" else "No editable field or empty"
+            }
+            "CLEAR" -> {
+                val ok = service.typeText("")
+                if (ok) "Cleared text field" else "No editable field focused"
+            }
+
+            // --- NAVIGATION ---
+            "BACK" -> { service.goBack(); "Pressed Back" }
+            "HOME" -> { service.goHome(); "Pressed Home" }
+            "RECENTS" -> { service.openRecents(); "Opened Recents" }
+            "NOTIFICATIONS" -> { service.openNotifications(); "Opened Notifications" }
+            "SCROLL" -> {
+                val ok = service.scrollScreen(args)
+                if (ok) "Scrolled $args" else "Scroll failed"
+            }
+
+            // --- DEVICE STATE ---
+            "READ_SCREEN" -> {
+                val text = service.getScreenText()
+                val preview = text.take(500)
+                addLog(LogEntry(sender = "SYSTEM", text = "📱 Screen text:\n$preview${if (text.length > 500) "\n..." else ""}"))
+                null
+            }
+            "SCREEN_TREE" -> {
+                val tree = service.getScreenTree()
+                val preview = tree.take(800)
+                addLog(LogEntry(sender = "SYSTEM", text = "🌳 UI Tree:\n$preview${if (tree.length > 800) "\n..." else ""}"))
+                null
+            }
+            "SCREENSHOT" -> {
+                var result: String? = null
+                val latch = java.util.concurrent.CountDownLatch(1)
+                service.takeScreenshotBase64 { base64 ->
+                    result = base64
+                    latch.countDown()
+                }
+                latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                if (result != null) {
+                    addLog(LogEntry(sender = "SYSTEM", text = "📸 Screenshot captured (${result!!.length / 1024}KB base64)"))
+                    null
+                } else "Screenshot failed"
+            }
+            "CURRENT_APP" -> {
+                val pkg = service.getCurrentPackage()
+                if (pkg.isNotEmpty()) "Current app: $pkg" else "Could not detect current app"
+            }
+
+            // --- SYSTEM SETTINGS ---
+            "VOLUME" -> {
+                val pct = args.trim().toIntOrNull()
+                if (pct != null) {
+                    val ok = service.setVolume(pct)
+                    if (ok) "Volume set to $pct%" else "Failed to set volume"
+                } else {
+                    val vol = service.getVolume()
+                    "Current volume: $vol%"
+                }
+            }
+            "BRIGHTNESS" -> {
+                val pct = args.trim().toIntOrNull()
+                if (pct != null) {
+                    val ok = service.setBrightness(pct)
+                    if (ok) "Brightness set to $pct%" else "Failed to set brightness"
+                } else null
+            }
+            "OPEN_SETTINGS" -> { service.openSystemSettings(); "Opened Settings" }
+            "OPEN_WIFI" -> { service.openWifiSettings(); "Opened WiFi Settings" }
+            "OPEN_BLUETOOTH" -> { service.openBluetoothSettings(); "Opened Bluetooth Settings" }
+            "OPEN_DISPLAY" -> { service.openDisplaySettings(); "Opened Display Settings" }
+            "OPEN_SOUND" -> { service.openSoundSettings(); "Opened Sound Settings" }
+            "OPEN_BATTERY" -> { service.openBatterySettings(); "Opened Battery Settings" }
+
             else -> {
                 Log.w(TAG, "Unknown tool: $action")
                 null

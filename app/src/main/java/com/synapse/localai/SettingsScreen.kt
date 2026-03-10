@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,6 +67,12 @@ fun SettingsScreen(
     var customPath by remember { mutableStateOf("") }
     var showCustomInput by remember { mutableStateOf(false) }
 
+    // Server settings state
+    var serverHost by remember(config.serverHost) { mutableStateOf(config.serverHost) }
+    var serverPort by remember(config.serverPort) { mutableStateOf(config.serverPort.toString()) }
+    var contextLength by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
+    var threadCount by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -76,7 +84,9 @@ fun SettingsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(DarkCard)
+                .background(
+                    Brush.horizontalGradient(listOf(DarkCard, MidNavy, DarkCard))
+                )
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -86,9 +96,9 @@ fun SettingsScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.15f)),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("\u2190 Back", color = NeonCyan, fontSize = 14.sp)
+                Text("← Back", color = NeonCyan, fontSize = 14.sp)
             }
-            Text("Settings", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("⚙ SETTINGS", color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 2.sp)
             Spacer(modifier = Modifier.width(80.dp))
         }
 
@@ -97,7 +107,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(Brush.horizontalGradient(listOf(Color.Transparent, NeonCyan.copy(alpha = 0.2f), NeonPurple.copy(alpha = 0.2f), Color.Transparent)))
+                .background(Brush.horizontalGradient(listOf(Color.Transparent, NeonCyan.copy(alpha = 0.3f), NeonPurple.copy(alpha = 0.3f), Color.Transparent)))
         )
 
         Column(
@@ -107,213 +117,155 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Model Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = DarkCard),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("AI MODELS", color = NeonCyan, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
+            // ═══════ AI MODEL SECTION ═══════
+            SettingsCard(title = "AI MODELS", titleColor = NeonCyan, statusDot = when {
+                uiState.localModelLoaded -> Color(0xFF34D399)
+                uiState.localModelLoading -> Color(0xFFFBBF24)
+                else -> Color(0xFFEF4444)
+            }, statusText = when {
+                uiState.localModelLoading -> "Loading..."
+                uiState.localModelLoaded -> "Ready"
+                else -> "Idle"
+            }) {
+                if (models.isNotEmpty()) {
+                    Text("Discovered Models", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+
+                    models.forEach { file ->
+                        val isSelected = selectedPath == file.absolutePath
+                        val isCurrentlyLoaded = isSelected && uiState.localModelLoaded
+                        val modelType = AgentViewModel.detectModelType(file.absolutePath)
+                        val typeLabel = if (modelType == ModelType.GGUF) "GGUF" else "LiteRT"
+                        val typeColor = if (modelType == ModelType.GGUF) Color(0xFFFF9F43) else NeonCyan
+
                         Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    if (isSelected) NeonCyan.copy(alpha = 0.08f) else Color.Transparent,
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isSelected) NeonCyan.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.04f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable { selectedPath = file.absolutePath; showCustomInput = false }
+                                .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        when {
-                                            uiState.localModelLoaded -> Color(0xFF34D399)
-                                            uiState.localModelLoading -> Color(0xFFFBBF24)
-                                            else -> Color(0xFFEF4444)
-                                        },
-                                        RoundedCornerShape(4.dp)
-                                    )
-                            )
+                                    .size(18.dp)
+                                    .border(2.dp, if (isSelected) NeonCyan else Color.White.copy(alpha = 0.15f), RoundedCornerShape(9.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSelected) {
+                                    Box(modifier = Modifier.size(10.dp).background(NeonCyan, RoundedCornerShape(5.dp)))
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(file.nameWithoutExtension, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${formatSize(file.length())} • $typeLabel", color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .background(typeColor.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Text(typeLabel, color = typeColor, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            }
+                            if (isCurrentlyLoaded) {
+                                Text("✓", color = Color(0xFF34D399), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                } else {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MidNavy),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("No models found", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
                             Text(
-                                when {
-                                    uiState.localModelLoading -> "Loading..."
-                                    uiState.localModelLoaded -> "Ready"
-                                    else -> "Idle"
-                                },
-                                color = Color.White.copy(alpha = 0.5f),
+                                "Place .gguf or .litertlm files in:\n/sdcard/Download/\n/sdcard/Models/",
+                                color = Color.White.copy(alpha = 0.25f),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { models = scanForModels() },
+                        shape = RoundedCornerShape(10.dp),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(
+                            brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.2f))
+                        )
+                    ) {
+                        Text("↻ Rescan", color = NeonCyan.copy(alpha = 0.7f), fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { showCustomInput = !showCustomInput },
+                        shape = RoundedCornerShape(10.dp),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(
+                            brush = androidx.compose.ui.graphics.SolidColor(NeonPurple.copy(alpha = 0.2f))
+                        )
+                    ) {
+                        Text("Custom path", color = NeonPurple.copy(alpha = 0.7f), fontSize = 12.sp)
+                    }
+                }
+
+                if (showCustomInput) {
+                    OutlinedTextField(
+                        value = customPath,
+                        onValueChange = { customPath = it },
+                        label = { Text("Full path to model file", color = Color.White.copy(alpha = 0.3f)) },
+                        placeholder = { Text("/sdcard/Download/model.gguf", color = Color.White.copy(alpha = 0.12f), fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                    if (customPath.isNotBlank()) {
+                        val exists = try { File(customPath).exists() } catch (_: Exception) { false }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (exists) "✓ Found" else "✗ Not found",
+                                color = if (exists) Color(0xFF34D399) else Color(0xFFEF4444),
                                 fontSize = 11.sp
                             )
-                        }
-                    }
-
-                    Divider(color = NeonPurple.copy(alpha = 0.1f))
-
-                    // Models list
-                    if (models.isNotEmpty()) {
-                        Text("Discovered Models", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-
-                        models.forEach { file ->
-                            val isSelected = selectedPath == file.absolutePath
-                            val isCurrentlyLoaded = isSelected && uiState.localModelLoaded
-                            val modelType = AgentViewModel.detectModelType(file.absolutePath)
-                            val typeLabel = if (modelType == ModelType.GGUF) "GGUF" else "LiteRT"
-                            val typeColor = if (modelType == ModelType.GGUF) Color(0xFFFF9F43) else NeonCyan
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        if (isSelected) NeonCyan.copy(alpha = 0.08f) else Color.Transparent,
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (isSelected) NeonCyan.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.04f),
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { selectedPath = file.absolutePath; showCustomInput = false }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                // Radio
-                                Box(
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .border(2.dp, if (isSelected) NeonCyan else Color.White.copy(alpha = 0.15f), RoundedCornerShape(9.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isSelected) {
-                                        Box(modifier = Modifier.size(10.dp).background(NeonCyan, RoundedCornerShape(5.dp)))
-                                    }
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        file.nameWithoutExtension,
-                                        color = Color.White,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        "${formatSize(file.length())} • $typeLabel",
-                                        color = Color.White.copy(alpha = 0.35f),
-                                        fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                                // Type badge
-                                Box(
-                                    modifier = Modifier
-                                        .background(typeColor.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 7.dp, vertical = 3.dp)
-                                ) {
-                                    Text(typeLabel, color = typeColor, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                }
-                                if (isCurrentlyLoaded) {
-                                    Text("✓", color = Color(0xFF34D399), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    } else {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MidNavy),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text("No models found", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
-                                Text(
-                                    "Place .gguf or .litertlm files in:\n/sdcard/Download/\n/sdcard/Models/",
-                                    color = Color.White.copy(alpha = 0.25f),
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
-
-                    // Buttons
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { models = scanForModels() },
-                            shape = RoundedCornerShape(10.dp),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(
-                                brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.2f))
-                            )
-                        ) {
-                            Text("↻ Rescan", color = NeonCyan.copy(alpha = 0.7f), fontSize = 12.sp)
-                        }
-                        OutlinedButton(
-                            onClick = { showCustomInput = !showCustomInput },
-                            shape = RoundedCornerShape(10.dp),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(
-                                brush = androidx.compose.ui.graphics.SolidColor(NeonPurple.copy(alpha = 0.2f))
-                            )
-                        ) {
-                            Text("Custom path", color = NeonPurple.copy(alpha = 0.7f), fontSize = 12.sp)
-                        }
-                    }
-
-                    // Custom path input
-                    if (showCustomInput) {
-                        OutlinedTextField(
-                            value = customPath,
-                            onValueChange = { customPath = it },
-                            label = { Text("Full path to model file", color = Color.White.copy(alpha = 0.3f)) },
-                            placeholder = { Text("/sdcard/Download/model.gguf", color = Color.White.copy(alpha = 0.12f), fontSize = 12.sp) },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = NeonPurple.copy(alpha = 0.4f),
-                                unfocusedBorderColor = Color.White.copy(alpha = 0.08f),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                cursorColor = NeonCyan
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            singleLine = true
-                        )
-                        if (customPath.isNotBlank()) {
-                            val exists = try { File(customPath).exists() } catch (_: Exception) { false }
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    if (exists) "✓ Found" else "✗ Not found",
-                                    color = if (exists) Color(0xFF34D399) else Color(0xFFEF4444),
-                                    fontSize = 11.sp
-                                )
-                                if (exists) {
-                                    TextButton(onClick = { selectedPath = customPath }) {
-                                        Text("Select", color = NeonCyan, fontSize = 12.sp)
-                                    }
+                            if (exists) {
+                                TextButton(onClick = { selectedPath = customPath }) {
+                                    Text("Select", color = NeonCyan, fontSize = 12.sp)
                                 }
                             }
                         }
                     }
-
-                    // Scan dirs info
-                    Text(
-                        "Scans: ${SCAN_DIRS.joinToString(", ") { it.replace("/sdcard/", "~/") }}",
-                        color = Color.White.copy(alpha = 0.15f),
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
                 }
+
+                Text(
+                    "Scans: ${SCAN_DIRS.joinToString(", ") { it.replace("/sdcard/", "~/") }}",
+                    color = Color.White.copy(alpha = 0.15f),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                )
             }
 
-            // Load Button
+            // Load Model Button
             Button(
                 onClick = {
                     val newConfig = config.copy(useLocalModel = true, localModelPath = selectedPath)
@@ -335,84 +287,207 @@ fun SettingsScreen(
                 )
             }
 
-            // Device Control Card
-            val a11yConnected = SynapseAccessibilityService.isConnected
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = DarkCard),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("DEVICE CONTROL", color = NeonMagenta, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        if (a11yConnected) Color(0xFF34D399) else Color(0xFFEF4444),
-                                        RoundedCornerShape(4.dp)
-                                    )
-                            )
-                            Text(
-                                if (a11yConnected) "Active" else "Disabled",
-                                color = Color.White.copy(alpha = 0.5f),
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
-
-                    Divider(color = NeonMagenta.copy(alpha = 0.1f))
-
-                    Text(
-                        if (a11yConnected)
-                            "✓ Accessibility Service is active.\nSynapse AI can control the device: launch apps, tap, scroll, type, read screen."
-                        else
-                            "Enable the Accessibility Service to allow Synapse AI to control your device.\nThis enables: launching apps, tapping, scrolling, typing text, and reading screen content.",
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp
+            // ═══════ SERVER CONFIG SECTION ═══════
+            SettingsCard(title = "SERVER CONFIG", titleColor = Color(0xFFFF9F43)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = serverHost,
+                        onValueChange = { serverHost = it },
+                        label = { Text("Host", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp) },
+                        modifier = Modifier.weight(2f),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = Color.White
+                        )
                     )
-
-                    if (a11yConnected) {
-                        Text(
-                            "Available tools: LAUNCH, CLICK, CLICK_TEXT, SCROLL, TYPE, BACK, HOME, RECENTS, READ_SCREEN, SCREEN_TREE, SWIPE, LONG_PRESS",
-                            color = NeonCyan.copy(alpha = 0.3f),
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace
+                    OutlinedTextField(
+                        value = serverPort,
+                        onValueChange = { serverPort = it.filter { c -> c.isDigit() } },
+                        label = { Text("Port", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp) },
+                        modifier = Modifier.weight(1f),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = Color.White
                         )
-                    }
-
-                    Button(
-                        onClick = {
-                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (a11yConnected) NeonMagenta.copy(alpha = 0.15f) else NeonMagenta
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            if (a11yConnected) "Open Accessibility Settings" else "⚡ Enable Accessibility Service",
-                            color = if (a11yConnected) NeonMagenta else Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                    }
+                    )
                 }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = contextLength,
+                        onValueChange = { contextLength = it.filter { c -> c.isDigit() } },
+                        label = { Text("Context", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp) },
+                        modifier = Modifier.weight(1f),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = Color.White
+                        )
+                    )
+                    OutlinedTextField(
+                        value = threadCount,
+                        onValueChange = { threadCount = it.filter { c -> c.isDigit() } },
+                        label = { Text("Threads", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp) },
+                        modifier = Modifier.weight(1f),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = Color.White
+                        )
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        val newConfig = config.copy(
+                            serverHost = serverHost,
+                            serverPort = serverPort.toIntOrNull() ?: 8080,
+                            contextLength = contextLength.toIntOrNull() ?: 2048,
+                            threadCount = threadCount.toIntOrNull() ?: 2
+                        )
+                        viewModel.saveConfig(context, newConfig)
+                    },
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9F43).copy(alpha = 0.8f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Save Server Settings", color = DarkNavy, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                Text(
+                    "Default: 127.0.0.1:8080 • Context: 2048 • Threads: 2",
+                    color = Color.White.copy(alpha = 0.2f),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            // ═══════ DEVICE CONTROL SECTION ═══════
+            val a11yConnected = SynapseAccessibilityService.isConnected
+            SettingsCard(title = "DEVICE CONTROL", titleColor = NeonMagenta, statusDot = if (a11yConnected) Color(0xFF34D399) else Color(0xFFEF4444), statusText = if (a11yConnected) "Active" else "Disabled") {
+                Text(
+                    if (a11yConnected)
+                        "✓ Accessibility Service is active.\nSynapse AI can control the device: launch apps, tap, scroll, type, read screen."
+                    else
+                        "Enable the Accessibility Service to allow Synapse AI to control your device.\nThis enables: launching apps, tapping, scrolling, typing text, and reading screen content.",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
+                )
+
+                if (a11yConnected) {
+                    Text(
+                        "Tools: LAUNCH, CLICK, CLICK_TEXT, SCROLL, TYPE, BACK, HOME, RECENTS, READ_SCREEN, SCREEN_TREE, SWIPE, LONG_PRESS",
+                        color = NeonCyan.copy(alpha = 0.3f),
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (a11yConnected) NeonMagenta.copy(alpha = 0.15f) else NeonMagenta
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        if (a11yConnected) "Open Accessibility Settings" else "⚡ Enable Accessibility Service",
+                        color = if (a11yConnected) NeonMagenta else Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            // ═══════ ABOUT SECTION ═══════
+            SettingsCard(title = "ABOUT", titleColor = Color.White.copy(alpha = 0.5f)) {
+                Text("Synapse AI v1.0", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Local AI assistant with device control capabilities.\nRuns GGUF models via bundled llama-server (no root).",
+                    color = Color.White.copy(alpha = 0.3f),
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
             }
 
             Spacer(modifier = Modifier.height(32.dp))
         }
     }
 }
+
+// ═══════ REUSABLE COMPONENTS ═══════
+
+@Composable
+private fun SettingsCard(
+    title: String,
+    titleColor: Color,
+    statusDot: Color? = null,
+    statusText: String? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkCard),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(title, color = titleColor, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
+                if (statusDot != null && statusText != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(statusDot, RoundedCornerShape(4.dp))
+                        )
+                        Text(statusText, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
+                    }
+                }
+            }
+            Divider(color = titleColor.copy(alpha = 0.1f))
+            content()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = NeonPurple.copy(alpha = 0.4f),
+    unfocusedBorderColor = Color.White.copy(alpha = 0.08f),
+    focusedTextColor = Color.White,
+    unfocusedTextColor = Color.White,
+    cursorColor = NeonCyan,
+    focusedContainerColor = MidNavy.copy(alpha = 0.3f),
+    unfocusedContainerColor = MidNavy.copy(alpha = 0.15f)
+)
