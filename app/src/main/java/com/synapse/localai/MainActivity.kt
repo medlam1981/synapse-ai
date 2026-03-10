@@ -88,10 +88,17 @@ fun ChatApp(viewModel: AgentViewModel) {
         viewModel.loadConfig(context)
     }
 
-    // Auto-scroll to bottom of last message during streaming
+    // Auto-scroll to bottom during streaming (instant, no animation to avoid shaking)
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = Int.MAX_VALUE)
+            val lastIndex = uiState.logs.size - 1
+            // Only auto-scroll if user is already near bottom (within 3 items)
+            val isNearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let {
+                it >= lastIndex - 2
+            } ?: true
+            if (isNearBottom) {
+                listState.scrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE)
+            }
         }
     }
 

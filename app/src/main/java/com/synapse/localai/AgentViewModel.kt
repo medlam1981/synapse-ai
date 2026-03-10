@@ -752,8 +752,8 @@ Always complete your answers.$toolsSection"""
 
     private fun updateStreamingLog(responseId: String, text: String) {
         val now = System.currentTimeMillis()
-        // Throttle UI updates to every 100ms to reduce recomposition during streaming
-        if (now - lastStreamUpdate < 100 && text.length > 10) return
+        // Throttle UI updates to every 200ms to reduce recomposition/shaking during streaming
+        if (now - lastStreamUpdate < 200 && text.length > 10) return
         lastStreamUpdate = now
         _uiState.update { state ->
             val updatedLogs = state.logs.map { log ->

@@ -82,20 +82,38 @@ class GGUFModelClient {
             return@withContext false
         }
 
+        // Disable phantom process killer (resets on reboot)
         try {
-            // Launch server directly (no su needed — binary is bundled in the app)
-            val pb = ProcessBuilder(
-                serverBinary,
-                "-m", modelPath,
-                "-c", contextLength.toString(),
-                "-t", threadCount.toString(),
-                "--host", serverHost,
-                "--port", serverPort.toString(),
-                "--reasoning-budget", "0"
-            )
+            Runtime.getRuntime().exec(arrayOf("su", "-c",
+                "device_config put activity_manager max_phantom_processes 2147483647"))
+                .waitFor()
+            Log.d(TAG, "Phantom process killer disabled")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not disable phantom process killer: ${e.message}")
+        }
+
+        try {
+            // Kill any existing server on our port
+            try {
+                Runtime.getRuntime().exec(arrayOf("su", "-c",
+                    "pkill -f libllama_server")).waitFor()
+                delay(500)
+            } catch (_: Exception) {}
+
+            // Launch via su + setsid + nohup to detach from app cgroup (survives phantom process killer)
+            val cmd = "setsid nohup $serverBinary" +
+                " -m $modelPath" +
+                " -c $contextLength" +
+                " -t $threadCount" +
+                " --host $serverHost" +
+                " --port $serverPort" +
+                " --reasoning-budget 0" +
+                " > /dev/null 2>&1 &"
+            val pb = ProcessBuilder("su", "-c", cmd)
             pb.redirectErrorStream(true)
-            serverProcess = pb.start()
-            Log.d(TAG, "Server process started (pid via ProcessBuilder)")
+            val proc = pb.start()
+            proc.waitFor()
+            Log.d(TAG, "Server launched via su+setsid (detached from app cgroup)")
 
             // Wait for server to become ready
             val startTime = System.currentTimeMillis()
@@ -104,13 +122,6 @@ class GGUFModelClient {
                 if (isServerRunning()) {
                     Log.d(TAG, "Server is ready! (took ${System.currentTimeMillis() - startTime}ms)")
                     return@withContext true
-                }
-                // Check if process died
-                if (serverProcess?.isAlive == false) {
-                    val exitCode = serverProcess!!.exitValue()
-                    val stderr = serverProcess!!.inputStream.bufferedReader().readText()
-                    Log.e(TAG, "Server process died with exit code $exitCode: $stderr")
-                    return@withContext false
                 }
             }
 
@@ -233,7 +244,15 @@ class GGUFModelClient {
         Log.d(TAG, "Generation complete")
     }.flowOn(Dispatchers.IO)
 
-    fun stop() {}
+    fun stop() {
+        // Kill the detached server process
+        try {
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server"))
+            Log.d(TAG, "Stopped llama-server")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not stop server: ${e.message}")
+        }
+    }
 
     fun release() {
         modelPath = null
@@ -241,6 +260,7 @@ class GGUFModelClient {
     }
 
     fun close() {
+        stop()
         release()
         Log.d(TAG, "GGUF client closed")
     }
