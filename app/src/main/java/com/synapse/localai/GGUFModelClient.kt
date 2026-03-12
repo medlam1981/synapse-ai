@@ -99,13 +99,15 @@ class GGUFModelClient {
                 delay(300)
             } catch (_: Exception) {}
 
-            // Magic Touch: Launch via su + setsid + nohup to completely evade Android's cgroup / PhantomProcess restrictions
-            // Added 256MB cache/buffer padding for the model
+            // Launch via su + setsid + nohup to evade PhantomProcess restrictions
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
                 " -c $contextLength" +
                 " -t $threadCount" +
                 " -np 1" +
+                " -fa" +
+                " --mlock" +
+                " --cont-batching" +
                 " --host $serverHost" +
                 " --port $serverPort" +
                 " > /dev/null 2>&1 &"
@@ -196,9 +198,10 @@ class GGUFModelClient {
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
-            .put("max_tokens", 1024)
+            .put("max_tokens", 512)
             .put("temperature", 0.7)
             .put("stream", true)
+            .put("cache_prompt", true)
 
         val url = URL("$serverUrl/v1/chat/completions")
         val conn = url.openConnection() as HttpURLConnection
