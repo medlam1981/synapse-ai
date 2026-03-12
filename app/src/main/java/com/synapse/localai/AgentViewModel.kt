@@ -236,9 +236,13 @@ class AgentViewModel : ViewModel() {
         val toolsSection = if (hasA11y) """
 Device tools (>>> per line):
 SCREEN_TREE|READ_SCREEN|LAUNCH <app>|TAP_INDEX <n>|CLICK_TEXT <text>|TYPE <text>|BACK|HOME|SWIPE_UP|SWIPE_DOWN|SCROLL UP|SCROLL DOWN|OPEN_SETTINGS|OPEN_WIFI|NOTIFICATIONS|SCHEDULE <min> <task>
-Always >>> SCREEN_TREE first, then >>> TAP_INDEX <n>.""" else ""
+If the user wants to perform an action on the device, use the tools. Always >>> SCREEN_TREE first to see the UI, then >>> TAP_INDEX <n>.""" else ""
 
-        return """You are Synapse AI, a personal assistant on this Android device. You act like a human: see screen, think, act.$taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
+        return """You are Synapse AI, a smart assistant on this Android device.
+Analyze the user's input:
+1. CHAT: If the user is just chatting, asking a general question, or greeting you, reply naturally in text without using any tools.
+2. TASKS: If the user wants you to do something on the device (like opening an app, scheduling a task, changing settings, or interacting with the UI), use the available tools.
+$taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
     }
 
     // ========== CHAT ==========
