@@ -105,8 +105,7 @@ class GGUFModelClient {
                 " -c $contextLength" +
                 " -t $threadCount" +
                 " -np 1" +
-                " -fa" +
-                " --mlock" +
+                " -fa auto" +
                 " --cont-batching" +
                 " --host $serverHost" +
                 " --port $serverPort" +
@@ -141,6 +140,7 @@ class GGUFModelClient {
         if (!file.exists()) throw IllegalArgumentException("Model not found: $path")
 
         modelPath = path
+        this.contextLength = contextLength
         nativeLibDir = context.applicationInfo.nativeLibraryDir
 
         // Check if server is already running with correct model
