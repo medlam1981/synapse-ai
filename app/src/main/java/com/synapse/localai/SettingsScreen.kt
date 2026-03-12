@@ -26,11 +26,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+val NeonCyan     = Color(0xFF00D4FF)
+val NeonPurple   = Color(0xFFBB44FF)
+val NeonMagenta  = Color(0xFFFF44DD)
+val DarkNavy     = Color(0xFF0A0E1A)
+val DarkCard     = Color(0xFF0F1328)
+val MidNavy      = Color(0xFF151A30)
+val AccentGlow   = Color(0xFF3B82F6)
+
+
 private val SCAN_DIRS = listOf(
+    "/sdcard",
     "/sdcard/Download",
     "/sdcard/Models",
-    "/sdcard/synapse",
-    "/sdcard/Documents",
+    "/storage/emulated/0/Download",
+    "/storage/emulated/0/Models",
+    "/sdcard",
     "/data/local/tmp/synapse"
 )
 
@@ -40,11 +51,11 @@ private fun scanForModels(): List<File> {
         try {
             val folder = File(dir)
             if (!folder.exists()) return@flatMap emptyList<File>()
-            folder.walkTopDown().maxDepth(2).filter { f ->
-                f.isFile && f.extension.lowercase() in extensions && f.length() > 1_000_000
+            folder.walkTopDown().maxDepth(5).filter { f ->
+                f.isFile && f.extension.lowercase() in extensions && f.length() > 500_000_000 // Min 500MB
             }.toList()
         } catch (_: Exception) { emptyList() }
-    }.distinctBy { it.absolutePath }.sortedByDescending { it.lastModified() }
+    }.distinctBy { it.canonicalPath }.sortedByDescending { it.lastModified() }
 }
 
 private fun formatSize(bytes: Long): String {
@@ -360,7 +371,7 @@ fun SettingsScreen(
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 8080,
                             contextLength = contextLength.toIntOrNull() ?: 2048,
-                            threadCount = threadCount.toIntOrNull() ?: 2
+                            threadCount = threadCount.toIntOrNull() ?: 6
                         )
                         viewModel.saveConfig(context, newConfig)
                     },

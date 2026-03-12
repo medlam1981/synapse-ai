@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -32,8 +34,8 @@ data class AgentConfig(
     val localModelPath: String = "",
     val serverHost: String = "127.0.0.1",
     val serverPort: Int = 8080,
-    val contextLength: Int = 2048,
-    val threadCount: Int = 2,
+    val contextLength: Int = 1024,
+    val threadCount: Int = 6,
     val overlayEnabled: Boolean = false,
     val overlaySize: Float = 1.0f
 )
@@ -54,7 +56,7 @@ class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "AgentViewModel"
-        private const val MAX_HISTORY_MESSAGES = 12
+        private const val MAX_HISTORY_MESSAGES = 4
 
         fun detectModelType(path: String): ModelType {
             val ext = path.substringAfterLast('.', "").lowercase()
@@ -72,10 +74,10 @@ class AgentViewModel : ViewModel() {
     private var ggufClient: GGUFModelClient? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
-    private val scheduledTasks = mutableListOf<ScheduledTask>()
+    private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
 
     // Conversation history for context (role + content pairs)
-    private val conversationHistory = mutableListOf<Pair<String, String>>()
+    private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
     // ========== CONFIG ==========
 
@@ -87,8 +89,8 @@ class AgentViewModel : ViewModel() {
             localModelPath = savedPath ?: "",
             serverHost = prefs.getString("server_host", "127.0.0.1") ?: "127.0.0.1",
             serverPort = prefs.getInt("server_port", 8080),
-            contextLength = prefs.getInt("context_length", 2048),
-            threadCount = prefs.getInt("thread_count", 2),
+            contextLength = prefs.getInt("context_length", 1024),
+            threadCount = prefs.getInt("thread_count", 6),
             overlayEnabled = prefs.getBoolean("overlay_enabled", false),
             overlaySize = prefs.getFloat("overlay_size", 1.0f)
         )
@@ -190,7 +192,7 @@ class AgentViewModel : ViewModel() {
                 client.loadModel(
                     context = context,
                     path = path,
-                    contextLength = 2048,
+                    contextLength = config.contextLength,
                     onStatus = { status -> addSystemLog("> $status") },
                     onLoaded = {
                         _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
@@ -223,66 +225,20 @@ class AgentViewModel : ViewModel() {
         val hasA11y = SynapseAccessibilityService.isConnected
 
         // Show pending scheduled tasks
-        val taskList = synchronized(scheduledTasks) {
-            scheduledTasks.filter { it.status == "pending" }
+        val taskInfo = synchronized(scheduledTasks) {
+            val taskList = scheduledTasks.filter { it.status == "pending" }
+            if (taskList.isNotEmpty()) {
+                val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+                "\nPending tasks: " + taskList.joinToString(", ") { "${it.description}@${fmt.format(Date(it.executeAt))}" }
+            } else ""
         }
-        val taskInfo = if (taskList.isNotEmpty()) {
-            val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-            "\nPending tasks: " + taskList.joinToString(", ") { "${it.description}@${fmt.format(Date(it.executeAt))}" }
-        } else ""
 
         val toolsSection = if (hasA11y) """
+You control this Android device. Use >>> commands.
+>>> SCREEN_TREE, >>> READ_SCREEN, >>> LAUNCH <app>, >>> TAP_INDEX <n>, >>> CLICK_TEXT <text>, >>> TYPE <text>, >>> BACK/HOME, >>> OPEN_SETTINGS, >>> SCHEDULE <min> <task>
+Use >>> SCREEN_TREE before tapping.""" else ""
 
-You control this Android device. Use >>> commands to act.
-
-WORKFLOW: Read screen → Think → Act → Read screen again.
-
-TOOLS:
->>> SCREEN_TREE          — See screen elements with indices
->>> READ_SCREEN          — Read screen text
->>> LAUNCH <app>         — Open app
->>> TAP_INDEX <n>        — Tap element by index
->>> CLICK_TEXT <text>    — Tap text on screen
->>> CLICK <x> <y>       — Tap coordinates
->>> TYPE <text>          — Type in field
->>> BACK / HOME          — Navigate
->>> SWIPE_UP / SWIPE_DOWN / SWIPE_LEFT / SWIPE_RIGHT
->>> SCROLL UP / SCROLL DOWN
->>> OPEN_SETTINGS / OPEN_WIFI / OPEN_BLUETOOTH / OPEN_DISPLAY / OPEN_SOUND / OPEN_BATTERY
->>> NOTIFICATIONS        — Pull down notifications
->>> VOLUME <0-100>       — Set volume
->>> BRIGHTNESS <0-100>   — Set brightness
->>> PACKAGES             — List apps
->>> STOP_APP <app>       — Force stop app
->>> OPEN_URL <url>       — Open URL
->>> LONG_PRESS <x> <y>  — Long press
->>> SWIPE <x1> <y1> <x2> <y2>
->>> APPEND <text> / DELETE <n> / CLEAR
->>> RECENTS / HUD_REFRESH
->>> SCHEDULE <minutes> <task description> — Schedule task for later
->>> LIST_TASKS           — Show scheduled tasks
->>> CANCEL_TASK <name>   — Cancel a scheduled task
-
-RULES:
-- Use >>> SCREEN_TREE before tapping
-- Use >>> TAP_INDEX with numbers from SCREEN_TREE
-- One >>> command per line
-- Think carefully, then act
-
-Example "enable WiFi":
->>> OPEN_WIFI
->>> SCREEN_TREE
-(read result, find toggle index)
->>> TAP_INDEX <n>
-
-Example "remind me in 30 minutes to check email":
->>> SCHEDULE 30 LAUNCH Gmail""" else ""
-
-        return """You are Synapse AI, an intelligent agent on this Android device.
-Time: $now$taskInfo${if (hasA11y) "\nDevice Control: ENABLED" else ""}
-You think step-by-step, make decisions, and execute tasks on the device.
-You can schedule tasks for later using >>> SCHEDULE <minutes> <task>.
-Always complete your answers.$toolsSection"""
+        return "You are Synapse AI. Time: $now$taskInfo$toolsSection" 
     }
 
     // ========== CHAT ==========
@@ -291,7 +247,9 @@ Always complete your answers.$toolsSection"""
         if (command.isBlank() || _uiState.value.isProcessing) return
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
-        conversationHistory.add("user" to command)
+        synchronized(conversationHistory) {
+            conversationHistory.add("user" to command)
+        }
         _uiState.update { it.copy(isProcessing = true, accessibilityConnected = SynapseAccessibilityService.isConnected) }
 
         // Switch to Synapse keyboard when agent starts thinking
@@ -321,13 +279,20 @@ Always complete your answers.$toolsSection"""
                             }
                     }
                     ModelType.GGUF -> {
-                        ggufClient!!.generateStreamWithHistory(
-                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
-                            systemPrompt
-                        ).collect { chunk ->
-                            responseSb.append(chunk)
-                            updateStreamingLog(responseId, responseSb.toString())
+                        val historyCopy = synchronized(conversationHistory) {
+                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
                         }
+                        withContext(Dispatchers.Default) {
+                            ggufClient!!.generateStreamWithHistory(
+                                historyCopy,
+                                systemPrompt
+                            ).collect { chunk ->
+                                responseSb.append(chunk)
+                                updateStreamingLog(responseId, responseSb.toString())
+                            }
+                        }
+                        // Ensure final text is explicitly updated to avoid missing the last throttled chunk
+                        updateStreamingLog(responseId, responseSb.toString(), force = true)
                     }
                 }
 
@@ -337,9 +302,11 @@ Always complete your answers.$toolsSection"""
                     addLog(LogEntry(sender = "SYSTEM", text = "Model returned empty response.", isError = true))
                 } else {
                     val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
-                    conversationHistory.add("assistant" to cleanResponse)
-                    while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                        conversationHistory.removeAt(0)
+                    synchronized(conversationHistory) {
+                        conversationHistory.add("assistant" to cleanResponse)
+                        while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                            conversationHistory.removeAt(0)
+                        }
                     }
 
                     // Execute tool commands and feed results back to model
@@ -355,8 +322,8 @@ Always complete your answers.$toolsSection"""
                 Log.e(TAG, "sendCommand error", e)
                 addLog(LogEntry(sender = "SYSTEM", text = "ERROR: ${e.message}", isError = true))
             } finally {
-                // Restore original keyboard when agent finishes
-                SynapseAccessibilityService.instance?.restoreKeyboard()
+                // We keep SynapseKeyboard active during the session so the user doesn't lose it.
+                // SynapseAccessibilityService.instance?.restoreKeyboard()
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
             }
@@ -459,9 +426,11 @@ Always complete your answers.$toolsSection"""
 
             // Add tool results as a user message for the model to process
             val feedbackMsg = "[Tool Results - analyze and continue]\n$feedback"
-            conversationHistory.add("user" to feedbackMsg)
-            while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                conversationHistory.removeAt(0)
+            synchronized(conversationHistory) {
+                conversationHistory.add("user" to feedbackMsg)
+                while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                    conversationHistory.removeAt(0)
+                }
             }
 
             // Generate model response
@@ -482,13 +451,20 @@ Always complete your answers.$toolsSection"""
                             }
                     }
                     ModelType.GGUF -> {
-                        ggufClient!!.generateStreamWithHistory(
-                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES),
-                            systemPrompt
-                        ).collect { chunk ->
-                            responseSb.append(chunk)
-                            updateStreamingLog(responseId, responseSb.toString())
+                        val historyCopy = synchronized(conversationHistory) {
+                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
                         }
+                        withContext(Dispatchers.Default) {
+                            ggufClient!!.generateStreamWithHistory(
+                                historyCopy,
+                                systemPrompt
+                            ).collect { chunk ->
+                                responseSb.append(chunk)
+                                updateStreamingLog(responseId, responseSb.toString())
+                            }
+                        }
+                        // Ensure final text is explicitly updated to avoid missing the last throttled chunk
+                        updateStreamingLog(responseId, responseSb.toString(), force = true)
                     }
                 }
                 fullResponse = responseSb.toString()
@@ -503,9 +479,11 @@ Always complete your answers.$toolsSection"""
             }
 
             val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
-            conversationHistory.add("assistant" to cleanResponse)
-            while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                conversationHistory.removeAt(0)
+            synchronized(conversationHistory) {
+                conversationHistory.add("assistant" to cleanResponse)
+                while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                    conversationHistory.removeAt(0)
+                }
             }
 
             // Execute any new tool commands
@@ -737,7 +715,9 @@ Always complete your answers.$toolsSection"""
 
     private fun buildContextForLitertlm(currentMessage: String): String {
         // For LiteRT-LM, build a simple text context from recent history
-        val recent = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).dropLast(1) // exclude current
+        val recent = synchronized(conversationHistory) {
+            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).dropLast(1) // exclude current
+        }
         if (recent.isEmpty()) return currentMessage
 
         val sb = StringBuilder()
@@ -753,10 +733,10 @@ Always complete your answers.$toolsSection"""
 
     private var lastStreamUpdate = 0L
 
-    private fun updateStreamingLog(responseId: String, text: String) {
+    private fun updateStreamingLog(responseId: String, text: String, force: Boolean = false) {
         val now = System.currentTimeMillis()
-        // Throttle UI updates to every 200ms to reduce recomposition/shaking during streaming
-        if (now - lastStreamUpdate < 200 && text.length > 10) return
+        // Throttle UI updates to every 150ms to reduce recomposition/shaking during streaming
+        if (!force && now - lastStreamUpdate < 150 && text.length > 10) return
         lastStreamUpdate = now
         _uiState.update { state ->
             val updatedLogs = state.logs.map { log ->
@@ -778,18 +758,20 @@ Always complete your answers.$toolsSection"""
     /** Called by Activity.onTrimMemory to reduce memory usage under pressure */
     fun trimMemory(aggressive: Boolean) {
         Log.w(TAG, "trimMemory aggressive=$aggressive, history=${conversationHistory.size}, logs=${_uiState.value.logs.size}")
-        if (aggressive) {
-            // Keep only last 4 messages in history
-            while (conversationHistory.size > 4) conversationHistory.removeAt(0)
-            // Keep only last 10 log entries in UI
-            _uiState.update { state ->
-                state.copy(logs = state.logs.takeLast(10))
-            }
-        } else {
-            // Keep only last 8 messages
-            while (conversationHistory.size > 8) conversationHistory.removeAt(0)
-            _uiState.update { state ->
-                state.copy(logs = state.logs.takeLast(20))
+        synchronized(conversationHistory) {
+            if (aggressive) {
+                // Keep only last 4 messages in history
+                while (conversationHistory.size > 4) conversationHistory.removeAt(0)
+                // Keep only last 10 log entries in UI
+                _uiState.update { state ->
+                    state.copy(logs = state.logs.takeLast(10))
+                }
+            } else {
+                // Keep only last 8 messages
+                while (conversationHistory.size > 8) conversationHistory.removeAt(0)
+                _uiState.update { state ->
+                    state.copy(logs = state.logs.takeLast(20))
+                }
             }
         }
     }
@@ -805,7 +787,10 @@ Always complete your answers.$toolsSection"""
         }
         // Save history pairs too
         val histArray = JSONArray()
-        for ((role, content) in conversationHistory.takeLast(MAX_HISTORY_MESSAGES)) {
+        val historyCopy = synchronized(conversationHistory) {
+            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
+        }
+        for ((role, content) in historyCopy) {
             histArray.put(JSONObject().put("role", role).put("content", content))
         }
         prefs.edit()
@@ -836,10 +821,12 @@ Always complete your answers.$toolsSection"""
             // Restore history pairs
             if (histJson != null) {
                 val histArray = JSONArray(histJson)
-                conversationHistory.clear()
-                for (i in 0 until histArray.length()) {
-                    val obj = histArray.getJSONObject(i)
-                    conversationHistory.add(obj.getString("role") to obj.getString("content"))
+                synchronized(conversationHistory) {
+                    conversationHistory.clear()
+                    for (i in 0 until histArray.length()) {
+                        val obj = histArray.getJSONObject(i)
+                        conversationHistory.add(obj.getString("role") to obj.getString("content"))
+                    }
                 }
             }
 
@@ -852,7 +839,9 @@ Always complete your answers.$toolsSection"""
     }
 
     fun clearConversation(context: Context) {
-        conversationHistory.clear()
+        synchronized(conversationHistory) {
+            conversationHistory.clear()
+        }
         _uiState.update { it.copy(logs = emptyList()) }
         prefs(context).edit().remove("saved_logs").remove("saved_history").apply()
         addSystemLog("Conversation cleared. 🗑️")

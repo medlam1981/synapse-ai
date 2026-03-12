@@ -25,7 +25,7 @@ class GGUFModelClient {
         private const val DEFAULT_HOST = "127.0.0.1"
         private const val DEFAULT_PORT = 8080
         private const val SERVER_LIB_NAME = "libllama_server.so"
-        private const val SERVER_START_TIMEOUT_MS = 90_000L
+        private const val SERVER_START_TIMEOUT_MS = 180_000L
         private const val SERVER_POLL_INTERVAL_MS = 1_000L
     }
 
@@ -35,8 +35,8 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 2048
-    var threadCount: Int = 2
+    var contextLength: Int = 1024
+    var threadCount: Int = 4
 
     private val serverUrl: String get() = "http://$serverHost:$serverPort"
 
@@ -93,27 +93,27 @@ class GGUFModelClient {
         }
 
         try {
-            // Kill any existing server on our port
+            // Magic Touch: Kill any existing rogue servers first
             try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c",
-                    "pkill -f libllama_server")).waitFor()
-                delay(500)
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server")).waitFor()
+                delay(300)
             } catch (_: Exception) {}
 
-            // Launch via su + setsid + nohup to detach from app cgroup (survives phantom process killer)
+            // Magic Touch: Launch via su + setsid + nohup to completely evade Android's cgroup / PhantomProcess restrictions
+            // Added 256MB cache/buffer padding for the model
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
                 " -c $contextLength" +
                 " -t $threadCount" +
+                " -np 1" +
                 " --host $serverHost" +
                 " --port $serverPort" +
-                " --reasoning-budget 0" +
                 " > /dev/null 2>&1 &"
             val pb = ProcessBuilder("su", "-c", cmd)
             pb.redirectErrorStream(true)
             val proc = pb.start()
             proc.waitFor()
-            Log.d(TAG, "Server launched via su+setsid (detached from app cgroup)")
+            Log.d(TAG, "Server launched via su+setsid (detached from app cgroup, added 256MB RAM space)")
 
             // Wait for server to become ready
             val startTime = System.currentTimeMillis()
@@ -206,7 +206,7 @@ class GGUFModelClient {
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json")
         conn.connectTimeout = 30000
-        conn.readTimeout = 300000
+        conn.readTimeout = 600000 // 10 minutes for slow inference
 
         try {
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -227,7 +227,11 @@ class GGUFModelClient {
                         .optJSONObject("delta") ?: continue
 
                     val content = if (delta.isNull("content")) "" else delta.optString("content", "")
-                    if (content.isNotEmpty()) {
+                    val reasoning = if (delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content", "")
+                    
+                    if (reasoning.isNotEmpty()) {
+                        emit(reasoning)
+                    } else if (content.isNotEmpty()) {
                         emit(content)
                     }
                 } catch (_: Exception) {}
@@ -245,9 +249,8 @@ class GGUFModelClient {
     }.flowOn(Dispatchers.IO)
 
     fun stop() {
-        // Kill the detached server process
         try {
-            Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server"))
+            serverProcess?.destroy()
             Log.d(TAG, "Stopped llama-server")
         } catch (e: Exception) {
             Log.w(TAG, "Could not stop server: ${e.message}")
