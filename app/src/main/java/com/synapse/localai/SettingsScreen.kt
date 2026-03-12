@@ -26,14 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val NeonCyan     = Color(0xFF00D4FF)
-val NeonPurple   = Color(0xFFBB44FF)
-val NeonMagenta  = Color(0xFFFF44DD)
-val DarkNavy     = Color(0xFF0A0E1A)
-val DarkCard     = Color(0xFF0F1328)
-val MidNavy      = Color(0xFF151A30)
-val AccentGlow   = Color(0xFF3B82F6)
-
+// Colors imported from MainActivity.kt — no duplicates
 
 private val SCAN_DIRS = listOf(
     "/sdcard",

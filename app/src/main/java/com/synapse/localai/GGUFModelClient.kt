@@ -249,8 +249,9 @@ class GGUFModelClient {
     }.flowOn(Dispatchers.IO)
 
     fun stop() {
+        // Kill the detached server process (launched via su+setsid, so serverProcess won't work)
         try {
-            serverProcess?.destroy()
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server"))
             Log.d(TAG, "Stopped llama-server")
         } catch (e: Exception) {
             Log.w(TAG, "Could not stop server: ${e.message}")

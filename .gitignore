@@ -44,5 +44,8 @@ google-services.json
 *.gguf
 *.litertlm
 
+# Backup archives
+*.zip
+
 # Session artifacts
 migrated_prompt_history/

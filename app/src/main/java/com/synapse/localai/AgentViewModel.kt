@@ -234,11 +234,47 @@ class AgentViewModel : ViewModel() {
         }
 
         val toolsSection = if (hasA11y) """
-You control this Android device. Use >>> commands.
->>> SCREEN_TREE, >>> READ_SCREEN, >>> LAUNCH <app>, >>> TAP_INDEX <n>, >>> CLICK_TEXT <text>, >>> TYPE <text>, >>> BACK/HOME, >>> OPEN_SETTINGS, >>> SCHEDULE <min> <task>
-Use >>> SCREEN_TREE before tapping.""" else ""
 
-        return "You are Synapse AI. Time: $now$taskInfo$toolsSection" 
+You control this Android device. Use >>> commands to act.
+WORKFLOW: Read screen → Think → Act → Read result.
+
+TOOLS:
+>>> SCREEN_TREE — See elements with indices
+>>> READ_SCREEN — Read text on screen
+>>> LAUNCH <app> — Open app
+>>> TAP_INDEX <n> — Tap element by index
+>>> CLICK_TEXT <text> — Tap text on screen
+>>> CLICK <x> <y> — Tap coordinates
+>>> TYPE <text> — Type in field
+>>> BACK / HOME — Navigate
+>>> SWIPE_UP / SWIPE_DOWN / SWIPE_LEFT / SWIPE_RIGHT
+>>> SCROLL UP / SCROLL DOWN
+>>> OPEN_SETTINGS / OPEN_WIFI / OPEN_BLUETOOTH
+>>> NOTIFICATIONS — Pull down notifications
+>>> VOLUME <0-100> / BRIGHTNESS <0-100>
+>>> PACKAGES — List apps
+>>> OPEN_URL <url> — Open URL
+>>> LONG_PRESS <x> <y>
+>>> SWIPE <x1> <y1> <x2> <y2>
+>>> SCHEDULE <minutes> <task> — Schedule for later
+>>> LIST_TASKS / CANCEL_TASK <name>
+
+RULES:
+- Always use >>> SCREEN_TREE before tapping
+- Use >>> TAP_INDEX with index numbers from SCREEN_TREE
+- One >>> command per line
+- Think step-by-step, then act
+
+Example "enable WiFi":
+>>> OPEN_WIFI
+>>> SCREEN_TREE
+(find toggle index)
+>>> TAP_INDEX <n>""" else ""
+
+        return """You are Synapse AI, an intelligent agent on this Android device.
+Time: $now$taskInfo${if (hasA11y) "\nDevice Control: ENABLED" else ""}
+You think step-by-step, make decisions, and execute tasks.
+Always complete your answers.$toolsSection"""
     }
 
     // ========== CHAT ==========
@@ -322,8 +358,8 @@ Use >>> SCREEN_TREE before tapping.""" else ""
                 Log.e(TAG, "sendCommand error", e)
                 addLog(LogEntry(sender = "SYSTEM", text = "ERROR: ${e.message}", isError = true))
             } finally {
-                // We keep SynapseKeyboard active during the session so the user doesn't lose it.
-                // SynapseAccessibilityService.instance?.restoreKeyboard()
+                // Restore original keyboard when agent finishes
+                SynapseAccessibilityService.instance?.restoreKeyboard()
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
             }
