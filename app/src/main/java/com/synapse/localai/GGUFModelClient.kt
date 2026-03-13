@@ -38,7 +38,10 @@ class GGUFModelClient {
     var contextLength: Int = 1024
     var threadCount: Int = 4
 
-    private val serverUrl: String get() = "http://$serverHost:$serverPort"
+    private val serverUrl: String get() {
+        val host = if (serverHost == "0.0.0.0") "127.0.0.1" else serverHost
+        return "http://$host:$serverPort"
+    }
 
     var isLoaded: Boolean = false
         private set
@@ -47,8 +50,22 @@ class GGUFModelClient {
         return try {
             val url = URL("$serverUrl/health")
             val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 2000
-            conn.readTimeout = 2000
+            conn.connectTimeout = 1500
+            conn.readTimeout = 1500
+            val code = conn.responseCode
+            conn.disconnect()
+            // 200 = OK, 503 = Loading Model (Server process is alive)
+            code == 200 || code == 503
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isModelReady(): Boolean {
+        return try {
+            val url = URL("$serverUrl/health")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 1000
             val response = conn.inputStream.bufferedReader().readText()
             conn.disconnect()
             response.contains("ok")
@@ -100,12 +117,13 @@ class GGUFModelClient {
             } catch (_: Exception) {}
 
             // Launch via su + setsid + nohup to evade PhantomProcess restrictions
-            val cmd = "setsid nohup nice -n 19 $serverBinary" +
+            val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
                 " -c $contextLength" +
                 " -t $threadCount" +
                 " -np 1" +
                 " -fa auto" +
+                " --no-warmup" +
                 " --cont-batching" +
                 " --host $serverHost" +
                 " --port $serverPort" +
@@ -152,11 +170,23 @@ class GGUFModelClient {
         }
 
         // Try to auto-start the server
-        onStatus("Starting llama-server...")
+        onStatus("Starting llama-server binary...")
         val started = startServer(path)
         if (started) {
             isLoaded = true
-            Log.d(TAG, "GGUF server auto-started successfully")
+            onStatus("Server started. Loading model weights... ⏳")
+            
+            // Second phase: Wait for model to be fully ready for inference
+            val startTime = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startTime < 120_000L) { // 2 min extra for model
+                if (isModelReady()) {
+                    Log.d(TAG, "Model weights loaded and ready")
+                    onLoaded()
+                    return
+                }
+                delay(2000)
+            }
+            onStatus("Server up, but model loading is taking too long...")
             onLoaded()
         } else {
             isLoaded = true
