@@ -111,14 +111,14 @@ class GGUFModelClient {
             System.gc()
             // Magic Touch: Kill any existing rogue servers first
             try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server")).waitFor()
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "killall -9 libllama_server.so")).waitFor()
                 delay(300)
             } catch (_: Exception) {}
 
             // Launch via su + setsid + nohup to evade PhantomProcess restrictions
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
-                " -c 512" +
+                " -c 2048" +
                 " -b 128" +
                 " -ub 128" +
                 " -t $threadCount" +
@@ -238,6 +238,13 @@ class GGUFModelClient {
         try {
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
 
+            val responseCode = conn.responseCode
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                val errorStream = conn.errorStream ?: conn.inputStream
+                val errorBody = errorStream.bufferedReader().use { it.readText() }
+                throw RuntimeException("HTTP $responseCode: $errorBody")
+            }
+
             val reader = BufferedReader(InputStreamReader(conn.inputStream))
             var line: String? = null
 
@@ -270,7 +277,7 @@ class GGUFModelClient {
     fun stop() {
         // Kill the detached server process (launched via su+setsid, so serverProcess won't work)
         try {
-            Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server"))
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "killall -9 libllama_server.so"))
             Log.d(TAG, "Stopped llama-server")
         } catch (e: Exception) {
             Log.w(TAG, "Could not stop server: ${e.message}")
