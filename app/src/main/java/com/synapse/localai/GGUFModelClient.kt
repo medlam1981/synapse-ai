@@ -128,6 +128,7 @@ class GGUFModelClient {
                 " --no-warmup" +
                 " --mmap" +
                 " -fit off" +
+                " --alias local" +
                 " --host $serverHost" +
                 " --port $serverPort" +
                 " > /dev/null 2>&1 &"
@@ -219,18 +220,15 @@ class GGUFModelClient {
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
-            .put("max_tokens", 512)
-            .put("temperature", 0.7)
             .put("stream", true)
-            .put("cache_prompt", true)
 
-        val url = URL("$serverUrl/v1/chat/completions")
+        val url = URL("$serverUrl/api/chat")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json")
         conn.connectTimeout = 30000
-        conn.readTimeout = 600000 // 10 minutes for slow inference
+        conn.readTimeout = 600000 
 
         try {
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -239,32 +237,21 @@ class GGUFModelClient {
             var line: String? = null
 
             while (coroutineContext.isActive && reader.readLine().also { line = it } != null) {
-                val l = line ?: continue
-                if (!l.startsWith("data: ")) continue
-                val data = l.removePrefix("data: ").trim()
-                if (data == "[DONE]") break
-
+                val data = line ?: continue
                 try {
                     val json = JSONObject(data)
-                    val delta = json.getJSONArray("choices")
-                        .getJSONObject(0)
-                        .optJSONObject("delta") ?: continue
-
-                    val content = if (delta.isNull("content")) "" else delta.optString("content", "")
-                    val reasoning = if (delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content", "")
-                    
-                    if (reasoning.isNotEmpty()) {
-                        emit(reasoning)
-                    } else if (content.isNotEmpty()) {
+                    val content = json.optJSONObject("message")?.optString("content", "") ?: ""
+                    if (content.isNotEmpty()) {
                         emit(content)
                     }
+                    if (json.optBoolean("done", false)) break
                 } catch (_: Exception) {}
             }
 
             reader.close()
         } catch (e: Exception) {
             Log.e(TAG, "Stream error: ${e.message}", e)
-            throw RuntimeException("GGUF inference failed: ${e.message}", e)
+            throw RuntimeException("Ollama inference failed: ${e.message}", e)
         } finally {
             conn.disconnect()
         }
