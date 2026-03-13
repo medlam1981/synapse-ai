@@ -209,20 +209,25 @@ class GGUFModelClient {
             }
         }
 
-        val messages = JSONArray()
+        val promptBuilder = StringBuilder()
         if (systemPrompt.isNotBlank()) {
-            messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
+            promptBuilder.append("<|im_start|>system\n$systemPrompt<|im_end|>\n")
         }
         for ((role, content) in history) {
-            messages.put(JSONObject().put("role", role).put("content", content))
+            val roleName = if (role == "user") "user" else "assistant"
+            promptBuilder.append("<|im_start|>$roleName\n$content<|im_end|>\n")
         }
+        promptBuilder.append("<|im_start|>assistant\n")
 
         val body = JSONObject()
-            .put("model", "local")
-            .put("messages", messages)
+            .put("prompt", promptBuilder.toString())
+            .put("n_predict", 1024)
+            .put("temperature", 0.7)
             .put("stream", true)
+            .put("cache_prompt", true)
+            .put("stop", JSONArray().put("<|im_end|>").put("<|endoftext|>"))
 
-        val url = URL("$serverUrl/api/chat")
+        val url = URL("$serverUrl/completion")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
@@ -237,21 +242,24 @@ class GGUFModelClient {
             var line: String? = null
 
             while (coroutineContext.isActive && reader.readLine().also { line = it } != null) {
-                val data = line ?: continue
+                val l = line ?: continue
+                if (!l.startsWith("data: ")) continue
+                val data = l.removePrefix("data: ").trim()
+                if (data == "[DONE]") break
+
                 try {
                     val json = JSONObject(data)
-                    val content = json.optJSONObject("message")?.optString("content", "") ?: ""
+                    val content = json.optString("content", "")
                     if (content.isNotEmpty()) {
                         emit(content)
                     }
-                    if (json.optBoolean("done", false)) break
                 } catch (_: Exception) {}
             }
 
             reader.close()
         } catch (e: Exception) {
             Log.e(TAG, "Stream error: ${e.message}", e)
-            throw RuntimeException("Ollama inference failed: ${e.message}", e)
+            throw RuntimeException("Inference failed: ${e.message}", e)
         } finally {
             conn.disconnect()
         }
