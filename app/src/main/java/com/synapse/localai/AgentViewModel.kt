@@ -192,41 +192,42 @@ class AgentViewModel : ViewModel() {
     // ========== DROIDRUN CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are an AI agent operating this Android phone. Your goal is to achieve the user's request through a series of steps.
+        return """You are an agent who can operate an Android phone. Your goal is to track progress and devise plans to achieve the user's requests.
 
-### OPERATING MODES ###
-1. CHAT: For greetings or general questions, reply naturally in text.
-2. TASK: To interact with the phone, you MUST use the tools provided.
+### TASK EXECUTION FORMAT ###
+You MUST output your response exactly in this format for EVERY step:
 
-### TASK EXECUTION LOOP ###
-For every task, you must output your response in this EXACT format:
 <thought>
-Analyze the current screen and explain your rationale for the next step.
+Analyze the current screen carefully. Think step-by-step about what needs to be done next.
 </thought>
+
+<add_memory>
+Store important information here with step context (e.g., "At step 1, I found the setting").
+</add_memory>
 
 <plan>
 1. Completed step
-2. CURRENT STEP: [Task description]
+2. CURRENT STEP: what to do now
 3. Future step
 </plan>
 
-<add_memory>
-Store important info you see on screen here (e.g. "Step 2: Found price $10 on Amazon").
-</add_memory>
+>>> {"action": "action_name", "text": "optional_text", "index": 0, "direction": "down"}
 
-### ACTIONS ###
-To execute an action, output a JSON object at the end:
->>> {"action": "open_app", "text": "youtube"}
->>> {"action": "click_text", "text": "Search"}
->>> {"action": "type", "text": "funny cats"}
->>> {"action": "back"}
->>> {"action": "home"}
->>> {"action": "scroll", "direction": "down"}
+### AVAILABLE ACTIONS ###
+Use ONLY these JSON actions (prefixed with >>>):
+- >>> {"action": "open_app", "text": "app name"}
+- >>> {"action": "tap_index", "index": 12} (Tap an element using its [idx] from the screen tree)
+- >>> {"action": "click_text", "text": "Submit"} (Tap text on screen)
+- >>> {"action": "type", "text": "hello"} (Types into focused field)
+- >>> {"action": "back"}
+- >>> {"action": "home"}
+- >>> {"action": "scroll", "direction": "down|up"}
+- >>> {"action": "swipe", "direction": "left|right|up|down"}
 
-CRITICAL: 
-- Always start a task by analyzing the screen.
-- NEVER explain what you are going to do in normal text - use <thought> and <plan> tags.
-- If the task is finished, end your thought with: Task completed."""
+CRITICAL RULES:
+1. ALWAYS use `tap_index` if the element has an [idx] number in the screen tree!
+2. Do NOT converse in plain text. ONLY output the tags and the JSON action.
+3. If the task is fully completed, output >>> {"action": "complete"}"""
     }
 
     // ========== CHAT ==========
@@ -371,13 +372,22 @@ CRITICAL:
     }
 
     suspend fun getScreenContent(): String {
-        // Simple XML dump for model to see elements
-        return runShell("uiautomator dump /sdcard/view.xml > /dev/null && cat /sdcard/view.xml")
+        val service = SynapseAccessibilityService.instance
+        if (service != null) {
+            return service.getCompactScreenTreeJson()
+        }
+        return "Error: Accessibility Service not connected. Please enable it in settings."
     }
 
     private suspend fun executeToolLoop(response: String, systemPrompt: String) {
         val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
         if (toolLines.isEmpty()) return
+
+        val service = SynapseAccessibilityService.instance
+        if (service == null) {
+            addSystemLog("⚠️ Cannot execute actions: Accessibility Service disconnected.")
+            return
+        }
 
         for (line in toolLines) {
             val jsonStr = line.trimStart().removePrefix(">>>").trim()
@@ -389,26 +399,35 @@ CRITICAL:
                 when (action) {
                     "open_app" -> {
                         val app = json.getString("text")
-                        runShell("monkey -p $app -c android.intent.category.LAUNCHER 1")
-                        result = "Opened $app"
+                        val success = service.launchApp(app)
+                        result = if (success) "Opened $app" else "Failed to open $app"
                     }
                     "click_text" -> {
                         val text = json.getString("text")
-                        // Use a simple shell find and tap logic if possible or notify model to use coordinates
-                        result = "Attempted click on text: $text"
+                        val success = service.clickByText(text)
+                        result = if (success) "Clicked text: $text" else "Text not found: $text"
+                    }
+                    "tap_index" -> {
+                        val index = json.getInt("index")
+                        val success = service.clickByIndex(index)
+                        result = if (success) "Tapped index: $index" else "Index not found: $index"
                     }
                     "type" -> {
                         val text = json.getString("text")
-                        runShell("input text \"$text\"")
-                        result = "Typed: $text"
+                        val success = service.typeText(text)
+                        result = if (success) "Typed: $text" else "Failed to type (no focused input)"
                     }
-                    "back" -> { runShell("input keyevent 4"); result = "Pressed back" }
-                    "home" -> { runShell("input keyevent 3"); result = "Pressed home" }
+                    "back" -> { service.goBack(); result = "Pressed back" }
+                    "home" -> { service.goHome(); result = "Pressed home" }
                     "scroll" -> {
                         val dir = json.optString("direction", "down")
-                        if (dir == "down") runShell("input swipe 500 1500 500 500")
-                        else runShell("input swipe 500 500 500 1500")
-                        result = "Scrolled $dir"
+                        val success = service.scrollScreen(dir)
+                        result = if (success) "Scrolled $dir" else "Failed to scroll"
+                    }
+                    "swipe" -> {
+                        val dir = json.optString("direction", "down")
+                        val success = service.swipeDirection(dir)
+                        result = if (success) "Swiped $dir" else "Failed to swipe"
                     }
                 }
                 
