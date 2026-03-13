@@ -44,6 +44,7 @@ class GGUFModelClient {
     }
 
     var isLoaded: Boolean = false
+        get() = isModelReady()
         private set
 
     private fun isServerRunning(): Boolean {
@@ -120,12 +121,12 @@ class GGUFModelClient {
             // Launch via su + setsid + nohup to evade PhantomProcess restrictions
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
-                " -c $contextLength" +
-                " -b 512" +
-                " -ub 512" +
+                " -c 512" +
+                " -b 128" +
+                " -ub 128" +
                 " -t $threadCount" +
-                " -tb 8" +
-                " --prio 2" +
+                " -tb 4" +
+                " --prio 1" +
                 " -fa auto" +
                 " --no-warmup" +
                 " --mmap" +
@@ -182,18 +183,16 @@ class GGUFModelClient {
             
             // Second phase: Wait for model to be fully ready for inference
             val startTime = System.currentTimeMillis()
-            while (System.currentTimeMillis() - startTime < 180_000L) { // 3 min for large models
+            while (System.currentTimeMillis() - startTime < 180_000L) {
                 if (isModelReady()) {
-                    isLoaded = true
                     Log.d(TAG, "Model weights loaded and ready")
                     onLoaded()
                     return
                 }
                 delay(2000)
             }
-            onStatus("⚠️ Model loading timed out. Try again.")
+            onStatus("⚠️ Model loading timed out.")
         } else {
-            isLoaded = false
             Log.w(TAG, "Could not auto-start server.")
             onStatus("⚠️ Server binary failed to start.")
         }
