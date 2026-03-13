@@ -383,6 +383,51 @@ fun SettingsScreen(
                 )
             }
 
+            // ═══════ PORTAL & KEYBOARD SECTION ═══════
+            SettingsCard(
+                title = "ANDROID PORTAL", 
+                titleColor = NeonCyan, 
+                statusDot = Color(0xFF34D399), 
+                statusText = "Active (8081)"
+            ) {
+                Text(
+                    "This app acts as a Portal for external agents to control this device via port 8081.",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 12.sp
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Accessibility", color = Color.White, fontSize = 11.sp)
+                    }
+                    
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Keyboard", color = Color.White, fontSize = 11.sp)
+                    }
+                }
+            }
+
             // ═══════ ABOUT SECTION ═══════
             SettingsCard(title = "ABOUT", titleColor = Color.White.copy(alpha = 0.5f)) {
                 Text("Synapse AI v1.0", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.Bold)

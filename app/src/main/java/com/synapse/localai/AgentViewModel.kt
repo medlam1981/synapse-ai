@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import org.json.JSONArray
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
@@ -35,7 +37,7 @@ data class AgentConfig(
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
     val contextLength: Int = 1024,
-    val threadCount: Int = 4
+    val threadCount: Int = 3
 )
 
 data class AgentUiState(
@@ -44,6 +46,7 @@ data class AgentUiState(
     val config: AgentConfig = AgentConfig(),
     val localModelLoaded: Boolean = false,
     val localModelLoading: Boolean = false,
+    val weightsLoading: Boolean = false,
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
     val streamVersion: Int = 0,
@@ -64,6 +67,7 @@ class AgentViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
 
+    private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
@@ -75,13 +79,19 @@ class AgentViewModel : ViewModel() {
     // ========== CONFIG ==========
 
     fun loadConfig(context: Context) {
+        // Start Portal Server
+        if (portalServer == null) {
+            portalServer = PortalServer(this)
+            portalServer?.start()
+        }
+
         val prefs = prefs(context)
         val savedPath = prefs.getString("local_model_path", null)
         val config = AgentConfig(
             useLocalModel = savedPath != null,
             localModelPath = savedPath ?: "",
-            serverHost = prefs.getString("server_host", "127.0.0.1") ?: "127.0.0.1",
-            serverPort = prefs.getInt("server_port", 8080),
+            serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
+            serverPort = prefs.getInt("server_port", 11434),
             contextLength = prefs.getInt("context_length", 1024),
             threadCount = prefs.getInt("thread_count", 6)
         )
@@ -147,22 +157,27 @@ class AgentViewModel : ViewModel() {
                     serverHost = config.serverHost
                     serverPort = config.serverPort
                     contextLength = config.contextLength
-                    threadCount = config.threadCount
+                    threadCount = 3
                 }
                 ggufClient = client
                 client.loadModel(
                     context = context,
                     path = path,
                     contextLength = config.contextLength,
-                    onStatus = { status -> addSystemLog("> $status") },
+                    onStatus = { status -> 
+                        addSystemLog("> $status")
+                        if (status.contains("Loading model weights")) {
+                            _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, weightsLoading = true, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                        }
+                    },
                     onLoaded = {
-                        _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                        _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, weightsLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
                         addSystemLog("> GGUF model loaded: $modelName ✓")
                     }
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "GGUF load failed", e)
-                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
+                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false, weightsLoading = false) }
                 addLog(LogEntry(sender = "SYSTEM", text = "GGUF load failed: ${e.message}", isError = true))
             }
         }
@@ -178,14 +193,61 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
     }
 
+    // ========== DROIDRUN CORE LOGIC ==========
+
+    private fun buildSystemPrompt(): String {
+        return """You are an AI agent operating this Android phone. Your goal is to achieve the user's request through a series of steps.
+
+### OPERATING MODES ###
+1. CHAT: For greetings or general questions, reply naturally in text.
+2. TASK: To interact with the phone, you MUST use the tools provided.
+
+### TASK EXECUTION LOOP ###
+For every task, you must output your response in this EXACT format:
+<thought>
+Analyze the current screen and explain your rationale for the next step.
+</thought>
+
+<plan>
+1. Completed step
+2. CURRENT STEP: [Task description]
+3. Future step
+</plan>
+
+<add_memory>
+Store important info you see on screen here (e.g. "Step 2: Found price $10 on Amazon").
+</add_memory>
+
+### ACTIONS ###
+To execute an action, output a JSON object at the end:
+>>> {"action": "open_app", "text": "youtube"}
+>>> {"action": "click_text", "text": "Search"}
+>>> {"action": "type", "text": "funny cats"}
+>>> {"action": "back"}
+>>> {"action": "home"}
+>>> {"action": "scroll", "direction": "down"}
+
+CRITICAL: 
+- Always start a task by analyzing the screen.
+- NEVER explain what you are going to do in normal text - use <thought> and <plan> tags.
+- If the task is finished, end your thought with: Task completed."""
+    }
+
     // ========== CHAT ==========
 
     fun sendCommand(command: String) {
         if (command.isBlank() || _uiState.value.isProcessing) return
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
+        
+        // Initial screen analysis for tasks
+        val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
+            _uiState.update { it.copy(shouldMinimize = true) }
+            "\n[Current Screen Context]\n" + getScreenContent().take(1500)
+        } else ""
+
         synchronized(conversationHistory) {
-            conversationHistory.add("user" to command)
+            conversationHistory.add("user" to command + screenData)
         }
         _uiState.update { it.copy(isProcessing = true) }
 
@@ -201,7 +263,7 @@ class AgentViewModel : ViewModel() {
                 addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
                 val responseSb = StringBuilder(512)
-                val systemPrompt = ""
+                val systemPrompt = buildSystemPrompt()
 
                 when (modelType) {
                     ModelType.GGUF -> {
@@ -217,16 +279,12 @@ class AgentViewModel : ViewModel() {
                                 updateStreamingLog(responseId, responseSb.toString())
                             }
                         }
-                        // Ensure final text is explicitly updated to avoid missing the last throttled chunk
                         updateStreamingLog(responseId, responseSb.toString(), force = true)
                     }
                 }
 
                 val fullResponse = responseSb.toString()
-                if (fullResponse.isBlank()) {
-                    _uiState.update { state -> state.copy(logs = state.logs.filter { it.id != responseId }) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Model returned empty response.", isError = true))
-                } else {
+                if (fullResponse.isNotBlank()) {
                     val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
                     synchronized(conversationHistory) {
                         conversationHistory.add("assistant" to cleanResponse)
@@ -234,6 +292,9 @@ class AgentViewModel : ViewModel() {
                             conversationHistory.removeAt(0)
                         }
                     }
+                    
+                    // Execute tools if present
+                    executeToolLoop(fullResponse, systemPrompt)
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -292,6 +353,83 @@ class AgentViewModel : ViewModel() {
                 _uiState.update { state ->
                     state.copy(logs = state.logs.takeLast(20))
                 }
+            }
+        }
+    }
+
+    private fun runShell(cmd: String): String {
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val reader = BufferedReader(InputStreamReader(proc.inputStream))
+            val result = reader.readText()
+            proc.waitFor()
+            result.trim()
+        } catch (e: Exception) {
+            "Error: ${e.message}"
+        }
+    }
+
+    fun runShellInternal(cmd: String): String {
+        return runShell(cmd)
+    }
+
+    fun getScreenContent(): String {
+        // Simple XML dump for model to see elements
+        return runShell("uiautomator dump /sdcard/view.xml > /dev/null && cat /sdcard/view.xml")
+    }
+
+    private suspend fun executeToolLoop(response: String, systemPrompt: String) {
+        val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
+        if (toolLines.isEmpty()) return
+
+        for (line in toolLines) {
+            val jsonStr = line.trimStart().removePrefix(">>>").trim()
+            try {
+                val json = JSONObject(jsonStr)
+                val action = json.getString("action")
+                var result = ""
+
+                when (action) {
+                    "open_app" -> {
+                        val app = json.getString("text")
+                        runShell("monkey -p $app -c android.intent.category.LAUNCHER 1")
+                        result = "Opened $app"
+                    }
+                    "click_text" -> {
+                        val text = json.getString("text")
+                        // Use a simple shell find and tap logic if possible or notify model to use coordinates
+                        result = "Attempted click on text: $text"
+                    }
+                    "type" -> {
+                        val text = json.getString("text")
+                        runShell("input text \"$text\"")
+                        result = "Typed: $text"
+                    }
+                    "back" -> { runShell("input keyevent 4"); result = "Pressed back" }
+                    "home" -> { runShell("input keyevent 3"); result = "Pressed home" }
+                    "scroll" -> {
+                        val dir = json.optString("direction", "down")
+                        if (dir == "down") runShell("input swipe 500 1500 500 500")
+                        else runShell("input swipe 500 500 500 1500")
+                        result = "Scrolled $dir"
+                    }
+                }
+                
+                addSystemLog("⚡ $result")
+                delay(1000)
+
+                // Feed back the screen state after action
+                val newScreen = getScreenContent().take(2000)
+                val feedback = "[Action Result] $result\n[Current Screen]\n$newScreen"
+                
+                synchronized(conversationHistory) {
+                    conversationHistory.add("user" to feedback)
+                }
+
+                // Auto-trigger next step
+                // (This could be recursive, but for safety we will let the next user command trigger or implement a small loop)
+            } catch (e: Exception) {
+                Log.e(TAG, "Tool error", e)
             }
         }
     }

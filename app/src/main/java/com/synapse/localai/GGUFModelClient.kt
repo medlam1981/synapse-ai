@@ -110,6 +110,7 @@ class GGUFModelClient {
         }
 
         try {
+            System.gc()
             // Magic Touch: Kill any existing rogue servers first
             try {
                 Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f libllama_server")).waitFor()
@@ -120,11 +121,15 @@ class GGUFModelClient {
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
                 " -c $contextLength" +
+                " -b 512" +
+                " -ub 512" +
                 " -t $threadCount" +
-                " -np 1" +
+                " -tb 8" +
+                " --prio 2" +
                 " -fa auto" +
                 " --no-warmup" +
-                " --cont-batching" +
+                " --mmap" +
+                " -fit off" +
                 " --host $serverHost" +
                 " --port $serverPort" +
                 " > /dev/null 2>&1 &"
@@ -173,26 +178,24 @@ class GGUFModelClient {
         onStatus("Starting llama-server binary...")
         val started = startServer(path)
         if (started) {
-            isLoaded = true
-            onStatus("Server started. Loading model weights... ⏳")
+            onStatus("Server up. Loading model weights... ⏳")
             
             // Second phase: Wait for model to be fully ready for inference
             val startTime = System.currentTimeMillis()
-            while (System.currentTimeMillis() - startTime < 120_000L) { // 2 min extra for model
+            while (System.currentTimeMillis() - startTime < 180_000L) { // 3 min for large models
                 if (isModelReady()) {
+                    isLoaded = true
                     Log.d(TAG, "Model weights loaded and ready")
                     onLoaded()
                     return
                 }
                 delay(2000)
             }
-            onStatus("Server up, but model loading is taking too long...")
-            onLoaded()
+            onStatus("⚠️ Model loading timed out. Try again.")
         } else {
-            isLoaded = true
+            isLoaded = false
             Log.w(TAG, "Could not auto-start server.")
-            onStatus("⚠️ Server failed to start. Check model file permissions.")
-            onLoaded()
+            onStatus("⚠️ Server binary failed to start.")
         }
     }
 
@@ -228,7 +231,7 @@ class GGUFModelClient {
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
-            .put("max_tokens", 1024)
+            .put("max_tokens", 512)
             .put("temperature", 0.7)
             .put("stream", true)
             .put("cache_prompt", true)
