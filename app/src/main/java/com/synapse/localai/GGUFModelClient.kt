@@ -22,8 +22,8 @@ class GGUFModelClient {
 
     companion object {
         private const val TAG = "GGUFModel"
-        private const val DEFAULT_HOST = "127.0.0.1"
-        private const val DEFAULT_PORT = 8080
+        private const val DEFAULT_HOST = "0.0.0.0"
+        private const val DEFAULT_PORT = 11434
         private const val SERVER_LIB_NAME = "libllama_server.so"
         private const val SERVER_START_TIMEOUT_MS = 180_000L
         private const val SERVER_POLL_INTERVAL_MS = 1_000L
@@ -100,7 +100,7 @@ class GGUFModelClient {
             } catch (_: Exception) {}
 
             // Launch via su + setsid + nohup to evade PhantomProcess restrictions
-            val cmd = "setsid nohup $serverBinary" +
+            val cmd = "setsid nohup nice -n 19 $serverBinary" +
                 " -m $modelPath" +
                 " -c $contextLength" +
                 " -t $threadCount" +
@@ -198,7 +198,7 @@ class GGUFModelClient {
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
-            .put("max_tokens", 512)
+            .put("max_tokens", 1024)
             .put("temperature", 0.7)
             .put("stream", true)
             .put("cache_prompt", true)

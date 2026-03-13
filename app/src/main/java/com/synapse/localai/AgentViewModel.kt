@@ -19,7 +19,7 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 
-enum class ModelType { LITERTLM, GGUF }
+enum class ModelType { GGUF }
 
 data class ScheduledTask(
     val id: String = UUID.randomUUID().toString(),
@@ -32,12 +32,10 @@ data class ScheduledTask(
 data class AgentConfig(
     val useLocalModel: Boolean = true,
     val localModelPath: String = "",
-    val serverHost: String = "127.0.0.1",
-    val serverPort: Int = 8080,
+    val serverHost: String = "0.0.0.0",
+    val serverPort: Int = 11434,
     val contextLength: Int = 1024,
-    val threadCount: Int = 6,
-    val overlayEnabled: Boolean = false,
-    val overlaySize: Float = 1.0f
+    val threadCount: Int = 4
 )
 
 data class AgentUiState(
@@ -49,7 +47,7 @@ data class AgentUiState(
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
     val streamVersion: Int = 0,
-    val accessibilityConnected: Boolean = false
+    val shouldMinimize: Boolean = false
 )
 
 class AgentViewModel : ViewModel() {
@@ -59,18 +57,13 @@ class AgentViewModel : ViewModel() {
         private const val MAX_HISTORY_MESSAGES = 4
 
         fun detectModelType(path: String): ModelType {
-            val ext = path.substringAfterLast('.', "").lowercase()
-            return when (ext) {
-                "gguf", "bin" -> ModelType.GGUF
-                else -> ModelType.LITERTLM
-            }
+            return ModelType.GGUF
         }
     }
 
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
 
-    private val litertlmClient: LocalModelClient = LocalModelClient.shared
     private var ggufClient: GGUFModelClient? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
@@ -90,14 +83,9 @@ class AgentViewModel : ViewModel() {
             serverHost = prefs.getString("server_host", "127.0.0.1") ?: "127.0.0.1",
             serverPort = prefs.getInt("server_port", 8080),
             contextLength = prefs.getInt("context_length", 1024),
-            threadCount = prefs.getInt("thread_count", 6),
-            overlayEnabled = prefs.getBoolean("overlay_enabled", false),
-            overlaySize = prefs.getFloat("overlay_size", 1.0f)
+            threadCount = prefs.getInt("thread_count", 6)
         )
         _uiState.update { it.copy(config = config) }
-
-        // Apply overlay settings
-        applyOverlayConfig(config)
 
         // Restore saved conversation
         val restored = restoreConversation(prefs)
@@ -121,13 +109,8 @@ class AgentViewModel : ViewModel() {
             .putInt("server_port", config.serverPort)
             .putInt("context_length", config.contextLength)
             .putInt("thread_count", config.threadCount)
-            .putBoolean("overlay_enabled", config.overlayEnabled)
-            .putFloat("overlay_size", config.overlaySize)
             .apply()
         _uiState.update { it.copy(config = config) }
-
-        // Apply overlay settings
-        applyOverlayConfig(config)
 
         addSystemLog("> Config saved.")
 
@@ -141,13 +124,6 @@ class AgentViewModel : ViewModel() {
         }
     }
 
-    private fun applyOverlayConfig(config: AgentConfig) {
-        val service = SynapseAccessibilityService.instance ?: return
-        // Scale first, then visual display toggle (data collection always runs)
-        service.setOverlayScale(config.overlaySize)
-        service.setOverlayVisible(config.overlayEnabled)
-    }
-
     fun loadModel(context: Context, path: String) {
         if (_uiState.value.localModelLoading) return
         val type = detectModelType(path)
@@ -159,22 +135,7 @@ class AgentViewModel : ViewModel() {
         closeAllModels()
 
         when (type) {
-            ModelType.LITERTLM -> loadLitertlm(context, path, modelName)
             ModelType.GGUF -> loadGguf(context, path, modelName)
-        }
-    }
-
-    private fun loadLitertlm(context: Context, path: String, modelName: String) {
-        viewModelScope.launch {
-            try {
-                litertlmClient.loadModel(context, path)
-                _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.LITERTLM, activeModelName = modelName) }
-                addSystemLog("> LiteRT model loaded: $modelName ✓")
-            } catch (e: Exception) {
-                Log.e(TAG, "LiteRT-LM load failed", e)
-                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
-                addLog(LogEntry(sender = "SYSTEM", text = "LiteRT-LM failed: ${e.message}", isError = true))
-            }
         }
     }
 
@@ -208,41 +169,13 @@ class AgentViewModel : ViewModel() {
     }
 
     private fun isModelLoaded(): Boolean {
-        return litertlmClient.isLoaded || (ggufClient?.isLoaded == true)
+        return ggufClient?.isLoaded == true
     }
 
     private fun closeAllModels() {
-        litertlmClient.close()
         ggufClient?.close()
         ggufClient = null
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
-    }
-
-    // ========== SYSTEM PROMPT WITH TIME ==========
-
-    private fun buildSystemPrompt(): String {
-        val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", Locale.ENGLISH).format(Date())
-        val hasA11y = SynapseAccessibilityService.isConnected
-
-        // Show pending scheduled tasks
-        val taskInfo = synchronized(scheduledTasks) {
-            val taskList = scheduledTasks.filter { it.status == "pending" }
-            if (taskList.isNotEmpty()) {
-                val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-                "\nPending tasks: " + taskList.joinToString(", ") { "${it.description}@${fmt.format(Date(it.executeAt))}" }
-            } else ""
-        }
-
-        val toolsSection = if (hasA11y) """
-Device tools (>>> per line):
-SCREEN_TREE|READ_SCREEN|LAUNCH <app>|TAP_INDEX <n>|CLICK_TEXT <text>|TYPE <text>|BACK|HOME|SWIPE_UP|SWIPE_DOWN|SCROLL UP|SCROLL DOWN|OPEN_SETTINGS|OPEN_WIFI|NOTIFICATIONS|SCHEDULE <min> <task>
-If the user wants to perform an action on the device, use the tools. Always >>> SCREEN_TREE first to see the UI, then >>> TAP_INDEX <n>.""" else ""
-
-        return """You are Synapse AI, a smart assistant on this Android device.
-Analyze the user's input:
-1. CHAT: If the user is just chatting, asking a general question, or greeting you, reply naturally in text without using any tools.
-2. TASKS: If the user wants you to do something on the device (like opening an app, scheduling a task, changing settings, or interacting with the UI), use the available tools.
-$taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
     }
 
     // ========== CHAT ==========
@@ -254,10 +187,7 @@ $taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
         synchronized(conversationHistory) {
             conversationHistory.add("user" to command)
         }
-        _uiState.update { it.copy(isProcessing = true, accessibilityConnected = SynapseAccessibilityService.isConnected) }
-
-        // Switch to Synapse keyboard when agent starts thinking
-        SynapseAccessibilityService.instance?.switchToSynapseKeyboard()
+        _uiState.update { it.copy(isProcessing = true) }
 
         currentJob = viewModelScope.launch {
             try {
@@ -271,17 +201,9 @@ $taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
                 addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
                 val responseSb = StringBuilder(512)
-                val systemPrompt = buildSystemPrompt()
+                val systemPrompt = ""
 
                 when (modelType) {
-                    ModelType.LITERTLM -> {
-                        val contextPrompt = buildContextForLitertlm(command)
-                        litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
-                            .collect { chunk ->
-                                responseSb.append(chunk)
-                                updateStreamingLog(responseId, responseSb.toString())
-                            }
-                    }
                     ModelType.GGUF -> {
                         val historyCopy = synchronized(conversationHistory) {
                             conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
@@ -312,12 +234,6 @@ $taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
                             conversationHistory.removeAt(0)
                         }
                     }
-
-                    // Execute tool commands and feed results back to model
-                    val toolFeedback = executeToolCommandsWithFeedback(fullResponse)
-                    if (toolFeedback != null) {
-                        runToolFeedbackLoop(toolFeedback, systemPrompt, 5)
-                    }
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -326,413 +242,10 @@ $taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
                 Log.e(TAG, "sendCommand error", e)
                 addLog(LogEntry(sender = "SYSTEM", text = "ERROR: ${e.message}", isError = true))
             } finally {
-                // Restore original keyboard when agent finishes
-                SynapseAccessibilityService.instance?.restoreKeyboard()
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
             }
         }
-    }
-
-    // ========== TOOL EXECUTION WITH FEEDBACK LOOP ==========
-
-    /** Execute tools and return feedback string if model needs to see results, null otherwise */
-    private suspend fun executeToolCommandsWithFeedback(response: String): String? {
-        val service = SynapseAccessibilityService.instance ?: return null
-        val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
-        if (toolLines.isEmpty()) return null
-
-        val feedbackParts = mutableListOf<String>()
-        var hadUIAction = false
-
-        for (line in toolLines) {
-            val cmd = line.trimStart().removePrefix(">>>").trim()
-            if (cmd.isEmpty()) continue
-
-            try {
-                val result = executeOneCommand(service, cmd)
-                if (result != null) {
-                    addSystemLog("⚡ $result")
-                    feedbackParts.add("[${cmd.split(" ")[0].uppercase()}] $result")
-                }
-
-                val action = cmd.split(" ", limit = 2)[0].uppercase()
-
-                // After UI-changing actions, wait for screen to settle
-                if (action in UI_CHANGING_COMMANDS) {
-                    kotlinx.coroutines.delay(1000)
-                    hadUIAction = true
-                }
-
-                // Collect explicit screen data feedback
-                if (action in FEEDBACK_COMMANDS) {
-                    val feedbackData = getToolFeedbackData(service, action)
-                    if (feedbackData != null) {
-                        feedbackParts.add("[$action]\n$feedbackData")
-                    }
-                }
-
-                kotlinx.coroutines.delay(200)
-            } catch (e: Exception) {
-                Log.e(TAG, "Tool exec failed: $cmd", e)
-                addSystemLog("⚠ Tool error: ${e.message}")
-                feedbackParts.add("[ERROR] $cmd: ${e.message}")
-            }
-        }
-
-        // After UI actions, auto-capture screen state so model can see what happened
-        if (hadUIAction) {
-            try {
-                val screenData = service.getCompactScreenTreeJson().take(1200)
-                feedbackParts.add("[SCREEN after actions]\n$screenData")
-            } catch (e: Exception) {
-                Log.e(TAG, "Auto screen capture failed", e)
-            }
-        }
-
-        return if (feedbackParts.isNotEmpty()) feedbackParts.joinToString("\n\n") else null
-    }
-
-    /** Commands that produce data the model needs to see */
-    private val FEEDBACK_COMMANDS = setOf(
-        "SCREEN_TREE", "READ_SCREEN", "SCREEN_SUMMARY", "CURRENT_APP", "PACKAGES"
-    )
-
-    /** Commands that change the UI and need time to settle */
-    private val UI_CHANGING_COMMANDS = setOf(
-        "LAUNCH", "TAP_INDEX", "CLICK", "CLICK_TEXT", "LONG_PRESS",
-        "SWIPE", "SWIPE_UP", "SWIPE_DOWN", "SWIPE_LEFT", "SWIPE_RIGHT",
-        "BACK", "HOME", "RECENTS", "NOTIFICATIONS",
-        "SCROLL", "TYPE", "APPEND", "CLEAR",
-        "OPEN_SETTINGS", "OPEN_WIFI", "OPEN_BLUETOOTH", "OPEN_DISPLAY",
-        "OPEN_SOUND", "OPEN_BATTERY", "OPEN_URL", "APP_SETTINGS"
-    )
-
-    /** Get the actual data output for feedback commands */
-    private fun getToolFeedbackData(service: SynapseAccessibilityService, action: String): String? {
-        return when (action) {
-            "SCREEN_TREE" -> service.getCompactScreenTreeJson().take(1200)
-            "READ_SCREEN" -> service.getScreenText().take(1000)
-            "SCREEN_SUMMARY" -> service.getScreenSummary()
-            "CURRENT_APP" -> service.getCurrentPackage()
-            "PACKAGES" -> service.getInstalledPackages().take(1000)
-            else -> null
-        }
-    }
-
-    /** Run feedback loop: feed tool results back to model, let it respond, repeat */
-    private suspend fun runToolFeedbackLoop(initialFeedback: String, systemPrompt: String, maxIterations: Int) {
-        var feedback = initialFeedback
-        var iterations = 0
-
-        while (iterations < maxIterations) {
-            iterations++
-
-            // Add tool results as a user message for the model to process
-            val feedbackMsg = "[Tool Results - analyze and continue]\n$feedback"
-            synchronized(conversationHistory) {
-                conversationHistory.add("user" to feedbackMsg)
-                while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                    conversationHistory.removeAt(0)
-                }
-            }
-
-            // Generate model response
-            val responseId = java.util.UUID.randomUUID().toString()
-            addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
-
-            var fullResponse = ""
-            try {
-                val modelType = _uiState.value.activeModelType ?: break
-                val responseSb = StringBuilder(512)
-                when (modelType) {
-                    ModelType.LITERTLM -> {
-                        val contextPrompt = buildContextForLitertlm(feedbackMsg)
-                        litertlmClient.generateResponseStream(contextPrompt, systemPrompt)
-                            .collect { chunk ->
-                                responseSb.append(chunk)
-                                updateStreamingLog(responseId, responseSb.toString())
-                            }
-                    }
-                    ModelType.GGUF -> {
-                        val historyCopy = synchronized(conversationHistory) {
-                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
-                        }
-                        withContext(Dispatchers.Default) {
-                            ggufClient!!.generateStreamWithHistory(
-                                historyCopy,
-                                systemPrompt
-                            ).collect { chunk ->
-                                responseSb.append(chunk)
-                                updateStreamingLog(responseId, responseSb.toString())
-                            }
-                        }
-                        // Ensure final text is explicitly updated to avoid missing the last throttled chunk
-                        updateStreamingLog(responseId, responseSb.toString(), force = true)
-                    }
-                }
-                fullResponse = responseSb.toString()
-            } catch (e: Exception) {
-                Log.e(TAG, "Feedback loop error: ${e.message}")
-                break
-            }
-
-            if (fullResponse.isBlank()) {
-                _uiState.update { state -> state.copy(logs = state.logs.filter { it.id != responseId }) }
-                break
-            }
-
-            val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
-            synchronized(conversationHistory) {
-                conversationHistory.add("assistant" to cleanResponse)
-                while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                    conversationHistory.removeAt(0)
-                }
-            }
-
-            // Execute any new tool commands
-            val newFeedback = executeToolCommandsWithFeedback(fullResponse)
-            if (newFeedback == null) break // No more tool commands, done
-            feedback = newFeedback
-        }
-
-        if (iterations >= maxIterations) {
-            addSystemLog("⚠ Agent reached max tool steps ($maxIterations)")
-        }
-    }
-
-    private suspend fun executeOneCommand(service: SynapseAccessibilityService, cmd: String): String? {
-        val parts = cmd.split(" ", limit = 2)
-        val action = parts[0].uppercase()
-        val args = if (parts.size > 1) parts[1].trim() else ""
-
-        return when (action) {
-            // --- APP CONTROL ---
-            "LAUNCH" -> {
-                val ok = service.launchApp(args)
-                if (ok) "Launched: $args" else "App not found: $args"
-            }
-            "STOP_APP" -> {
-                val ok = service.stopApp(args)
-                if (ok) "Stopped: $args" else "Failed to stop: $args"
-            }
-            "PACKAGES" -> {
-                val list = service.getInstalledPackages()
-                val preview = list.take(1200)
-                addLog(LogEntry(sender = "SYSTEM", text = "📦 Installed apps:\n$preview${if (list.length > 1200) "\n..." else ""}"))
-                null
-            }
-            "OPEN_URL" -> {
-                val ok = service.openUrl(args)
-                if (ok) "Opened URL: $args" else "Failed to open URL"
-            }
-            "APP_SETTINGS" -> {
-                val ok = service.openAppSettings(args)
-                if (ok) "Opened settings for: $args" else "Failed to open app settings"
-            }
-
-            // --- GESTURES ---
-            "CLICK" -> {
-                val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
-                if (coords.size >= 2) {
-                    service.performClick(coords[0], coords[1])
-                    kotlinx.coroutines.delay(200)
-                    "Clicked at (${coords[0].toInt()}, ${coords[1].toInt()})"
-                } else null
-            }
-            "CLICK_TEXT" -> {
-                val ok = service.clickByText(args)
-                if (ok) "Clicked: \"$args\"" else "Text not found: \"$args\""
-            }
-            "TAP_INDEX" -> {
-                val index = args.trim().toIntOrNull()
-                if (index != null) {
-                    val ok = service.clickByIndex(index)
-                    if (ok) "Tapped element #$index" else "Element #$index not found"
-                } else null
-            }
-            "LONG_PRESS" -> {
-                val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
-                if (coords.size >= 2) {
-                    service.performLongPress(coords[0], coords[1])
-                    kotlinx.coroutines.delay(1300)
-                    "Long pressed at (${coords[0].toInt()}, ${coords[1].toInt()})"
-                } else null
-            }
-            "SWIPE" -> {
-                val coords = args.split(" ").mapNotNull { it.toFloatOrNull() }
-                if (coords.size >= 4) {
-                    service.performSwipe(coords[0], coords[1], coords[2], coords[3])
-                    kotlinx.coroutines.delay(500)
-                    "Swiped (${coords[0].toInt()},${coords[1].toInt()}) → (${coords[2].toInt()},${coords[3].toInt()})"
-                } else null
-            }
-
-            // --- TEXT INPUT ---
-            "TYPE" -> {
-                val ok = service.typeText(args)
-                if (ok) "Typed text" else "No editable field focused"
-            }
-            "APPEND" -> {
-                val ok = service.appendText(args)
-                if (ok) "Appended text" else "No editable field focused"
-            }
-            "DELETE" -> {
-                val count = args.trim().toIntOrNull() ?: 1
-                val ok = service.deleteText(count)
-                if (ok) "Deleted $count char(s)" else "No editable field or empty"
-            }
-            "CLEAR" -> {
-                val ok = service.typeText("")
-                if (ok) "Cleared text field" else "No editable field focused"
-            }
-
-            // --- NAVIGATION ---
-            "BACK" -> { service.goBack(); "Pressed Back" }
-            "HOME" -> { service.goHome(); "Pressed Home" }
-            "RECENTS" -> { service.openRecents(); "Opened Recents" }
-            "NOTIFICATIONS" -> { service.openNotifications(); "Opened Notifications" }
-            "SCROLL" -> {
-                val ok = service.scrollScreen(args)
-                if (ok) "Scrolled $args" else "Scroll failed"
-            }
-
-            // --- DIRECTIONAL SWIPE ---
-            "SWIPE_UP" -> {
-                service.swipeDirection("UP")
-                kotlinx.coroutines.delay(500)
-                "Swiped up"
-            }
-            "SWIPE_DOWN" -> {
-                service.swipeDirection("DOWN")
-                kotlinx.coroutines.delay(500)
-                "Swiped down"
-            }
-            "SWIPE_LEFT" -> {
-                service.swipeDirection("LEFT")
-                kotlinx.coroutines.delay(500)
-                "Swiped left"
-            }
-            "SWIPE_RIGHT" -> {
-                service.swipeDirection("RIGHT")
-                kotlinx.coroutines.delay(500)
-                "Swiped right"
-            }
-
-            // --- DEVICE STATE ---
-            "READ_SCREEN" -> {
-                val text = service.getScreenText()
-                val preview = text.take(500)
-                addLog(LogEntry(sender = "SYSTEM", text = "📱 Screen text:\n$preview${if (text.length > 500) "\n..." else ""}"))
-                null
-            }
-            "SCREEN_TREE" -> {
-                val tree = service.getCompactScreenTreeJson()
-                val preview = tree.take(1200)
-                addLog(LogEntry(sender = "SYSTEM", text = "🌳 UI Tree:\n$preview${if (tree.length > 1200) "\n..." else ""}"))
-                null
-            }
-            "SCREEN_SUMMARY" -> {
-                val summary = service.getScreenSummary()
-                addLog(LogEntry(sender = "SYSTEM", text = "📊 $summary"))
-                null
-            }
-            "SCREENSHOT" -> {
-                var result: String? = null
-                val latch = java.util.concurrent.CountDownLatch(1)
-                service.takeScreenshotBase64 { base64 ->
-                    result = base64
-                    latch.countDown()
-                }
-                latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
-                if (result != null) {
-                    addLog(LogEntry(sender = "SYSTEM", text = "📸 Screenshot captured (${result!!.length / 1024}KB base64)"))
-                    null
-                } else "Screenshot failed"
-            }
-            "CURRENT_APP" -> {
-                val pkg = service.getCurrentPackage()
-                if (pkg.isNotEmpty()) "Current app: $pkg" else "Could not detect current app"
-            }
-
-            // --- HUD OVERLAY ---
-            "HUD_REFRESH" -> {
-                service.refreshOverlay()
-                "HUD overlay refreshed (${service.overlayManager?.getElementCount() ?: 0} elements)"
-            }
-
-            // --- SYSTEM SETTINGS ---
-            "VOLUME" -> {
-                val pct = args.trim().toIntOrNull()
-                if (pct != null) {
-                    val ok = service.setVolume(pct)
-                    if (ok) "Volume set to $pct%" else "Failed to set volume"
-                } else {
-                    val vol = service.getVolume()
-                    "Current volume: $vol%"
-                }
-            }
-            "BRIGHTNESS" -> {
-                val pct = args.trim().toIntOrNull()
-                if (pct != null) {
-                    val ok = service.setBrightness(pct)
-                    if (ok) "Brightness set to $pct%" else "Failed to set brightness"
-                } else null
-            }
-            "OPEN_SETTINGS" -> { service.openSystemSettings(); "Opened Settings" }
-            "OPEN_WIFI" -> { service.openWifiSettings(); "Opened WiFi Settings" }
-            "OPEN_BLUETOOTH" -> { service.openBluetoothSettings(); "Opened Bluetooth Settings" }
-            "OPEN_DISPLAY" -> { service.openDisplaySettings(); "Opened Display Settings" }
-            "OPEN_SOUND" -> { service.openSoundSettings(); "Opened Sound Settings" }
-            "OPEN_BATTERY" -> { service.openBatterySettings(); "Opened Battery Settings" }
-
-            // --- TASK SCHEDULING ---
-            "SCHEDULE" -> {
-                // Format: SCHEDULE <minutes> <command to run>
-                // e.g. SCHEDULE 30 OPEN_WIFI
-                val scheduleParts = args.split(" ", limit = 2)
-                val minutes = scheduleParts.getOrNull(0)?.toIntOrNull()
-                val taskCmd = scheduleParts.getOrNull(1)?.trim()
-                if (minutes != null && !taskCmd.isNullOrBlank()) {
-                    scheduleTask(taskCmd, taskCmd, minutes)
-                } else {
-                    "Usage: SCHEDULE <minutes> <description or command>"
-                }
-            }
-            "LIST_TASKS" -> {
-                listScheduledTasks()
-            }
-            "CANCEL_TASK" -> {
-                if (args.isNotBlank() && cancelScheduledTask(args)) {
-                    "Cancelled task: $args"
-                } else {
-                    "No pending task found matching: $args"
-                }
-            }
-
-            else -> {
-                Log.w(TAG, "Unknown tool: $action")
-                null
-            }
-        }
-    }
-
-    private fun buildContextForLitertlm(currentMessage: String): String {
-        // For LiteRT-LM, build a simple text context from recent history
-        val recent = synchronized(conversationHistory) {
-            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).dropLast(1) // exclude current
-        }
-        if (recent.isEmpty()) return currentMessage
-
-        val sb = StringBuilder()
-        sb.appendLine("Previous conversation:")
-        for ((role, content) in recent) {
-            val label = if (role == "user") "User" else "Assistant"
-            sb.appendLine("$label: $content")
-        }
-        sb.appendLine()
-        sb.appendLine("User: $currentMessage")
-        return sb.toString()
     }
 
     private var lastStreamUpdate = 0L
@@ -750,11 +263,14 @@ $taskInfo${if (hasA11y) " Device control ENABLED." else ""}$toolsSection"""
         }
     }
 
+    fun onMinimized() {
+        _uiState.update { it.copy(shouldMinimize = false) }
+    }
+
     fun stopAgent() {
         ggufClient?.stop()
         currentJob?.cancel()
         currentJob = null
-        SynapseAccessibilityService.instance?.restoreKeyboard()
         _uiState.update { it.copy(isProcessing = false) }
         addLog(LogEntry(sender = "SYSTEM", text = "■ Stopped."))
     }

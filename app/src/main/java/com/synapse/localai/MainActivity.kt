@@ -27,6 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -152,6 +155,15 @@ fun ChatApp(viewModel: AgentViewModel) {
         }
     }
 
+    // Minimize app when agent interacts with the device
+    LaunchedEffect(uiState.shouldMinimize) {
+        if (uiState.shouldMinimize) {
+            val activity = context as? android.app.Activity
+            activity?.moveTaskToBack(true)
+            viewModel.onMinimized()
+        }
+    }
+
     if (showSettings) {
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
         return
@@ -273,7 +285,8 @@ fun ChatApp(viewModel: AgentViewModel) {
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
             items(uiState.logs, key = { it.id }) { log ->
-                ChatBubble(log)
+                val isLastAgentMessage = uiState.isProcessing && log.id == uiState.logs.lastOrNull { it.sender == "AGENT" }?.id
+                ChatBubble(log, isLastAgentMessage = isLastAgentMessage)
             }
             if (uiState.isProcessing && (uiState.logs.isEmpty() || uiState.logs.last().sender != "AGENT" || uiState.logs.last().text.isEmpty())) {
                 item {
@@ -397,7 +410,8 @@ private fun ChatInputBar(
 }
 
 @Composable
-fun ChatBubble(log: LogEntry) {
+@OptIn(ExperimentalComposeUiApi::class)
+fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
     val barBrush: Brush
     val labelColor: Color
     val label: String
@@ -439,6 +453,7 @@ fun ChatBubble(log: LogEntry) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = log.text,
+                modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
                 color = when {
                     log.isError -> Color(0xFFEF4444)
                     log.sender == "USER" -> Color.White

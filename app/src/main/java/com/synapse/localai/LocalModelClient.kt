@@ -2,7 +2,6 @@ package com.synapse.localai
 
 import android.content.Context
 import android.util.Log
-import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
@@ -37,7 +36,6 @@ class LocalModelClient private constructor() {
             Log.d(TAG, "Loading model from: $path")
             val config = EngineConfig(
                 modelPath = path,
-                backend = Backend.CPU,
                 cacheDir = context.cacheDir.path
             )
             val eng = Engine(config)

@@ -39,7 +39,7 @@ private val SCAN_DIRS = listOf(
 )
 
 private fun scanForModels(): List<File> {
-    val extensions = setOf("litertlm", "bin", "gguf")
+    val extensions = setOf("bin", "gguf")
     return SCAN_DIRS.flatMap { dir ->
         try {
             val folder = File(dir)
@@ -197,7 +197,7 @@ fun SettingsScreen(
                         ) {
                             Text("No models found", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
                             Text(
-                                "Place .gguf or .litertlm files in:\n/sdcard/Download/\n/sdcard/Models/",
+                                "Place .gguf files in:\n/sdcard/Download/\n/sdcard/Models/",
                                 color = Color.White.copy(alpha = 0.25f),
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace
@@ -362,9 +362,9 @@ fun SettingsScreen(
                     onClick = {
                         val newConfig = config.copy(
                             serverHost = serverHost,
-                            serverPort = serverPort.toIntOrNull() ?: 8080,
-                            contextLength = contextLength.toIntOrNull() ?: 2048,
-                            threadCount = threadCount.toIntOrNull() ?: 6
+                            serverPort = serverPort.toIntOrNull() ?: 11434,
+                            contextLength = contextLength.toIntOrNull() ?: 1024,
+                            threadCount = threadCount.toIntOrNull() ?: 4
                         )
                         viewModel.saveConfig(context, newConfig)
                     },
@@ -376,125 +376,11 @@ fun SettingsScreen(
                 }
 
                 Text(
-                    "Default: 127.0.0.1:8080 • Context: 2048 • Threads: 2",
+                    "Default: 0.0.0.0:11434 • Context: 1024 • Threads: 4",
                     color = Color.White.copy(alpha = 0.2f),
                     fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace
                 )
-            }
-
-            // ═══════ HUD OVERLAY SECTION ═══════
-            val overlayVisible = SynapseAccessibilityService.instance?.isOverlayVisible() == true
-            var overlayEnabled by remember(config.overlayEnabled) { mutableStateOf(config.overlayEnabled) }
-            var overlaySize by remember(config.overlaySize) { mutableStateOf(config.overlaySize) }
-
-            SettingsCard(
-                title = "HUD OVERLAY",
-                titleColor = Color(0xFF90CAF9),
-                statusDot = if (overlayVisible) Color(0xFF34D399) else Color(0xFFEF4444),
-                statusText = if (overlayVisible) "Visible" else "Hidden"
-            ) {
-                Text(
-                    "Show/hide colored index boxes on screen elements.\nThe agent always sees element data regardless of display.",
-                    color = Color.White.copy(alpha = 0.4f),
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Show HUD Display", color = Color.White, fontSize = 13.sp)
-                    Switch(
-                        checked = overlayEnabled,
-                        onCheckedChange = { checked ->
-                            overlayEnabled = checked
-                            val newConfig = config.copy(overlayEnabled = checked)
-                            viewModel.saveConfig(context, newConfig)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF90CAF9),
-                            checkedTrackColor = Color(0xFF90CAF9).copy(alpha = 0.3f),
-                            uncheckedThumbColor = Color.White.copy(alpha = 0.4f),
-                            uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
-                        )
-                    )
-                }
-
-                Text(
-                    "HUD Size: ${(overlaySize * 100).toInt()}%",
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-
-                Slider(
-                    value = overlaySize,
-                    onValueChange = { overlaySize = it },
-                    onValueChangeFinished = {
-                        val newConfig = config.copy(overlaySize = overlaySize)
-                        viewModel.saveConfig(context, newConfig)
-                    },
-                    valueRange = 0.5f..2.0f,
-                    steps = 5,
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color(0xFF90CAF9),
-                        activeTrackColor = Color(0xFF90CAF9).copy(alpha = 0.6f),
-                        inactiveTrackColor = Color.White.copy(alpha = 0.08f)
-                    )
-                )
-
-                Text(
-                    "50% — 100% — 150% — 200%",
-                    color = Color.White.copy(alpha = 0.15f),
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-
-            // ═══════ DEVICE CONTROL SECTION ═══════
-            val a11yConnected = SynapseAccessibilityService.isConnected
-            SettingsCard(title = "DEVICE CONTROL", titleColor = NeonMagenta, statusDot = if (a11yConnected) Color(0xFF34D399) else Color(0xFFEF4444), statusText = if (a11yConnected) "Active" else "Disabled") {
-                Text(
-                    if (a11yConnected)
-                        "✓ Accessibility Service is active.\nSynapse AI can control the device: launch apps, tap, scroll, type, read screen."
-                    else
-                        "Enable the Accessibility Service to allow Synapse AI to control your device.\nThis enables: launching apps, tapping, scrolling, typing text, and reading screen content.",
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp
-                )
-
-                if (a11yConnected) {
-                    Text(
-                        "Tools: LAUNCH, CLICK, CLICK_TEXT, SCROLL, TYPE, BACK, HOME, RECENTS, READ_SCREEN, SCREEN_TREE, SWIPE, LONG_PRESS",
-                        color = NeonCyan.copy(alpha = 0.3f),
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-
-                Button(
-                    onClick = {
-                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(intent)
-                    },
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (a11yConnected) NeonMagenta.copy(alpha = 0.15f) else NeonMagenta
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        if (a11yConnected) "Open Accessibility Settings" else "⚡ Enable Accessibility Service",
-                        color = if (a11yConnected) NeonMagenta else Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-                }
             }
 
             // ═══════ ABOUT SECTION ═══════
