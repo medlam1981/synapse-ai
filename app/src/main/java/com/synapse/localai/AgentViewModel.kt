@@ -46,7 +46,6 @@ data class AgentUiState(
     val config: AgentConfig = AgentConfig(),
     val localModelLoaded: Boolean = false,
     val localModelLoading: Boolean = false,
-    val weightsLoading: Boolean = false,
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
     val streamVersion: Int = 0,
@@ -164,20 +163,15 @@ class AgentViewModel : ViewModel() {
                     context = context,
                     path = path,
                     contextLength = config.contextLength,
-                    onStatus = { status -> 
-                        addSystemLog("> $status")
-                        if (status.contains("Loading model weights")) {
-                            _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, weightsLoading = true, activeModelType = ModelType.GGUF, activeModelName = modelName) }
-                        }
-                    },
+                    onStatus = { status -> addSystemLog("> $status") },
                     onLoaded = {
-                        _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, weightsLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                        _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
                         addSystemLog("> GGUF model loaded: $modelName ✓")
                     }
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "GGUF load failed", e)
-                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false, weightsLoading = false) }
+                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
                 addLog(LogEntry(sender = "SYSTEM", text = "GGUF load failed: ${e.message}", isError = true))
             }
         }

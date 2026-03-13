@@ -44,29 +44,13 @@ class GGUFModelClient {
     }
 
     var isLoaded: Boolean = false
-        get() = isModelReady()
         private set
 
     private fun isServerRunning(): Boolean {
         return try {
             val url = URL("$serverUrl/health")
             val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 1500
-            conn.readTimeout = 1500
-            val code = conn.responseCode
-            conn.disconnect()
-            // 200 = OK, 503 = Loading Model (Server process is alive)
-            code == 200 || code == 503
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun isModelReady(): Boolean {
-        return try {
-            val url = URL("$serverUrl/health")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 1000
+            conn.connectTimeout = 2000
             val response = conn.inputStream.bufferedReader().readText()
             conn.disconnect()
             response.contains("ok")
@@ -176,25 +160,17 @@ class GGUFModelClient {
         }
 
         // Try to auto-start the server
-        onStatus("Starting llama-server binary...")
+        onStatus("Loading Model... ⏳")
         val started = startServer(path)
         if (started) {
-            onStatus("Server up. Loading model weights... ⏳")
-            
-            // Second phase: Wait for model to be fully ready for inference
-            val startTime = System.currentTimeMillis()
-            while (System.currentTimeMillis() - startTime < 180_000L) {
-                if (isModelReady()) {
-                    Log.d(TAG, "Model weights loaded and ready")
-                    onLoaded()
-                    return
-                }
-                delay(2000)
-            }
-            onStatus("⚠️ Model loading timed out.")
+            isLoaded = true
+            Log.d(TAG, "GGUF model loaded and server ready")
+            onLoaded()
         } else {
+            isLoaded = false
             Log.w(TAG, "Could not auto-start server.")
-            onStatus("⚠️ Server binary failed to start.")
+            onStatus("⚠️ Model failed to load. Check storage.")
+            onLoaded()
         }
     }
 

@@ -219,8 +219,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                                 .size(6.dp)
                                 .background(
                                     when {
-                                        uiState.localModelLoaded && !uiState.weightsLoading -> Color(0xFF34D399)
-                                        uiState.weightsLoading -> Color(0xFFFF9F43)
+                                        uiState.localModelLoaded -> Color(0xFF34D399)
                                         uiState.localModelLoading -> Color(0xFFFBBF24)
                                         else -> Color(0xFFEF4444)
                                     },
@@ -229,8 +228,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                         )
                         Text(
                             text = when {
-                                uiState.weightsLoading -> "Server up, loading weights..."
-                                uiState.localModelLoading -> "Starting server..."
+                                uiState.localModelLoading -> "Loading Model... ⏳"
                                 uiState.localModelLoaded -> "${uiState.activeModelName} • ${uiState.activeModelType?.name ?: ""}"
                                 else -> "No model loaded"
                             },
