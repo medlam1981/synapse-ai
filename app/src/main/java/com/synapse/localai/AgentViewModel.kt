@@ -236,6 +236,9 @@ CRITICAL RULES:
         if (command.isBlank() || _uiState.value.isProcessing) return
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
+
+        // Force switch to Synapse Keyboard for automation
+        viewModelScope.launch(Dispatchers.IO) { runShell("ime enable com.synapse.localai/.SynapseKeyboardIME && ime set com.synapse.localai/.SynapseKeyboardIME") }
         
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }

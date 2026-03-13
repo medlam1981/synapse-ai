@@ -118,7 +118,7 @@ class GGUFModelClient {
             // Launch via su + setsid + nohup to evade PhantomProcess restrictions
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
-                " -c 2048" +
+                " -c 4096" +
                 " -b 128" +
                 " -ub 128" +
                 " -t $threadCount" +
@@ -221,7 +221,7 @@ class GGUFModelClient {
 
         val body = JSONObject()
             .put("prompt", promptBuilder.toString())
-            .put("n_predict", 1024)
+            .put("n_predict", 2048)
             .put("temperature", 0.7)
             .put("stream", true)
             .put("cache_prompt", true)
