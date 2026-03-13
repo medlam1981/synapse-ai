@@ -105,7 +105,9 @@ class AgentViewModel : ViewModel() {
         }
 
         if (config.useLocalModel && config.localModelPath.isNotBlank()) {
-            loadModel(context, config.localModelPath)
+            viewModelScope.launch {
+                loadModel(context, config.localModelPath)
+            }
         }
     }
 
@@ -234,19 +236,20 @@ CRITICAL:
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
         
-        // Initial screen analysis for tasks
-        val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
-            _uiState.update { it.copy(shouldMinimize = true) }
-            "\n[Current Screen Context]\n" + getScreenContent().take(1500)
-        } else ""
-
-        synchronized(conversationHistory) {
-            conversationHistory.add("user" to command + screenData)
-        }
-        _uiState.update { it.copy(isProcessing = true) }
-
         currentJob = viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true) }
+            
             try {
+                // Initial screen analysis for tasks (moved inside coroutine)
+                val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
+                    _uiState.update { it.copy(shouldMinimize = true) }
+                    "\n[Current Screen Context]\n" + getScreenContent().take(1500)
+                } else ""
+
+                synchronized(conversationHistory) {
+                    conversationHistory.add("user" to command + screenData)
+                }
+
                 val modelType = _uiState.value.activeModelType
                 if (modelType == null || !isModelLoaded()) {
                     addLog(LogEntry(sender = "SYSTEM", text = "Model not loaded. Go to Settings to load a model.", isError = true))
@@ -351,8 +354,8 @@ CRITICAL:
         }
     }
 
-    private fun runShell(cmd: String): String {
-        return try {
+    private suspend fun runShell(cmd: String): String = withContext(Dispatchers.IO) {
+        try {
             val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
             val reader = BufferedReader(InputStreamReader(proc.inputStream))
             val result = reader.readText()
@@ -363,11 +366,11 @@ CRITICAL:
         }
     }
 
-    fun runShellInternal(cmd: String): String {
+    suspend fun runShellInternal(cmd: String): String {
         return runShell(cmd)
     }
 
-    fun getScreenContent(): String {
+    suspend fun getScreenContent(): String {
         // Simple XML dump for model to see elements
         return runShell("uiautomator dump /sdcard/view.xml > /dev/null && cat /sdcard/view.xml")
     }

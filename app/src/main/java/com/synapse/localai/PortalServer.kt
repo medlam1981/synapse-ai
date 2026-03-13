@@ -8,6 +8,7 @@ import java.io.PrintWriter
 import java.net.ServerSocket
 import java.net.Socket
 import kotlin.concurrent.thread
+import kotlinx.coroutines.*
 
 class PortalServer(private val viewModel: AgentViewModel) {
     private var serverSocket: ServerSocket? = null
@@ -40,7 +41,7 @@ class PortalServer(private val viewModel: AgentViewModel) {
                 val line = reader.readLine() ?: return@thread
                 
                 Log.d(TAG, "Portal Received: $line")
-                val response = processCommand(line)
+                val response = runBlocking { processCommand(line) }
                 writer.println(response)
                 socket.close()
             } catch (e: Exception) {
@@ -49,7 +50,7 @@ class PortalServer(private val viewModel: AgentViewModel) {
         }
     }
 
-    private fun processCommand(input: String): String {
+    private suspend fun processCommand(input: String): String {
         return try {
             val json = JSONObject(input)
             val action = json.optString("action", "")

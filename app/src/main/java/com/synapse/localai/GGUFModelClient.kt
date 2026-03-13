@@ -46,11 +46,24 @@ class GGUFModelClient {
     var isLoaded: Boolean = false
         private set
 
-    private fun isServerRunning(): Boolean {
-        return try {
+    private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
             val url = URL("$serverUrl/health")
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 2000
+            val response = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+            response.contains("ok")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun isModelReady(): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val url = URL("$serverUrl/health")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 1000
             val response = conn.inputStream.bufferedReader().readText()
             conn.disconnect()
             response.contains("ok")
