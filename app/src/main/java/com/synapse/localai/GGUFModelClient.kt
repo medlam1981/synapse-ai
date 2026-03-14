@@ -119,10 +119,10 @@ class GGUFModelClient {
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
                 " -c 4096" +
-                " -b 128" +
-                " -ub 128" +
+                " -b 512" +
+                " -ub 512" +
                 " -t $threadCount" +
-                " -tb 4" +
+                " -tb 8" +
                 " --prio 1" +
                 " -fa auto" +
                 " --no-warmup" +
