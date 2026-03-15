@@ -4,6 +4,8 @@ Synapse AI is a next-generation, fully autonomous on-device AI agent for Android
 
 No cloud dependencies. No privacy concerns. 100% Local.
 
+📥 **[Download Latest APK (Synapse-AI-Agent-v1.0.apk)](https://github.com/medlam1981/synapse-ai/raw/main/releases/Synapse-AI-Agent-v1.0.apk)**
+
 ## 🚀 Key Features
 
 ### 1. 🧠 Built-in Local AI Engine (Llama.cpp)
