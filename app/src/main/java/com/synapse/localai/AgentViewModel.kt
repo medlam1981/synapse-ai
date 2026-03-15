@@ -36,8 +36,8 @@ data class AgentConfig(
     val localModelPath: String = "",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
-    val contextLength: Int = 1024,
-    val threadCount: Int = 3
+    val contextLength: Int = 8192,
+    val threadCount: Int = 6
 )
 
 data class AgentUiState(
@@ -189,7 +189,7 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
     }
 
-    // ========== DROIDRUN CORE LOGIC ==========
+    // ========== synapse-ai-portal CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
         return """You are an agent who can operate an Android phone. Your goal is to track progress and devise plans to achieve the user's requests.
@@ -259,42 +259,55 @@ CRITICAL RULES:
                     return@launch
                 }
 
-                val responseId = java.util.UUID.randomUUID().toString()
-                addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
-
-                val responseSb = StringBuilder(512)
                 val systemPrompt = buildSystemPrompt()
+                var keepGoing = true
+                var iterationCount = 0
+                val maxIterations = 10
 
-                when (modelType) {
-                    ModelType.GGUF -> {
-                        val historyCopy = synchronized(conversationHistory) {
-                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
+                while (keepGoing && iterationCount < maxIterations) {
+                    iterationCount++
+                    val responseId = java.util.UUID.randomUUID().toString()
+                    addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
+
+                    val responseSb = StringBuilder(512)
+
+                    when (modelType) {
+                        ModelType.GGUF -> {
+                            val historyCopy = synchronized(conversationHistory) {
+                                conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
+                            }
+                            withContext(Dispatchers.Default) {
+                                ggufClient!!.generateStreamWithHistory(
+                                    historyCopy,
+                                    systemPrompt
+                                ).collect { chunk ->
+                                    responseSb.append(chunk)
+                                    updateStreamingLog(responseId, responseSb.toString())
+                                }
+                            }
+                            updateStreamingLog(responseId, responseSb.toString(), force = true)
                         }
-                        withContext(Dispatchers.Default) {
-                            ggufClient!!.generateStreamWithHistory(
-                                historyCopy,
-                                systemPrompt
-                            ).collect { chunk ->
-                                responseSb.append(chunk)
-                                updateStreamingLog(responseId, responseSb.toString())
+                    }
+
+                    val fullResponse = responseSb.toString()
+                    if (fullResponse.isNotBlank()) {
+                        val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("assistant" to cleanResponse)
+                            while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                                conversationHistory.removeAt(0)
                             }
                         }
-                        updateStreamingLog(responseId, responseSb.toString(), force = true)
+                        
+                        // Execute tools if present and decide if we should continue
+                        keepGoing = executeToolLoop(fullResponse)
+                    } else {
+                        keepGoing = false // Stop if empty response
                     }
                 }
-
-                val fullResponse = responseSb.toString()
-                if (fullResponse.isNotBlank()) {
-                    val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
-                    synchronized(conversationHistory) {
-                        conversationHistory.add("assistant" to cleanResponse)
-                        while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                            conversationHistory.removeAt(0)
-                        }
-                    }
-                    
-                    // Execute tools if present
-                    executeToolLoop(fullResponse, systemPrompt)
+                
+                if (iterationCount >= maxIterations) {
+                    addLog(LogEntry(sender = "SYSTEM", text = "Reached maximum task iterations.", isError = true))
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -381,9 +394,9 @@ CRITICAL RULES:
         return "Error: Accessibility Service not connected. Please enable it in settings."
     }
 
-    private suspend fun executeToolLoop(response: String, systemPrompt: String) {
+    private suspend fun executeToolLoop(response: String): Boolean {
         val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
-        if (toolLines.isEmpty()) return
+        if (toolLines.isEmpty()) return false
         
         _uiState.update { it.copy(shouldMinimize = true) }
         delay(600) // Wait for app to minimize and UI to settle
@@ -391,14 +404,22 @@ CRITICAL RULES:
         val service = SynapseAccessibilityService.instance
         if (service == null) {
             addSystemLog("⚠️ Cannot execute actions: Accessibility Service disconnected.")
-            return
+            return false
         }
+
+        var shouldContinue = false
 
         for (line in toolLines) {
             val jsonStr = line.trimStart().removePrefix(">>>").trim()
             try {
                 val json = JSONObject(jsonStr)
                 val action = json.getString("action")
+                
+                if (action == "complete") {
+                    addSystemLog("✅ Task marked as complete.")
+                    return false
+                }
+                
                 var result = ""
 
                 when (action) {
@@ -447,12 +468,12 @@ CRITICAL RULES:
                     conversationHistory.add("user" to feedback)
                 }
 
-                // Auto-trigger next step
-                // (This could be recursive, but for safety we will let the next user command trigger or implement a small loop)
+                shouldContinue = true
             } catch (e: Exception) {
                 Log.e(TAG, "Tool error", e)
             }
         }
+        return shouldContinue
     }
 
     // ========== CONVERSATION PERSISTENCE ==========

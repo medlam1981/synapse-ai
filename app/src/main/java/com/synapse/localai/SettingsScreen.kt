@@ -363,8 +363,8 @@ fun SettingsScreen(
                         val newConfig = config.copy(
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 11434,
-                            contextLength = contextLength.toIntOrNull() ?: 1024,
-                            threadCount = threadCount.toIntOrNull() ?: 4
+                            contextLength = contextLength.toIntOrNull() ?: 8192,
+                            threadCount = threadCount.toIntOrNull() ?: 6
                         )
                         viewModel.saveConfig(context, newConfig)
                     },
@@ -376,7 +376,7 @@ fun SettingsScreen(
                 }
 
                 Text(
-                    "Default: 0.0.0.0:11434 • Context: 1024 • Threads: 4",
+                    "Default: 0.0.0.0:11434 • Context: 8192 • Threads: 6",
                     color = Color.White.copy(alpha = 0.2f),
                     fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace
