@@ -246,7 +246,6 @@ CRITICAL RULES:
             try {
                 // Initial screen analysis for tasks (moved inside coroutine)
                 val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
-                    _uiState.update { it.copy(shouldMinimize = true) }
                     "\n[Current Screen Context]\n" + getScreenContent().take(1500)
                 } else ""
 
@@ -385,6 +384,9 @@ CRITICAL RULES:
     private suspend fun executeToolLoop(response: String, systemPrompt: String) {
         val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
         if (toolLines.isEmpty()) return
+        
+        _uiState.update { it.copy(shouldMinimize = true) }
+        delay(600) // Wait for app to minimize and UI to settle
 
         val service = SynapseAccessibilityService.instance
         if (service == null) {
