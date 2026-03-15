@@ -12,7 +12,7 @@ Runs powerful GGUF models directly on your Android device hardware.
 * **Massive Context Window:** Configured with up to **8192 tokens**, allowing the agent to remember long conversation histories and parse complex UI trees without breaking a sweat.
 * **Ollama-Compatible API:** Acts as a local server on port `11434`, meaning you can connect to it from your PC or other devices on the same network (`0.0.0.0`) using standard API requests (`/completion`).
 
-### 2. 👁️ synapse-ai-portal UI Perception (Android Portal)
+### 2. 👁️ Advanced UI Perception (Android Portal)
 Synapse AI doesn't just guess; it actually *sees* your screen.
 * **Native UI Tree Parsing:** Uses Android Accessibility Services to dump the screen state into a highly optimized, compact JSON tree in milliseconds.
 * **Element Tracking:** Assigns a unique `[idx]` to every clickable, scrollable, and editable element on the screen for pinpoint precision.
