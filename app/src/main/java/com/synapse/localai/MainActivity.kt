@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -129,7 +130,7 @@ fun SynapseAITheme(content: @Composable () -> Unit) {
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ChatApp(viewModel: AgentViewModel) {
     val uiState by viewModel.uiState.collectAsState()
@@ -143,17 +144,11 @@ fun ChatApp(viewModel: AgentViewModel) {
         viewModel.loadConfig(context)
     }
 
-    // Auto-scroll to bottom during streaming (instant, no animation to avoid shaking)
+    // Auto-scroll to bottom during streaming
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
             val lastIndex = uiState.logs.size - 1
-            // Only auto-scroll if user is already near bottom (within 3 items)
-            val isNearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let {
-                it >= lastIndex - 2
-            } ?: true
-            if (isNearBottom) {
-                listState.scrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE)
-            }
+            listState.animateScrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE)
         }
     }
 
@@ -214,29 +209,30 @@ fun ChatApp(viewModel: AgentViewModel) {
                         listOf(DarkCard, MidNavy, DarkCard)
                     )
                 )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Logo from drawable
                 Image(
                     painter = painterResource(id = R.drawable.synapse_logo),
                     contentDescription = "Synapse AI",
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(12.dp)),
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(8.dp)),
                     contentScale = ContentScale.Crop
                 )
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "SYNAPSE AI",
                         color = Color.White,
                         fontWeight = FontWeight.Black,
-                        fontSize = 16.sp,
+                        fontSize = 12.sp,
                         letterSpacing = 2.sp
                     )
                     Row(
@@ -258,13 +254,15 @@ fun ChatApp(viewModel: AgentViewModel) {
                         Text(
                             text = when {
                                 uiState.localModelLoading -> "Loading Model... ⏳"
-                                uiState.localModelLoaded -> "${uiState.activeModelName} • ${uiState.activeModelType?.name ?: ""}"
+                                uiState.localModelLoaded -> "Model Active • ${uiState.activeModelType?.name ?: ""}"
                                 else -> "No model loaded"
                             },
+                            modifier = Modifier.basicMarquee(),
                             color = NeonCyan.copy(alpha = 0.7f),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.sp,
+                            maxLines = 1
                         )
                     }
                 }
@@ -272,12 +270,20 @@ fun ChatApp(viewModel: AgentViewModel) {
             Box {
                 IconButton(
                     onClick = { expandedMenu = true },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(NeonPurple.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                        .border(1.dp, NeonPurple.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                    modifier = Modifier.size(40.dp)
                 ) {
-                    Text("⋮", fontSize = 20.sp, color = NeonPurple.copy(alpha = 0.7f), fontWeight = FontWeight.Bold)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.5.dp)
+                    ) {
+                        repeat(4) {
+                            Box(
+                                modifier = Modifier
+                                    .size(3.8.dp)
+                                    .background(NeonPurple.copy(alpha = 0.8f), androidx.compose.foundation.shape.CircleShape)
+                            )
+                        }
+                    }
                 }
                 DropdownMenu(
                     expanded = expandedMenu,
@@ -337,34 +343,30 @@ fun ChatApp(viewModel: AgentViewModel) {
             }
             if (uiState.isProcessing && (uiState.logs.isEmpty() || uiState.logs.last().sender != "AGENT" || uiState.logs.last().text.isEmpty())) {
                 item {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .width(3.dp)
-                                .height(36.dp)
-                                .background(
-                                    Brush.verticalGradient(listOf(NeonCyan, NeonPurple)),
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                        Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(NeonPurple.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+                            )
                             Text(
                                 "SYNAPSE",
                                 color = NeonPurple.copy(alpha = 0.5f),
-                                fontSize = 9.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 2.sp
-                            )
-                            Text(
-                                "Thinking...",
-                                color = NeonCyan.copy(alpha = 0.8f),
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace
+                                letterSpacing = 1.5.sp
                             )
                         }
+                        Text(
+                            "Thinking...",
+                            color = NeonCyan.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.SansSerif
+                        )
                     }
                 }
             }
@@ -386,6 +388,12 @@ private fun ChatInputBar(
     onStop: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let {
+            val fileIndicator = "[File Attached: ${it.lastPathSegment ?: "unknown"}]"
+            inputText = if (inputText.isBlank()) fileIndicator else "$inputText\n$fileIndicator"
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -399,7 +407,7 @@ private fun ChatInputBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .navigationBarsPadding(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -411,10 +419,15 @@ private fun ChatInputBar(
                     Text(
                         "Ask me anything...",
                         color = Color.White.copy(alpha = 0.15f),
-                        fontSize = 13.sp
+                        fontSize = 12.sp
                     )
                 },
                 modifier = Modifier.weight(1f),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 11.sp,
+                    color = Color.White
+                ),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = NeonCyan.copy(alpha = 0.3f),
                     unfocusedBorderColor = NeonPurple.copy(alpha = 0.1f),
@@ -424,34 +437,44 @@ private fun ChatInputBar(
                     focusedContainerColor = MidNavy.copy(alpha = 0.5f),
                     unfocusedContainerColor = DarkCard.copy(alpha = 0.5f)
                 ),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(24.dp),
                 singleLine = false,
-                maxLines = 3
-            )
-            Button(
-                onClick = {
-                    if (isProcessing) {
-                        onStop()
-                    } else if (inputText.isNotBlank()) {
-                        onSend(inputText.trim())
-                        inputText = ""
+                maxLines = 3,
+                leadingIcon = {
+                    IconButton(
+                        onClick = { launcher.launch("*/*") },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Text("📎", fontSize = 18.sp, color = NeonCyan.copy(alpha = 0.7f))
                     }
                 },
-                enabled = inputText.isNotBlank() || isProcessing,
-                modifier = Modifier.size(52.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isProcessing) Color(0xFFFF3B30) else NeonCyan,
-                    disabledContainerColor = NeonCyan.copy(alpha = 0.15f)
-                ),
-                shape = RoundedCornerShape(16.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Text(
-                    if (isProcessing) "\u25A0" else "\u25B6",
-                    fontSize = 18.sp,
-                    color = Color.White
-                )
-            }
+                trailingIcon = {
+                    Box(modifier = Modifier.padding(end = 4.dp)) {
+                        IconButton(
+                            onClick = {
+                                if (isProcessing) {
+                                    onStop()
+                                } else if (inputText.isNotBlank()) {
+                                    onSend(inputText.trim())
+                                    inputText = ""
+                                }
+                            },
+                            enabled = inputText.isNotBlank() || isProcessing,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Text(
+                                if (isProcessing) "\u25A0" else "\u25B6",
+                                fontSize = 18.sp,
+                                color = when {
+                                    isProcessing -> Color(0xFFFF3B30)
+                                    inputText.isNotBlank() -> NeonCyan
+                                    else -> NeonCyan.copy(alpha = 0.3f)
+                                }
+                            )
+                        }
+                    }
+                }
+            )
         }
     }
 }
@@ -459,59 +482,65 @@ private fun ChatInputBar(
 @Composable
 @OptIn(ExperimentalComposeUiApi::class)
 fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
-    val barBrush: Brush
-    val labelColor: Color
-    val label: String
-    when (log.sender) {
-        "USER" -> {
-            barBrush = Brush.verticalGradient(listOf(NeonCyan, AccentGlow))
-            labelColor = NeonCyan.copy(alpha = 0.6f)
-            label = "You"
-        }
-        "AGENT" -> {
-            barBrush = Brush.verticalGradient(listOf(NeonPurple, NeonMagenta))
-            labelColor = NeonPurple.copy(alpha = 0.6f)
-            label = "Synapse"
-        }
-        else -> {
-            barBrush = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.1f), Color.White.copy(alpha = 0.05f)))
-            labelColor = Color.White.copy(alpha = 0.2f)
-            label = "System"
-        }
+    val isUser = log.sender == "USER"
+    val isSystem = log.sender == "SYSTEM"
+    
+    val bubbleColor = when {
+        isSystem -> Color.Transparent
+        isUser -> MidNavy.copy(alpha = 0.6f)
+        else -> Color.Transparent
     }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    
+    val textColor = when {
+        log.isError -> Color(0xFFEF4444)
+        isSystem -> Color.White.copy(alpha = 0.4f)
+        isUser -> Color.White
+        else -> Color.White.copy(alpha = 0.9f)
+    }
+
+    val labelColor = when {
+        isUser -> NeonCyan.copy(alpha = 0.7f)
+        isSystem -> Color.White.copy(alpha = 0.3f)
+        else -> NeonPurple.copy(alpha = 0.8f)
+    }
+    
+    val labelText = when (log.sender) {
+        "USER" -> "You"
+        "AGENT" -> "Synapse"
+        else -> "System"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bubbleColor, RoundedCornerShape(if (isUser) 12.dp else 0.dp))
+            .padding(if (isUser) 12.dp else 0.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .heightIn(min = 36.dp)
-                .background(barBrush, RoundedCornerShape(2.dp))
-        )
-        Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (!isSystem) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(labelColor, androidx.compose.foundation.shape.CircleShape)
+                )
+            }
             Text(
-                label,
+                labelText,
                 color = labelColor,
-                fontSize = 9.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = log.text,
-                modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
-                color = when {
-                    log.isError -> Color(0xFFEF4444)
-                    log.sender == "USER" -> Color.White
-                    log.sender == "AGENT" -> Color.White.copy(alpha = 0.9f)
-                    else -> Color.White.copy(alpha = 0.5f)
-                },
-                fontFamily = FontFamily.Monospace,
-                fontSize = if (log.sender == "USER") 14.sp else 12.sp,
-                fontWeight = if (log.sender == "USER") FontWeight.Bold else FontWeight.Normal,
-                lineHeight = 19.sp
+                letterSpacing = 1.5.sp
             )
         }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = log.text,
+            modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
+            color = textColor,
+            fontFamily = FontFamily.SansSerif,
+            fontSize = if (isUser) 12.sp else 11.sp,
+            fontWeight = if (isUser) FontWeight.Medium else FontWeight.Normal,
+            lineHeight = 16.sp
+        )
     }
 }

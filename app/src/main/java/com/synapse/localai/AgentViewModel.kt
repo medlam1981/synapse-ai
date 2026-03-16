@@ -334,12 +334,12 @@ CRITICAL RULES:
 
     private fun updateStreamingLog(responseId: String, text: String, force: Boolean = false) {
         val now = System.currentTimeMillis()
-        // Throttle UI updates to every 150ms to reduce recomposition/shaking during streaming
-        if (!force && now - lastStreamUpdate < 150 && text.length > 10) return
+        // Update UI every 50ms instead of 150ms to give a "word-by-word" typing effect
+        if (!force && now - lastStreamUpdate < 50) return
         lastStreamUpdate = now
         _uiState.update { state ->
             val updatedLogs = state.logs.map { log ->
-                if (log.id == responseId) log.copy(text = text.trim()) else log
+                if (log.id == responseId) log.copy(text = text.trimStart()) else log
             }
             state.copy(logs = updatedLogs, streamVersion = state.streamVersion + 1)
         }
