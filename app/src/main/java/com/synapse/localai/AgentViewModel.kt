@@ -37,7 +37,9 @@ data class AgentConfig(
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
     val contextLength: Int = 8192,
-    val threadCount: Int = 6
+    val threadCount: Int = 6,
+    val maxTokens: Int = 2048,
+    val temperature: Float = 0.1f
 )
 
 data class AgentUiState(
@@ -92,7 +94,9 @@ class AgentViewModel : ViewModel() {
             serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
             serverPort = prefs.getInt("server_port", 11434),
             contextLength = prefs.getInt("context_length", 1024),
-            threadCount = prefs.getInt("thread_count", 6)
+            threadCount = prefs.getInt("thread_count", 6),
+            maxTokens = prefs.getInt("max_tokens", 2048),
+            temperature = prefs.getFloat("temperature", 0.1f)
         )
         _uiState.update { it.copy(config = config) }
 
@@ -120,6 +124,8 @@ class AgentViewModel : ViewModel() {
             .putInt("server_port", config.serverPort)
             .putInt("context_length", config.contextLength)
             .putInt("thread_count", config.threadCount)
+            .putInt("max_tokens", config.maxTokens)
+            .putFloat("temperature", config.temperature)
             .apply()
         _uiState.update { it.copy(config = config) }
 
@@ -158,7 +164,9 @@ class AgentViewModel : ViewModel() {
                     serverHost = config.serverHost
                     serverPort = config.serverPort
                     contextLength = config.contextLength
-                    threadCount = 3
+                    threadCount = config.threadCount
+                    maxTokens = config.maxTokens
+                    temperature = config.temperature
                 }
                 ggufClient = client
                 client.loadModel(

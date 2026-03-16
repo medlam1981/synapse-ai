@@ -21,7 +21,10 @@ class PortalServer(private val viewModel: AgentViewModel) {
         isRunning = true
         thread {
             try {
-                serverSocket = ServerSocket(PORT)
+                serverSocket = ServerSocket().apply {
+                    reuseAddress = true
+                    bind(java.net.InetSocketAddress(PORT))
+                }
                 Log.i(TAG, "Portal Server started on port $PORT")
                 while (isRunning) {
                     val client = serverSocket?.accept() ?: break

@@ -136,6 +136,8 @@ fun ChatApp(viewModel: AgentViewModel) {
     val listState = rememberLazyListState()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
+    var expandedMenu by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.loadConfig(context)
@@ -167,6 +169,33 @@ fun ChatApp(viewModel: AgentViewModel) {
     if (showSettings) {
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
         return
+    }
+
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            title = { Text("Synapse AI Capabilities \uD83E\uDDE0", color = NeonCyan, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Synapse is an advanced, fully autonomous on-device Neural Agent.\n\n" +
+                    "• ⚡ 100% Local Inference: Your data never leaves the device.\n" +
+                    "• \uD83D\uDC41\uFE0F Visual Perception: Sees screen UI trees instantly.\n" +
+                    "• \uD83E\uDD16 Autonomous Control: Operates your device like a human.\n" +
+                    "• \uD83D\uDD11 Deep System Hooks: Custom IME and Accessibility tracking.\n" +
+                    "• \uD83D\uDE80 Built for Speed: Utilizes mmap and advanced thread batching.",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showAboutDialog = false }) {
+                    Text("OK", color = NeonPurple)
+                }
+            },
+            containerColor = DarkCard,
+            titleContentColor = NeonCyan,
+            textContentColor = Color.White
+        )
     }
 
     Column(
@@ -240,24 +269,42 @@ fun ChatApp(viewModel: AgentViewModel) {
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box {
                 IconButton(
-                    onClick = { viewModel.clearConversation(context) },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(Color(0xFFEF4444).copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                ) {
-                    Text("🗑", fontSize = 16.sp)
-                }
-                IconButton(
-                    onClick = { showSettings = true },
+                    onClick = { expandedMenu = true },
                     modifier = Modifier
                         .size(40.dp)
                         .background(NeonPurple.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
                         .border(1.dp, NeonPurple.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
                 ) {
-                    Text("\u2699", fontSize = 20.sp, color = NeonPurple.copy(alpha = 0.7f))
+                    Text("⋮", fontSize = 20.sp, color = NeonPurple.copy(alpha = 0.7f), fontWeight = FontWeight.Bold)
+                }
+                DropdownMenu(
+                    expanded = expandedMenu,
+                    onDismissRequest = { expandedMenu = false },
+                    modifier = Modifier.background(DarkCard)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("⚙ Settings", color = Color.White) },
+                        onClick = {
+                            expandedMenu = false
+                            showSettings = true
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("\uD83D\uDDD1 Clear Chat", color = Color(0xFFEF4444)) },
+                        onClick = {
+                            expandedMenu = false
+                            viewModel.clearConversation(context)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("ℹ\uFE0F About Agent", color = NeonCyan) },
+                        onClick = {
+                            expandedMenu = false
+                            showAboutDialog = true
+                        }
+                    )
                 }
             }
         }

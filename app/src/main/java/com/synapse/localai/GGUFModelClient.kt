@@ -37,6 +37,8 @@ class GGUFModelClient {
     var serverPort: Int = DEFAULT_PORT
     var contextLength: Int = 1024
     var threadCount: Int = 4
+    var maxTokens: Int = 2048
+    var temperature: Float = 0.1f
 
     private val serverUrl: String get() {
         val host = if (serverHost == "0.0.0.0") "127.0.0.1" else serverHost
@@ -122,7 +124,7 @@ class GGUFModelClient {
                 " -b 512" +
                 " -ub 512" +
                 " -t $threadCount" +
-                " -tb 8" +
+                " -tb $threadCount" +
                 " --prio 2" +
                 " -fa auto" +
                 " --no-warmup" +
@@ -221,8 +223,8 @@ class GGUFModelClient {
 
         val body = JSONObject()
             .put("prompt", promptBuilder.toString())
-            .put("n_predict", 2048)
-            .put("temperature", 100.0)
+            .put("n_predict", maxTokens)
+            .put("temperature", temperature.toDouble())
             .put("stream", true)
             .put("cache_prompt", true)
             .put("stop", JSONArray().put("<|im_end|>").put("<|endoftext|>"))

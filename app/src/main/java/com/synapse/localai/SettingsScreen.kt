@@ -76,6 +76,8 @@ fun SettingsScreen(
     var serverPort by remember(config.serverPort) { mutableStateOf(config.serverPort.toString()) }
     var contextLength by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCount by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
+    var maxTokens by remember(config.maxTokens) { mutableStateOf(config.maxTokens.toString()) }
+    var temperature by remember(config.temperature) { mutableStateOf(config.temperature) }
 
     Column(
         modifier = Modifier
@@ -358,13 +360,52 @@ fun SettingsScreen(
                     )
                 }
 
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = maxTokens,
+                        onValueChange = { maxTokens = it.filter { c -> c.isDigit() } },
+                        label = { Text("Max Tokens", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp) },
+                        modifier = Modifier.weight(1f),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = Color.White
+                        )
+                    )
+                }
+                
+                Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Temperature", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                        Text(String.format("%.2f", temperature), color = NeonCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = temperature,
+                        onValueChange = { temperature = it },
+                        valueRange = 0.0f..2.0f,
+                        steps = 19, // 0.1 steps between 0 and 2.0
+                        colors = SliderDefaults.colors(
+                            thumbColor = NeonCyan,
+                            activeTrackColor = NeonPurple,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.1f)
+                        )
+                    )
+                    Text("0.0 (Precise/Robot) ➔ 2.0 (Creative/Chaotic)", color = Color.White.copy(alpha = 0.3f), fontSize = 9.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+
                 Button(
                     onClick = {
                         val newConfig = config.copy(
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 11434,
                             contextLength = contextLength.toIntOrNull() ?: 8192,
-                            threadCount = threadCount.toIntOrNull() ?: 6
+                            threadCount = threadCount.toIntOrNull() ?: 6,
+                            maxTokens = maxTokens.toIntOrNull() ?: 2048,
+                            temperature = temperature
                         )
                         viewModel.saveConfig(context, newConfig)
                     },
