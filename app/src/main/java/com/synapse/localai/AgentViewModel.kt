@@ -407,7 +407,7 @@ CRITICAL RULES:
         if (toolLines.isEmpty()) return false
         
         _uiState.update { it.copy(shouldMinimize = true) }
-        delay(600) // Wait for app to minimize and UI to settle
+        delay(200) // Reduced wait for app to minimize
 
         val service = SynapseAccessibilityService.instance
         if (service == null) {
@@ -466,10 +466,10 @@ CRITICAL RULES:
                 }
                 
                 addSystemLog("⚡ $result")
-                delay(1000)
+                delay(300) // Significantly reduced wait after an action before grabbing new screen
 
                 // Feed back the screen state after action
-                val newScreen = getScreenContent().take(2000)
+                val newScreen = getScreenContent().take(3000)
                 val feedback = "[Action Result] $result\n[Current Screen]\n$newScreen"
                 
                 synchronized(conversationHistory) {
