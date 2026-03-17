@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -65,6 +66,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         checkStoragePermissions()
+        checkBatteryOptimizations()
         
         setContent {
             SynapseAITheme {
@@ -90,6 +92,21 @@ class MainActivity : ComponentActivity() {
         } else {
             if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+            }
+        }
+    }
+
+    private fun checkBatteryOptimizations() {
+        val intent = Intent()
+        val packageName = packageName
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to request battery optimization ignore", e)
             }
         }
     }
@@ -144,11 +161,20 @@ fun ChatApp(viewModel: AgentViewModel) {
         viewModel.loadConfig(context)
     }
 
-    // Auto-scroll to bottom during streaming
+    // Auto-scroll to bottom during streaming without jitter
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
             val lastIndex = uiState.logs.size - 1
-            listState.animateScrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE)
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            
+            // Check if the user is reasonably close to the bottom (e.g., viewing the last 2 items)
+            val isNearBottom = visibleItems.isEmpty() || (visibleItems.last().index >= lastIndex - 2)
+            
+            if (isNearBottom) {
+                // Use scrollToItem instead of animateScrollToItem during fast streaming to prevent jitter
+                listState.scrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE)
+            }
         }
     }
 

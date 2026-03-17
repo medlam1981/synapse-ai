@@ -36,9 +36,9 @@ data class AgentConfig(
     val localModelPath: String = "",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
-    val contextLength: Int = 8192,
+    val contextLength: Int = 32768,
     val threadCount: Int = 6,
-    val maxTokens: Int = 2048,
+    val maxTokens: Int = 8192,
     val temperature: Float = 0.1f
 )
 
@@ -93,7 +93,7 @@ class AgentViewModel : ViewModel() {
             localModelPath = savedPath ?: "",
             serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
             serverPort = prefs.getInt("server_port", 11434),
-            contextLength = prefs.getInt("context_length", 1024),
+            contextLength = prefs.getInt("context_length", 4096),
             threadCount = prefs.getInt("thread_count", 6),
             maxTokens = prefs.getInt("max_tokens", 2048),
             temperature = prefs.getFloat("temperature", 0.1f)
@@ -334,8 +334,8 @@ CRITICAL RULES:
 
     private fun updateStreamingLog(responseId: String, text: String, force: Boolean = false) {
         val now = System.currentTimeMillis()
-        // Update UI every 50ms instead of 150ms to give a "word-by-word" typing effect
-        if (!force && now - lastStreamUpdate < 50) return
+        // Throttle UI updates to 80ms to provide a smooth word-by-word typing effect without overloading Compose and causing scroll jitter.
+        if (!force && now - lastStreamUpdate < 80) return
         lastStreamUpdate = now
         _uiState.update { state ->
             val updatedLogs = state.logs.map { log ->
