@@ -32,6 +32,7 @@ class GGUFModelClient {
     private var modelPath: String? = null
     private var serverProcess: Process? = null
     private var nativeLibDir: String? = null
+    private var proxy: OllamaProxy? = null
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
@@ -40,9 +41,11 @@ class GGUFModelClient {
     var maxTokens: Int = 2048
     var temperature: Float = 0.1f
 
+    private val internalPort: Int get() = serverPort + 1
+
     private val serverUrl: String get() {
         val host = if (serverHost == "0.0.0.0") "127.0.0.1" else serverHost
-        return "http://$host:$serverPort"
+        return "http://$host:$internalPort"
     }
 
     var isLoaded: Boolean = false
@@ -132,13 +135,18 @@ class GGUFModelClient {
                 " -fit off" +
                 " --alias local" +
                 " --host $serverHost" +
-                " --port $serverPort" +
-                " > /data/local/tmp/llama_log.txt 2>&1 &"
+                " --port $internalPort" +
+                " > /dev/null 2>&1 &"
             val pb = ProcessBuilder("su", "-c", cmd)
             pb.redirectErrorStream(true)
             val proc = pb.start()
             proc.waitFor()
             Log.d(TAG, "Server launched via su+setsid (detached from app cgroup, added 256MB RAM space)")
+
+            // Start the Ollama proxy to fix the CLI parsing bug
+            proxy?.stop()
+            proxy = OllamaProxy(serverPort, internalPort, serverHost)
+            proxy?.start()
 
             // Wait for server to become ready
             val startTime = System.currentTimeMillis()
@@ -171,6 +179,10 @@ class GGUFModelClient {
         if (isServerRunning()) {
             isLoaded = true
             Log.d(TAG, "GGUF server already running, model ready")
+            // Ensure proxy is running
+            proxy?.stop()
+            proxy = OllamaProxy(serverPort, internalPort, serverHost)
+            proxy?.start()
             onLoaded()
             return
         }
@@ -284,6 +296,7 @@ class GGUFModelClient {
         } catch (e: Exception) {
             Log.w(TAG, "Could not stop server: ${e.message}")
         }
+        proxy?.stop()
     }
 
     fun release() {
