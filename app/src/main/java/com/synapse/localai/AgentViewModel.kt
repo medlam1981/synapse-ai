@@ -38,7 +38,7 @@ data class AgentConfig(
     val serverPort: Int = 11434,
     val contextLength: Int = 4096,
     val threadCount: Int = 6,
-    val maxTokens: Int = 8192,
+    val maxTokens: Int = 32768,
     val temperature: Float = 0.1f
 )
 
@@ -50,8 +50,7 @@ data class AgentUiState(
     val localModelLoading: Boolean = false,
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
-    val streamVersion: Int = 0,
-    val shouldMinimize: Boolean = false
+    val streamVersion: Int = 0
 )
 
 class AgentViewModel : ViewModel() {
@@ -93,7 +92,7 @@ class AgentViewModel : ViewModel() {
             localModelPath = savedPath ?: "",
             serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
             serverPort = prefs.getInt("server_port", 11434),
-            contextLength = prefs.getInt("context_length", 4096),
+            contextLength = prefs.getInt("context_length", 32768),
             threadCount = prefs.getInt("thread_count", 6),
             maxTokens = prefs.getInt("max_tokens", 2048),
             temperature = prefs.getFloat("temperature", 0.1f)
@@ -197,45 +196,10 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
     }
 
-    // ========== synapse-ai-portal CORE LOGIC ==========
+    // ========== SYSTEM PROMPT ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are an agent who can operate an Android phone. Your goal is to track progress and devise plans to achieve the user's requests.
-
-### TASK EXECUTION FORMAT ###
-You MUST output your response exactly in this format for EVERY step:
-
-<thought>
-Analyze the current screen carefully. Think step-by-step about what needs to be done next.
-</thought>
-
-<add_memory>
-Store important information here with step context (e.g., "At step 1, I found the setting").
-</add_memory>
-
-<plan>
-1. Completed step
-2. CURRENT STEP: what to do now
-3. Future step
-</plan>
-
->>> {"action": "action_name", "text": "optional_text", "index": 0, "direction": "down"}
-
-### AVAILABLE ACTIONS ###
-Use ONLY these JSON actions (prefixed with >>>):
-- >>> {"action": "open_app", "text": "app name"}
-- >>> {"action": "tap_index", "index": 12} (Tap an element using its [idx] from the screen tree)
-- >>> {"action": "click_text", "text": "Submit"} (Tap text on screen)
-- >>> {"action": "type", "text": "hello"} (Types into focused field)
-- >>> {"action": "back"}
-- >>> {"action": "home"}
-- >>> {"action": "scroll", "direction": "down|up"}
-- >>> {"action": "swipe", "direction": "left|right|up|down"}
-
-CRITICAL RULES:
-1. ALWAYS use `tap_index` if the element has an [idx] number in the screen tree!
-2. Do NOT converse in plain text. ONLY output the tags and the JSON action.
-3. If the task is fully completed, output >>> {"action": "complete"}"""
+        return "You are a helpful, smart, and efficient AI assistant running locally on the user's device. You always provide clear, accurate, and concise answers."
     }
 
     // ========== CHAT ==========
@@ -245,20 +209,12 @@ CRITICAL RULES:
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
 
-        // Force switch to Synapse Keyboard for automation
-        viewModelScope.launch(Dispatchers.IO) { runShell("ime enable com.synapse.localai/.SynapseKeyboardIME && ime set com.synapse.localai/.SynapseKeyboardIME") }
-        
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }
             
             try {
-                // Initial screen analysis for tasks (moved inside coroutine)
-                val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
-                    "\n[Current Screen Context]\n" + getScreenContent().take(1500)
-                } else ""
-
                 synchronized(conversationHistory) {
-                    conversationHistory.add("user" to command + screenData)
+                    conversationHistory.add("user" to command)
                 }
 
                 val modelType = _uiState.value.activeModelType
@@ -268,54 +224,37 @@ CRITICAL RULES:
                 }
 
                 val systemPrompt = buildSystemPrompt()
-                var keepGoing = true
-                var iterationCount = 0
-                val maxIterations = 10
+                val responseId = java.util.UUID.randomUUID().toString()
+                addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
-                while (keepGoing && iterationCount < maxIterations) {
-                    iterationCount++
-                    val responseId = java.util.UUID.randomUUID().toString()
-                    addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
+                val responseSb = StringBuilder(512)
 
-                    val responseSb = StringBuilder(512)
-
-                    when (modelType) {
-                        ModelType.GGUF -> {
-                            val historyCopy = synchronized(conversationHistory) {
-                                conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
-                            }
-                            withContext(Dispatchers.Default) {
-                                ggufClient!!.generateStreamWithHistory(
-                                    historyCopy,
-                                    systemPrompt
-                                ).collect { chunk ->
-                                    responseSb.append(chunk)
-                                    updateStreamingLog(responseId, responseSb.toString())
-                                }
-                            }
-                            updateStreamingLog(responseId, responseSb.toString(), force = true)
+                when (modelType) {
+                    ModelType.GGUF -> {
+                        val historyCopy = synchronized(conversationHistory) {
+                            conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
                         }
-                    }
-
-                    val fullResponse = responseSb.toString()
-                    if (fullResponse.isNotBlank()) {
-                        val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
-                        synchronized(conversationHistory) {
-                            conversationHistory.add("assistant" to cleanResponse)
-                            while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
-                                conversationHistory.removeAt(0)
+                        withContext(Dispatchers.Default) {
+                            ggufClient!!.generateStreamWithHistory(
+                                historyCopy,
+                                systemPrompt
+                            ).collect { chunk ->
+                                responseSb.append(chunk)
+                                updateStreamingLog(responseId, responseSb.toString())
                             }
                         }
-                        
-                        // Execute tools if present and decide if we should continue
-                        keepGoing = executeToolLoop(fullResponse)
-                    } else {
-                        keepGoing = false // Stop if empty response
+                        updateStreamingLog(responseId, responseSb.toString(), force = true)
                     }
                 }
-                
-                if (iterationCount >= maxIterations) {
-                    addLog(LogEntry(sender = "SYSTEM", text = "Reached maximum task iterations.", isError = true))
+
+                val fullResponse = responseSb.toString()
+                if (fullResponse.isNotBlank()) {
+                    synchronized(conversationHistory) {
+                        conversationHistory.add("assistant" to fullResponse.trim())
+                        while (conversationHistory.size > MAX_HISTORY_MESSAGES) {
+                            conversationHistory.removeAt(0)
+                        }
+                    }
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -343,10 +282,6 @@ CRITICAL RULES:
             }
             state.copy(logs = updatedLogs, streamVersion = state.streamVersion + 1)
         }
-    }
-
-    fun onMinimized() {
-        _uiState.update { it.copy(shouldMinimize = false) }
     }
 
     fun stopAgent() {
@@ -392,96 +327,6 @@ CRITICAL RULES:
 
     suspend fun runShellInternal(cmd: String): String {
         return runShell(cmd)
-    }
-
-    suspend fun getScreenContent(): String {
-        val service = SynapseAccessibilityService.instance
-        if (service != null) {
-            return service.getCompactScreenTreeJson()
-        }
-        return "Error: Accessibility Service not connected. Please enable it in settings."
-    }
-
-    private suspend fun executeToolLoop(response: String): Boolean {
-        val toolLines = response.lines().filter { it.trimStart().startsWith(">>>") }
-        if (toolLines.isEmpty()) return false
-        
-        _uiState.update { it.copy(shouldMinimize = true) }
-        delay(200) // Reduced wait for app to minimize
-
-        val service = SynapseAccessibilityService.instance
-        if (service == null) {
-            addSystemLog("⚠️ Cannot execute actions: Accessibility Service disconnected.")
-            return false
-        }
-
-        var shouldContinue = false
-
-        for (line in toolLines) {
-            val jsonStr = line.trimStart().removePrefix(">>>").trim()
-            try {
-                val json = JSONObject(jsonStr)
-                val action = json.getString("action")
-                
-                if (action == "complete") {
-                    addSystemLog("✅ Task marked as complete.")
-                    return false
-                }
-                
-                var result = ""
-
-                when (action) {
-                    "open_app" -> {
-                        val app = json.getString("text")
-                        val success = service.launchApp(app)
-                        result = if (success) "Opened $app" else "Failed to open $app"
-                    }
-                    "click_text" -> {
-                        val text = json.getString("text")
-                        val success = service.clickByText(text)
-                        result = if (success) "Clicked text: $text" else "Text not found: $text"
-                    }
-                    "tap_index" -> {
-                        val index = json.getInt("index")
-                        val success = service.clickByIndex(index)
-                        result = if (success) "Tapped index: $index" else "Index not found: $index"
-                    }
-                    "type" -> {
-                        val text = json.getString("text")
-                        val success = service.typeText(text)
-                        result = if (success) "Typed: $text" else "Failed to type (no focused input)"
-                    }
-                    "back" -> { service.goBack(); result = "Pressed back" }
-                    "home" -> { service.goHome(); result = "Pressed home" }
-                    "scroll" -> {
-                        val dir = json.optString("direction", "down")
-                        val success = service.scrollScreen(dir)
-                        result = if (success) "Scrolled $dir" else "Failed to scroll"
-                    }
-                    "swipe" -> {
-                        val dir = json.optString("direction", "down")
-                        val success = service.swipeDirection(dir)
-                        result = if (success) "Swiped $dir" else "Failed to swipe"
-                    }
-                }
-                
-                addSystemLog("⚡ $result")
-                delay(300) // Significantly reduced wait after an action before grabbing new screen
-
-                // Feed back the screen state after action
-                val newScreen = getScreenContent().take(3000)
-                val feedback = "[Action Result] $result\n[Current Screen]\n$newScreen"
-                
-                synchronized(conversationHistory) {
-                    conversationHistory.add("user" to feedback)
-                }
-
-                shouldContinue = true
-            } catch (e: Exception) {
-                Log.e(TAG, "Tool error", e)
-            }
-        }
-        return shouldContinue
     }
 
     // ========== CONVERSATION PERSISTENCE ==========

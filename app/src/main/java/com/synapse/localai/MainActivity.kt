@@ -178,15 +178,6 @@ fun ChatApp(viewModel: AgentViewModel) {
         }
     }
 
-    // Minimize app when agent interacts with the device
-    LaunchedEffect(uiState.shouldMinimize) {
-        if (uiState.shouldMinimize) {
-            val activity = context as? android.app.Activity
-            activity?.moveTaskToBack(true)
-            viewModel.onMinimized()
-        }
-    }
-
     if (showSettings) {
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
         return

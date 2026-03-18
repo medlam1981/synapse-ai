@@ -36,7 +36,7 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 4096
+    var contextLength: Int = 32768
     var threadCount: Int = 4
     var maxTokens: Int = 2048
     var temperature: Float = 0.1f
