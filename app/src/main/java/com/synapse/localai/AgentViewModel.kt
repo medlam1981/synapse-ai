@@ -36,7 +36,7 @@ data class AgentConfig(
     val localModelPath: String = "",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
-    val contextLength: Int = 32768,
+    val contextLength: Int = 4096,
     val threadCount: Int = 6,
     val maxTokens: Int = 8192,
     val temperature: Float = 0.1f
