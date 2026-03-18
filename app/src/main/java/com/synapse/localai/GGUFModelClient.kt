@@ -126,14 +126,14 @@ class GGUFModelClient {
                 " -t $threadCount" +
                 " -tb $threadCount" +
                 " --prio 2" +
-                " -fa" +
+                " -fa auto" +
                 " --no-warmup" +
                 " --mmap" +
                 " -fit off" +
                 " --alias local" +
                 " --host $serverHost" +
                 " --port $serverPort" +
-                " > /dev/null 2>&1 &"
+                " > /data/local/tmp/llama_log.txt 2>&1 &"
             val pb = ProcessBuilder("su", "-c", cmd)
             pb.redirectErrorStream(true)
             val proc = pb.start()
