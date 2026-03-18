@@ -126,7 +126,7 @@ class GGUFModelClient {
                 " -t $threadCount" +
                 " -tb $threadCount" +
                 " --prio 2" +
-                " -fa auto" +
+                " -fa" +
                 " --no-warmup" +
                 " --mmap" +
                 " -fit off" +
