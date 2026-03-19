@@ -58,7 +58,7 @@ class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "AgentViewModel"
-        private const val MAX_HISTORY_MESSAGES = 4
+        private const val MAX_HISTORY_MESSAGES = 20
         var instance: AgentViewModel? = null
             private set
 
@@ -492,6 +492,12 @@ CRITICAL RULES:
             shouldContinue = true
         } catch (e: Exception) {
             Log.e(TAG, "Tool error parsing: $jsonStr", e)
+            val feedback = "[System Error] Failed to parse JSON action: ${e.message}. Please output ONLY valid JSON format."
+            addSystemLog("⚠️ Action format error, asking agent to retry.")
+            synchronized(conversationHistory) {
+                conversationHistory.add("user" to feedback)
+            }
+            shouldContinue = true
         }
         
         return shouldContinue
