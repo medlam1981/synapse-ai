@@ -34,9 +34,9 @@ class SynapseAccessibilityService : AccessibilityService() {
         private const val MAX_COMPACT_NODES = 300
         private const val MAX_DEPTH = 12
         private const val VISIBILITY_THRESHOLD = 0.01f
-        private const val REFRESH_INTERVAL_MS = 2000L
-        private const val MIN_FRAME_TIME_MS = 500L
-        private const val POST_CHANGE_DELAY_MS = 600L
+        private const val REFRESH_INTERVAL_MS = 500L
+        private const val MIN_FRAME_TIME_MS = 200L
+        private const val POST_CHANGE_DELAY_MS = 300L
         private const val NOTIFICATION_CHANNEL_ID = "synapse_agent"
         private const val NOTIFICATION_ID = 999
 
@@ -219,95 +219,6 @@ class SynapseAccessibilityService : AccessibilityService() {
         refreshOverlayInternal()
     }
 
-    /** Internal refresh with processing guard — ALWAYS collects element data */
-    private fun refreshOverlayInternal() {
-        if (!isProcessing.compareAndSet(false, true)) return
-        try {
-            val om = overlayManager ?: run {
-                Log.w(TAG, "refreshOverlay: overlayManager is null")
-                return
-            }
-
-            val screenBounds = getScreenBounds()
-            var indexCounter = 0
-            val newElements = mutableListOf<OverlayManager.ElementInfo>()
-
-            // Use windows API to get elements from ALL visible windows
-            try {
-                val windowList = windows
-                if (windowList.isNotEmpty()) {
-                    for (window in windowList) {
-                        val root = window.root ?: continue
-                        indexCounter = collectElements(root, screenBounds, 0, indexCounter, newElements)
-                        root.recycle()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.d(TAG, "windows API failed, falling back to rootInActiveWindow: ${e.message}")
-            }
-
-            // Fallback to rootInActiveWindow if windows API yielded nothing
-            if (newElements.isEmpty()) {
-                val root = try { rootInActiveWindow } catch (_: Exception) { null }
-                if (root != null) {
-                    indexCounter = collectElements(root, screenBounds, 0, indexCounter, newElements)
-                    root.recycle()
-                }
-            }
-
-            // Atomically swap elements — always update data
-            om.clearElements()
-            for (el in newElements) {
-                om.addElement(el.rect, el.type, el.text, el.depth, el.index)
-            }
-            om.refreshOverlay() // Will draw only if drawingEnabled
-
-            if (newElements.isNotEmpty()) {
-                Log.d(TAG, "HUD data: ${newElements.size} elements (visible=$overlayVisible)")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "refreshOverlay error: ${e.message}")
-        } finally {
-            isProcessing.set(false)
-        }
-    }
-
-    /** Collect visible, meaningful elements from an accessibility tree */
-    private fun collectElements(
-        node: AccessibilityNodeInfo, screenBounds: Rect,
-        depth: Int, startIndex: Int, out: MutableList<OverlayManager.ElementInfo>
-    ): Int {
-        if (depth > MAX_DEPTH) return startIndex
-        var idx = startIndex
-        val rect = Rect()
-        node.getBoundsInScreen(rect)
-
-        if (rect.width() >= MIN_ELEMENT_SIZE && rect.height() >= MIN_ELEMENT_SIZE) {
-            val visiblePct = getVisiblePercentage(rect, screenBounds)
-            if (visiblePct >= VISIBILITY_THRESHOLD) {
-                val isInteractive = node.isClickable || node.isEditable || node.isCheckable || node.isFocusable
-                val text = node.text?.toString() ?: ""
-                val desc = node.contentDescription?.toString() ?: ""
-                val hasContent = text.isNotEmpty() || desc.isNotEmpty()
-
-                if (isInteractive || hasContent) {
-                    val cls = node.className?.toString()?.substringAfterLast('.') ?: ""
-                    val label = if (text.isNotEmpty()) text.take(40) else desc.take(40)
-                    val color = OVERLAY_COLORS[idx % OVERLAY_COLORS.size]
-                    out.add(OverlayManager.ElementInfo(Rect(rect), cls, label, depth, color, idx))
-                    idx++
-                }
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            idx = collectElements(child, screenBounds, depth + 1, idx, out)
-            child.recycle()
-        }
-        return idx
-    }
-
     private val OVERLAY_COLORS = arrayOf(
         android.graphics.Color.rgb(0, 122, 255),
         android.graphics.Color.rgb(255, 45, 85),
@@ -356,25 +267,83 @@ class SynapseAccessibilityService : AccessibilityService() {
         return sb.toString()
     }
 
-    /** Build compact JSON tree (like neural-agent's AccessibilityTreeBuilder) */
+    /** Build compact JSON tree from ALL windows (like droidrun portal) */
     fun getCompactScreenTreeJson(): String {
-        val root = rootInActiveWindow ?: return "{\"error\":\"No active window\"}"
         val screenBounds = getScreenBounds()
-        lastIndexedElements.clear()
         val counter = java.util.concurrent.atomic.AtomicInteger(0)
         val indexRef = intArrayOf(0)
-        val tree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef)
-        root.recycle()
+        val tempElements = mutableListOf<IndexedElement>()
+        
+        val rootArray = JSONArray()
+        
+        try {
+            val windowList = windows
+            if (windowList.isNotEmpty()) {
+                // Sort windows by layer/type if needed, but usually iterating is fine
+                for (window in windowList) {
+                    val root = try { window.root } catch (_: Exception) { null } ?: continue
+                    val windowTree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef, tempElements)
+                    root.recycle()
+                    if (windowTree != null) {
+                        rootArray.put(windowTree)
+                    }
+                }
+            } else {
+                // Fallback to active window
+                val root = try { rootInActiveWindow } catch (_: Exception) { null }
+                if (root != null) {
+                    val windowTree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef, tempElements)
+                    root.recycle()
+                    if (windowTree != null) rootArray.put(windowTree)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error building multi-window tree: ${e.message}")
+        }
 
-        if (overlayVisible) refreshOverlay()
+        // Safely update the master list
+        synchronized(lastIndexedElements) {
+            lastIndexedElements.clear()
+            lastIndexedElements.addAll(tempElements)
+        }
 
-        return tree?.toString(2) ?: "{}"
+        // Force a HUD redraw with the exact new elements
+        if (overlayVisible) {
+            overlayManager?.let { om ->
+                om.clearElements()
+                synchronized(lastIndexedElements) {
+                    for (el in lastIndexedElements) {
+                        om.addElement(el.rect, "", el.text, 0, el.index)
+                    }
+                }
+                om.refreshOverlay()
+            }
+        }
+
+        return if (rootArray.length() == 1) {
+            rootArray.getJSONObject(0).toString(2)
+        } else {
+            JSONObject().put("windows", rootArray).toString(2)
+        }
+    }
+
+    /** Internal refresh with processing guard — ALWAYS collects element data using the full tree logic */
+    private fun refreshOverlayInternal() {
+        if (!isProcessing.compareAndSet(false, true)) return
+        try {
+            getCompactScreenTreeJson() // This already handles building elements and refreshing the HUD
+        } catch (e: Exception) {
+            Log.e(TAG, "refreshOverlay error: ${e.message}")
+        } finally {
+            isProcessing.set(false)
+        }
     }
 
     private fun buildCompactTreeJson(
         node: AccessibilityNodeInfo, screenBounds: Rect,
         depth: Int, nodeCount: java.util.concurrent.atomic.AtomicInteger,
-        indexRef: IntArray
+        indexRef: IntArray,
+        outElements: MutableList<IndexedElement>
     ): JSONObject? {
         if (depth > MAX_DEPTH || nodeCount.get() > MAX_COMPACT_NODES) return null
 
@@ -390,7 +359,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         val childrenArray = JSONArray()
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            val childJson = buildCompactTreeJson(child, screenBounds, depth + 1, nodeCount, indexRef)
+            val childJson = buildCompactTreeJson(child, screenBounds, depth + 1, nodeCount, indexRef, outElements)
             child.recycle()
             if (childJson != null) childrenArray.put(childJson)
         }
@@ -414,7 +383,7 @@ class SynapseAccessibilityService : AccessibilityService() {
             val idx = indexRef[0]
             indexRef[0]++
             val label = if (text.isNotEmpty()) text.take(80) else desc.take(80)
-            lastIndexedElements.add(IndexedElement(idx, Rect(rect), label))
+            outElements.add(IndexedElement(idx, Rect(rect), label))
             idx
         } else -1
 
@@ -462,7 +431,6 @@ class SynapseAccessibilityService : AccessibilityService() {
 
             if (isInteractive && rect.width() > 2 && rect.height() > 2) {
                 sb.appendLine("$indent[$idx] $cls$idStr ($rect)$flagStr ${label.take(80)}")
-                lastIndexedElements.add(IndexedElement(idx, rect, label.take(80)))
                 idx++
             } else {
                 sb.appendLine("$indent$cls$idStr ($rect)$flagStr ${label.take(80)}")
@@ -478,18 +446,27 @@ class SynapseAccessibilityService : AccessibilityService() {
     }
 
     fun clickByIndex(index: Int): Boolean {
-        val element = lastIndexedElements.find { it.index == index }
+        var element: IndexedElement? = null
+        synchronized(lastIndexedElements) {
+            element = lastIndexedElements.find { it.index == index }
+        }
+        
         if (element != null) {
-            val cx = element.rect.centerX().toFloat()
-            val cy = element.rect.centerY().toFloat()
+            val cx = element!!.rect.centerX().toFloat()
+            val cy = element!!.rect.centerY().toFloat()
             performClick(cx, cy)
             return true
         }
-        getScreenTree()
-        val retryElement = lastIndexedElements.find { it.index == index }
-        if (retryElement != null) {
-            val cx = retryElement.rect.centerX().toFloat()
-            val cy = retryElement.rect.centerY().toFloat()
+        
+        getCompactScreenTreeJson() // Force a refresh using the compact JSON logic
+        
+        synchronized(lastIndexedElements) {
+            element = lastIndexedElements.find { it.index == index }
+        }
+        
+        if (element != null) {
+            val cx = element!!.rect.centerX().toFloat()
+            val cy = element!!.rect.centerY().toFloat()
             performClick(cx, cy)
             return true
         }

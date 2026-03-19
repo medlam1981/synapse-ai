@@ -586,7 +586,7 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
                 ) {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AnimatedAtom()
+                            AnimatedAtom(isSpinning = isLastAgentMessage && thinkEnd == -1)
                             Text(
                                 "Thought Process", 
                                 color = NeonPurple.copy(alpha=0.7f), 

@@ -399,11 +399,24 @@ CRITICAL RULES:
     }
 
     private suspend fun executeToolLoop(response: String): Boolean {
-        // Try to find the JSON action, either following >>> or inside a JSON block
-        val jsonStr = response.lines()
+        // Try to find the JSON action robustly.
+        // 1. Look for >>> prefix
+        // 2. Look for JSON block ```json ... ```
+        // 3. Look for any valid-looking action JSON object
+        
+        var jsonStr: String? = response.lines()
             .find { it.trimStart().startsWith(">>>") }
             ?.substringAfter(">>>")?.trim()
-            ?: Regex("\\{.*?\"action\".*?\\}").find(response.replace("\n", ""))?.value
+            
+        if (jsonStr == null) {
+             val match = Regex("```(?:json)?\\s*(\\{.*?\"action\".*?\\})\\s*```", RegexOption.DOT_MATCHES_ALL).find(response)
+             jsonStr = match?.groupValues?.get(1)?.trim()
+        }
+        
+        if (jsonStr == null) {
+            val match = Regex("\\{.*?\"action\"\\s*:.*?\\}", RegexOption.DOT_MATCHES_ALL).find(response)
+            jsonStr = match?.value?.trim()
+        }
 
         if (jsonStr == null) return false
         
