@@ -38,7 +38,7 @@ class GGUFModelClient {
     var serverPort: Int = DEFAULT_PORT
     var contextLength: Int = 32768
     var threadCount: Int = 4
-    var maxTokens: Int = 2048
+    var maxTokens: Int = 32768
     var temperature: Float = 0.1f
 
     private val internalPort: Int get() = serverPort + 1

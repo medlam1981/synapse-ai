@@ -38,8 +38,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import java.util.UUID
 
 // Theme colors matching the brain logo
@@ -178,6 +185,15 @@ fun ChatApp(viewModel: AgentViewModel) {
         }
     }
 
+    // Minimize app when agent interacts with the device
+    LaunchedEffect(uiState.shouldMinimize) {
+        if (uiState.shouldMinimize) {
+            val activity = context as? android.app.Activity
+            activity?.moveTaskToBack(true)
+            viewModel.onMinimized()
+        }
+    }
+
     if (showSettings) {
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
         return
@@ -235,22 +251,28 @@ fun ChatApp(viewModel: AgentViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Logo from drawable
+                // New Super Android Logo
                 Image(
-                    painter = painterResource(id = R.drawable.synapse_logo),
+                    painter = painterResource(id = R.drawable.super_android_logo),
                     contentDescription = "Synapse AI",
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop
+                    modifier = Modifier.size(32.dp),
+                    contentScale = ContentScale.Fit
                 )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "SYNAPSE AI",
-                        color = Color.White,
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(color = NeonPurple)) {
+                                append("SYNAPSE ")
+                            }
+                            withStyle(style = SpanStyle(color = Color.White)) {
+                                append("LOCAL LLM • OLLAMA SERVER")
+                            }
+                        },
                         fontWeight = FontWeight.Black,
-                        fontSize = 12.sp,
-                        letterSpacing = 2.sp
+                        fontSize = 10.sp,
+                        letterSpacing = 1.sp,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee()
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -271,7 +293,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                         Text(
                             text = when {
                                 uiState.localModelLoading -> "Loading Model... ⏳"
-                                uiState.localModelLoaded -> "Model Active • ${uiState.activeModelType?.name ?: ""}"
+                                uiState.localModelLoaded -> "${uiState.activeModelName} • ${uiState.activeModelType?.name ?: ""}"
                                 else -> "No model loaded"
                             },
                             modifier = Modifier.basicMarquee(),
@@ -344,6 +366,9 @@ fun ChatApp(viewModel: AgentViewModel) {
                 )
         )
 
+        // System Dashboard
+        SystemDashboard(context = context)
+
         // Chat Messages
         LazyColumn(
             state = listState,
@@ -357,35 +382,6 @@ fun ChatApp(viewModel: AgentViewModel) {
             items(uiState.logs, key = { it.id }) { log ->
                 val isLastAgentMessage = uiState.isProcessing && log.id == uiState.logs.lastOrNull { it.sender == "AGENT" }?.id
                 ChatBubble(log, isLastAgentMessage = isLastAgentMessage)
-            }
-            if (uiState.isProcessing && (uiState.logs.isEmpty() || uiState.logs.last().sender != "AGENT" || uiState.logs.last().text.isEmpty())) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(NeonPurple.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
-                            )
-                            Text(
-                                "SYNAPSE",
-                                color = NeonPurple.copy(alpha = 0.5f),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.5.sp
-                            )
-                        }
-                        Text(
-                            "Thinking...",
-                            color = NeonCyan.copy(alpha = 0.8f),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.SansSerif
-                        )
-                    }
-                }
             }
         }
 
@@ -550,14 +546,425 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
+        
+        val fullText = log.text
+        if (log.sender == "AGENT" && fullText.contains("<think>")) {
+            val thinkStart = fullText.indexOf("<think>")
+            val thinkEnd = fullText.indexOf("</think>")
+            
+            val beforeThink = fullText.substring(0, thinkStart).trim()
+            val thinkContent = if (thinkEnd != -1) {
+                fullText.substring(thinkStart + 7, thinkEnd).trim()
+            } else {
+                fullText.substring(thinkStart + 7).trim()
+            }
+            val afterThink = if (thinkEnd != -1) {
+                fullText.substring(thinkEnd + 8).trim()
+            } else {
+                ""
+            }
+
+            if (beforeThink.isNotEmpty()) {
+                Text(
+                    text = beforeThink,
+                    color = textColor,
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+            
+            if (thinkContent.isNotEmpty() || thinkEnd == -1) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                        .border(1.dp, NeonPurple.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AnimatedAtom()
+                            Text(
+                                "Thought Process", 
+                                color = NeonPurple.copy(alpha=0.7f), 
+                                fontSize = 10.sp, 
+                                fontWeight = FontWeight.Bold, 
+                                letterSpacing = 1.sp
+                            )
+                        }
+                        if (thinkContent.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = thinkContent,
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 11.sp,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
+            }
+            
+            if (afterThink.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = afterThink,
+                    modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
+                    color = textColor,
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        } else {
+            Text(
+                text = log.text,
+                modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
+                color = textColor,
+                fontFamily = FontFamily.SansSerif,
+                fontSize = 12.sp,
+                fontWeight = if (isUser) FontWeight.Medium else FontWeight.Normal,
+                lineHeight = 17.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun AnimatedAtom(isSpinning: Boolean = true) {
+    val infiniteTransition = rememberInfiniteTransition(label = "atom_rotation")
+    val angle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "angle"
+    )
+
+    Box(
+        modifier = Modifier.size(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokeWidth = 1.dp.toPx()
+            val size = size.minDimension
+            val rectSize = androidx.compose.ui.geometry.Size(size, size * 0.35f)
+            val topLeft = androidx.compose.ui.geometry.Offset(0f, size * 0.325f)
+
+            val colors = listOf(NeonCyan, NeonPurple, AccentGlow)
+            val angles = listOf(0f, 120f, 240f)
+
+            for (i in 0..2) {
+                rotate(angles[i]) {
+                    // Static orbit path
+                    drawOval(
+                        color = colors[i].copy(alpha = 0.2f),
+                        style = Stroke(width = strokeWidth),
+                        size = rectSize,
+                        topLeft = topLeft
+                    )
+
+                    if (isSpinning) {
+                        val currentAngle = angle + (i * 80f) // Offset each quark
+                        // Quark with trail
+                        for (j in 0..8) {
+                            val trailAngle = currentAngle - (j * 6f)
+                            val alpha = java.lang.Math.max(0f, 1f - (j * 0.12f))
+                            val width = strokeWidth * java.lang.Math.max(0.1f, 1.8f - j * 0.15f)
+                            drawArc(
+                                color = colors[i].copy(alpha = alpha),
+                                startAngle = trailAngle,
+                                sweepAngle = 7f,
+                                useCenter = false,
+                                topLeft = topLeft,
+                                size = rectSize,
+                                style = Stroke(width = width, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                            )
+                        }
+                    }
+                }
+            }
+        }
         Text(
-            text = log.text,
-            modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
-            color = textColor,
+            text = "AI",
+            color = Color.White,
+            fontSize = 6.sp,
+            fontWeight = FontWeight.Light,
             fontFamily = FontFamily.SansSerif,
-            fontSize = if (isUser) 12.sp else 11.sp,
-            fontWeight = if (isUser) FontWeight.Medium else FontWeight.Normal,
-            lineHeight = 16.sp
+            style = androidx.compose.ui.text.TextStyle(
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = NeonCyan,
+                    blurRadius = 8f
+                )
+            )
         )
+    }
+}
+
+fun getCpuTemp(): String {
+    try {
+        val tempFile = java.io.File("/sys/class/thermal/thermal_zone0/temp")
+        if (tempFile.exists()) {
+            val tempRaw = tempFile.readText().trim().toIntOrNull() ?: 0
+            val tempC = if (tempRaw > 1000) tempRaw / 1000 else tempRaw
+            if (tempC in 1..150) return "${tempC}°C"
+        }
+    } catch (e: Exception) {}
+    return "--°C"
+}
+
+data class SystemStats(
+    val battery: Int = 100,
+    val ramFree: String = "0GB",
+    val storageFree: String = "0GB",
+    val cpuTemp: String = "--°C",
+    val cpuUsage: String = "0%"
+)
+
+fun getSystemStats(context: android.content.Context): SystemStats {
+    // Battery
+    val bm = context.getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
+    val batLevel = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+
+    // RAM
+    val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+    val memInfo = android.app.ActivityManager.MemoryInfo()
+    am.getMemoryInfo(memInfo)
+    val ramFree = String.format("%.1f GB", memInfo.availMem / (1024.0 * 1024.0 * 1024.0))
+
+    // Storage
+    val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
+    val storageFree = String.format("%.1f GB", stat.availableBlocksLong * stat.blockSizeLong / (1024.0 * 1024.0 * 1024.0))
+
+    return SystemStats(
+        battery = batLevel, 
+        ramFree = ramFree, 
+        storageFree = storageFree, 
+        cpuTemp = getCpuTemp(),
+        cpuUsage = if (AgentViewModel.instance?.uiState?.value?.isProcessing == true) "HIGH" else "IDLE"
+    )
+}
+
+@Composable
+fun CpuIcon() {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        val stroke = 0.8.dp.toPx()
+        val s = size.width
+        // Core center
+        drawCircle(
+            color = NeonCyan.copy(alpha = 0.8f),
+            radius = s * 0.2f,
+            center = androidx.compose.ui.geometry.Offset(s * 0.5f, s * 0.5f),
+            style = Stroke(width = stroke)
+        )
+        // Outer box
+        drawRect(
+            color = NeonCyan.copy(alpha = 0.4f),
+            style = Stroke(width = stroke),
+            size = androidx.compose.ui.geometry.Size(s * 0.8f, s * 0.8f),
+            topLeft = androidx.compose.ui.geometry.Offset(s * 0.1f, s * 0.1f)
+        )
+        // Lines connecting
+        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s*0.5f, 0f), androidx.compose.ui.geometry.Offset(s*0.5f, s*0.3f), stroke)
+        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s*0.5f, s), androidx.compose.ui.geometry.Offset(s*0.5f, s*0.7f), stroke)
+        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(0f, s*0.5f), androidx.compose.ui.geometry.Offset(s*0.3f, s*0.5f), stroke)
+        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s, s*0.5f), androidx.compose.ui.geometry.Offset(s*0.7f, s*0.5f), stroke)
+    }
+}
+
+@Composable
+fun SystemDashboard(context: android.content.Context) {
+    var stats by remember { mutableStateOf(getSystemStats(context)) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            stats = getSystemStats(context)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(DarkCard, RoundedCornerShape(12.dp))
+            .border(1.dp, NeonCyan.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AnimatedAtom(isSpinning = false)
+            Text(
+                "SYNAPSE SYSTEM ACTIVE",
+                color = NeonCyan,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 2.sp
+            )
+        }
+        
+        Text(
+            "WELCOME TO SYNAPSE. YOUR PRIVATE NEURAL ENGINE IS ACTIVE. EXPERIENCE UNRIVALED ON-DEVICE INTELLIGENCE WITH ZERO CLOUD LATENCY. SYSTEM READY FOR COMPUTATION.",
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 9.sp,
+            lineHeight = 13.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.5.sp,
+            fontFamily = FontFamily.SansSerif
+        )
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            val weight = 1f
+            Box(Modifier.weight(weight)) { StatBadge(icon = { BatteryIcon(stats.battery) }, label = "PWR", value = "${stats.battery}%") }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { ChipIcon() }, label = "RAM", value = stats.ramFree) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { CpuIcon() }, label = "CPU", value = stats.cpuUsage) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { StorageIcon() }, label = "DISK", value = stats.storageFree) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { TempIcon() }, label = "TEMP", value = stats.cpuTemp) }
+        }
+    }
+}
+
+@Composable
+fun BatteryIcon(level: Int) {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        val stroke = 1.dp.toPx()
+        val w = size.width
+        val h = size.height
+        // Body
+        drawRoundRect(
+            color = if (level < 20) Color(0xFFEF4444) else NeonCyan.copy(alpha = 0.8f),
+            size = androidx.compose.ui.geometry.Size(w * 0.85f, h * 0.6f),
+            topLeft = androidx.compose.ui.geometry.Offset(0f, h * 0.2f),
+            style = Stroke(width = stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+        )
+        // Tip
+        drawRect(
+            color = NeonCyan.copy(alpha = 0.8f),
+            size = androidx.compose.ui.geometry.Size(w * 0.1f, h * 0.25f),
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.88f, h * 0.375f)
+        )
+        // Fill
+        drawRect(
+            color = if (level < 20) Color(0xFFEF4444) else NeonCyan.copy(alpha = 0.5f),
+            size = androidx.compose.ui.geometry.Size((w * 0.75f) * (level / 100f), h * 0.4f),
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.05f, h * 0.3f)
+        )
+    }
+}
+
+@Composable
+fun ChipIcon() {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        val stroke = 0.8.dp.toPx()
+        val s = size.width
+        // Main square
+        drawRect(
+            color = NeonPurple.copy(alpha = 0.8f),
+            style = Stroke(width = stroke),
+            size = androidx.compose.ui.geometry.Size(s * 0.7f, s * 0.7f),
+            topLeft = androidx.compose.ui.geometry.Offset(s * 0.15f, s * 0.15f)
+        )
+        // Pins
+        val pinLen = s * 0.15f
+        for (i in 0..2) {
+            val pos = s * 0.3f + (i * s * 0.2f)
+            // Top
+            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(pos, 0f), androidx.compose.ui.geometry.Offset(pos, pinLen), stroke)
+            // Bottom
+            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(pos, s), androidx.compose.ui.geometry.Offset(pos, s - pinLen), stroke)
+            // Left
+            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(0f, pos), androidx.compose.ui.geometry.Offset(pinLen, pos), stroke)
+            // Right
+            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s, pos), androidx.compose.ui.geometry.Offset(s - pinLen, pos), stroke)
+        }
+    }
+}
+
+@Composable
+fun StorageIcon() {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        val stroke = 0.8.dp.toPx()
+        val w = size.width
+        val h = size.height
+        // Drive body
+        drawRect(
+            color = AccentGlow.copy(alpha = 0.8f),
+            style = Stroke(width = stroke),
+            size = androidx.compose.ui.geometry.Size(w * 0.8f, h * 0.9f),
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.1f, 0f)
+        )
+        // Platters circle
+        drawCircle(
+            color = AccentGlow.copy(alpha = 0.4f),
+            radius = w * 0.25f,
+            center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.4f),
+            style = Stroke(width = stroke)
+        )
+        // Arm
+        drawLine(
+            color = AccentGlow.copy(alpha = 0.8f),
+            start = androidx.compose.ui.geometry.Offset(w * 0.8f, h * 0.8f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.5f),
+            strokeWidth = stroke
+        )
+    }
+}
+
+@Composable
+fun TempIcon() {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        val stroke = 1.dp.toPx()
+        val w = size.width
+        val h = size.height
+        // Thermometer stem
+        drawRoundRect(
+            color = Color(0xFFFF9F43).copy(alpha = 0.8f),
+            size = androidx.compose.ui.geometry.Size(w * 0.3f, h * 0.7f),
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.35f, 0f),
+            style = Stroke(width = stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.15f)
+        )
+        // Bulb
+        drawCircle(
+            color = Color(0xFFFF9F43).copy(alpha = 0.8f),
+            radius = w * 0.25f,
+            center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.75f),
+            style = Stroke(width = stroke)
+        )
+        // Inner fill
+        drawCircle(
+            color = Color(0xFFFF9F43).copy(alpha = 0.6f),
+            radius = w * 0.12f,
+            center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.75f)
+        )
+    }
+}
+
+@Composable
+fun StatBadge(icon: @Composable () -> Unit, label: String, value: String) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 4.dp, vertical = 6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            icon()
+            Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(value, color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
     }
 }

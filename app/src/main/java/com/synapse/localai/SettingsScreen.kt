@@ -402,9 +402,9 @@ fun SettingsScreen(
                         val newConfig = config.copy(
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 11434,
-                            contextLength = contextLength.toIntOrNull() ?: 8192,
+                            contextLength = contextLength.toIntOrNull() ?: 32768,
                             threadCount = threadCount.toIntOrNull() ?: 6,
-                            maxTokens = maxTokens.toIntOrNull() ?: 2048,
+                            maxTokens = maxTokens.toIntOrNull() ?: 32768,
                             temperature = temperature
                         )
                         viewModel.saveConfig(context, newConfig)
@@ -422,6 +422,51 @@ fun SettingsScreen(
                     fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace
                 )
+            }
+
+            // ═══════ PORTAL & KEYBOARD SECTION ═══════
+            SettingsCard(
+                title = "ANDROID PORTAL", 
+                titleColor = NeonCyan, 
+                statusDot = Color(0xFF34D399), 
+                statusText = "Active (8081)"
+            ) {
+                Text(
+                    "This app acts as a Portal for external agents to control this device via port 8081.",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 12.sp
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Accessibility", color = Color.White, fontSize = 11.sp)
+                    }
+                    
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Keyboard", color = Color.White, fontSize = 11.sp)
+                    }
+                }
             }
 
             // ═══════ ABOUT SECTION ═══════

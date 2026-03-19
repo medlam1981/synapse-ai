@@ -1,39 +1,47 @@
-# Synapse AI - Local LLM Engine & Chat 🧠📱
+# Synapse AI - Android Neural Agent & Local LLM Server 🧠🤖📱
 
-Synapse AI is a blazing-fast, 100% local Large Language Model (LLM) engine and chat application for Android. It turns your phone into a powerful, private AI server.
+Synapse AI is a next-generation, fully autonomous on-device AI agent for Android. It combines the raw power of local Large Language Models (LLMs) with deep system integration, allowing the AI to actually **see, think, plan, and interact** with your phone just like a human would.
 
 No cloud dependencies. No privacy concerns. 100% Local.
 
 📥 **[Download Latest APK (Synapse-AI-Agent-latest.apk)](https://github.com/medlam1981/synapse-ai/raw/main/releases/Synapse-AI-Agent-latest.apk)**
 
-## 🚀 Key Features
+## 🚀 Key Features & Major Upgrades
 
-### 1. 🧠 Built-in Local AI Engine (Llama.cpp)
-Runs powerful GGUF models directly on your Android device hardware.
-* **Insanely Fast Inference:** Highly optimized with `mmap` direct disk reading and dynamic batching for instant responses.
-* **Dynamic Control:** Absolute control. Configure **Max Tokens**, **Temperature**, **Context Length**, and **Thread Count** dynamically right from the app settings.
-* **Massive Context Window:** Configured with up to **32,768 tokens** with `Flash Attention`, allowing the AI to remember long conversation histories without breaking a sweat.
-* **Endless Background Mode:** Uses advanced battery optimization bypasses to run continuously in your pocket for hours.
+### 1. 🦾 Autonomous Device Control (The Agent is Back!)
+The agent has been fully restored with its legendary capabilities to operate your Android device:
+* **Visual Perception:** Uses Android Accessibility Services to dump the screen state into a highly optimized, compact JSON tree.
+* **Auto-Execution Loop:** Executes multi-step actions (tap, scroll, swipe, open app, type) and waits for UI transitions before deciding the next move.
+* **Auto-Return (NEW):** Once a task is marked as complete, the agent automatically returns to the main chat interface to report the results.
+* **Synapse Keyboard:** Injects text flawlessly into any app's input fields using its dedicated custom IME.
 
-### 2. 🔌 True Ollama Server Compatibility
-Acts as a local server on port `11434`.
-* **Connect from PC:** You can connect to your phone from your PC or other devices on the same network (`0.0.0.0`) using standard Ollama API requests.
-* **Smart Proxy:** Features a built-in proxy that injects valid RFC3339 timestamps, ensuring 100% seamless compatibility with desktop tools like `ollama list` and `ollama run local` without crashing.
+### 2. 📊 Advanced System Dashboard (Real-time Stats)
+A fixed, high-tech dashboard sits below the banner, featuring precision Canvas-drawn icons and live hardware monitoring:
+* 🔋 **PWR:** Real-time battery percentage.
+* 🧠 **RAM:** Live available memory tracking for the model.
+* 💾 **DISK:** Actual free storage space on the device.
+* 🔥 **TEMP:** Live CPU thermal monitoring.
+* ⚡ **CPU:** Processing state indicator (IDLE/HIGH).
 
-### 3. 🎨 Beautiful Slim UI & Seamless Chat
-* **Slim Header & Marquee Effect:** Maximum screen real estate with a sleek, minimalist TopAppBar.
-* **Instant Word-by-Word Streaming:** Experience ultra-fast typing effects (80ms UI updates) with an intelligent, butter-smooth auto-scrolling system.
-* **Integrated Input Bar:** A unified chat box featuring an inline "Stop/Send" button and a File Attachment (📎) button with native Android File Picker integration.
-* **Optimized Rendering:** Utilizing the default SansSerif font for the chat UI to maximize scrolling performance and readability.
+### 3. 🎨 Masterpiece Slim UI
+* **Slim Multi-Colored Banner:** A minimalist header featuring "SYNAPSE" in signature purple and a scrolling marquee for the **actual model name**.
+* **Animated Atom Core:** A custom-coded, living atom logo with orbiting quarks and a glowing AI nucleus that spins dynamically during thought processes.
+* **Elegant <think> Parsing:** Automatically detects model reasoning and wraps it in a beautiful, translucent "Thought Process" box with an animated icon.
+* **Word-by-Word Streaming:** Ultra-smooth 80ms UI updates for a natural typing effect without screen jitter.
+
+### 4. 🧠 High-Performance LLM Engine
+* **Blazing Fast Inference:** Optimized with `mmap` and dynamic batching to handle models up to 8B parameters on mobile hardware.
+* **32K Context Window:** Equipped with a massive context window and **Flash Attention (-fa auto)** for handling extremely long tasks and histories.
+* **Endless Background Mode:** Bypasses Android battery optimizations to run continuously for hours.
+
+### 5. 🔌 True Ollama Compatibility
+* Acts as a full Ollama-compatible server on port `11434`.
+* **Smart Proxy Fix:** Injects valid RFC3339 timestamps into `/api/tags` responses, fixing the dreaded "parsing time" error in official Ollama/OpenClaw CLI tools.
 
 ## ⚙️ Requirements & Setup
-- High-end Android device (Flagship recommended for running 4B+ parameter models).
-- Place your `.gguf` models inside `/sdcard/Download/` or `/sdcard/Models/`.
-
-## 🛠️ Usage Example
-1. Open the app and go to Settings.
-2. Select your downloaded `.gguf` model.
-3. Chat with the AI directly on your phone, or connect to `http://<your-phone-ip>:11434` from your PC.
+- High-end Android device (Flagship recommended).
+- **Root access** is required for automated keyboard switching and deep UI interactions.
+- Place your `.gguf` models in `/sdcard/Download/` or `/sdcard/Models/`.
 
 ---
-*Built for the future of on-device AI.*
+*Built for the future of on-device AI automation.*

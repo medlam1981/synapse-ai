@@ -59,6 +59,10 @@ class PortalServer(private val viewModel: AgentViewModel) {
             val action = json.optString("action", "")
             
             when (action) {
+                "get_state" -> {
+                    val screen = viewModel.getScreenContent()
+                    JSONObject().put("status", "success").put("ui_tree", screen).toString()
+                }
                 "execute" -> {
                     val cmd = json.getString("command")
                     val result = viewModel.runShellInternal(cmd)
