@@ -36,9 +36,9 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 32768
+    var contextLength: Int = 16384
     var threadCount: Int = 4
-    var maxTokens: Int = 32768
+    var maxTokens: Int = 16384
     var temperature: Float = 0.1f
 
     private val internalPort: Int get() = serverPort + 1
@@ -124,8 +124,8 @@ class GGUFModelClient {
             val cmd = "setsid nohup $serverBinary" +
                 " -m $modelPath" +
                 " -c $contextLength" +
-                " -b 512" +
-                " -ub 512" +
+                " -b 1024" +
+                " -ub 1024" +
                 " -t $threadCount" +
                 " -tb $threadCount" +
                 " --prio 2" +

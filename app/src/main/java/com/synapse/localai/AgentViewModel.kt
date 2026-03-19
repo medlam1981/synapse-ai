@@ -36,7 +36,7 @@ data class AgentConfig(
     val localModelPath: String = "",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
-    val contextLength: Int = 32768,
+    val contextLength: Int = 16384,
     val threadCount: Int = 6,
     val maxTokens: Int = 32768,
     val temperature: Float = 0.1f
@@ -99,7 +99,7 @@ class AgentViewModel : ViewModel() {
             localModelPath = savedPath ?: "",
             serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
             serverPort = prefs.getInt("server_port", 11434),
-            contextLength = prefs.getInt("context_length", 32768),
+            contextLength = prefs.getInt("context_length", 16384),
             threadCount = prefs.getInt("thread_count", 6),
             maxTokens = prefs.getInt("max_tokens", 2048),
             temperature = prefs.getFloat("temperature", 0.1f)

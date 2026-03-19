@@ -402,9 +402,9 @@ fun SettingsScreen(
                         val newConfig = config.copy(
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 11434,
-                            contextLength = contextLength.toIntOrNull() ?: 32768,
+                            contextLength = contextLength.toIntOrNull() ?: 16384,
                             threadCount = threadCount.toIntOrNull() ?: 6,
-                            maxTokens = maxTokens.toIntOrNull() ?: 32768,
+                            maxTokens = maxTokens.toIntOrNull() ?: 16384,
                             temperature = temperature
                         )
                         viewModel.saveConfig(context, newConfig)
