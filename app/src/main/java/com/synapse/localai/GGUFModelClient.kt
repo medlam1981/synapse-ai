@@ -102,46 +102,35 @@ class GGUFModelClient {
             return@withContext false
         }
 
-        // Disable phantom process killer (resets on reboot)
-        try {
-            Runtime.getRuntime().exec(arrayOf("su", "-c",
-                "device_config put activity_manager max_phantom_processes 2147483647"))
-                .waitFor()
-            Log.d(TAG, "Phantom process killer disabled")
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not disable phantom process killer: ${e.message}")
-        }
-
         try {
             System.gc()
-            // Magic Touch: Kill any existing rogue servers first
-            try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "killall -9 libllama_server.so")).waitFor()
-                delay(300)
-            } catch (_: Exception) {}
+            
+            // Clean up any old process
+            serverProcess?.destroy()
+            serverProcess = null
 
-            // Launch via su + setsid + nohup to evade PhantomProcess restrictions
-            val cmd = "setsid nohup $serverBinary" +
-                " -m $modelPath" +
-                " -c $contextLength" +
-                " -b 1024" +
-                " -ub 1024" +
-                " -t $threadCount" +
-                " -tb $threadCount" +
-                " --prio 2" +
-                " -fa auto" +
-                " --no-warmup" +
-                " --mmap" +
-                " -fit off" +
-                " --alias local" +
-                " --host $serverHost" +
-                " --port $internalPort" +
-                " > /dev/null 2>&1 &"
-            val pb = ProcessBuilder("su", "-c", cmd)
+            // Launch directly without su/setsid for non-root support
+            val cmd = listOf(
+                serverBinary,
+                "-m", modelPath,
+                "-c", contextLength.toString(),
+                "-b", "1024",
+                "-ub", "1024",
+                "-t", threadCount.toString(),
+                "-tb", threadCount.toString(),
+                "-fa", "auto",
+                "--no-warmup",
+                "--mmap",
+                "-fit", "off",
+                "--alias", "local",
+                "--host", serverHost,
+                "--port", internalPort.toString()
+            )
+            
+            val pb = ProcessBuilder(cmd)
             pb.redirectErrorStream(true)
-            val proc = pb.start()
-            proc.waitFor()
-            Log.d(TAG, "Server launched via su+setsid (detached from app cgroup, added 256MB RAM space)")
+            serverProcess = pb.start()
+            Log.d(TAG, "Server launched as standard app subprocess (Rootless Mode)")
 
             // Start the Ollama proxy to fix the CLI parsing bug
             proxy?.stop()
@@ -289,9 +278,9 @@ class GGUFModelClient {
     }.flowOn(Dispatchers.IO)
 
     fun stop() {
-        // Kill the detached server process (launched via su+setsid, so serverProcess won't work)
         try {
-            Runtime.getRuntime().exec(arrayOf("su", "-c", "killall -9 libllama_server.so"))
+            serverProcess?.destroy()
+            serverProcess = null
             Log.d(TAG, "Stopped llama-server")
         } catch (e: Exception) {
             Log.w(TAG, "Could not stop server: ${e.message}")

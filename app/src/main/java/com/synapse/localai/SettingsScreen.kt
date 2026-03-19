@@ -447,24 +447,11 @@ fun SettingsScreen(
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         },
-                        modifier = Modifier.weight(1f).height(40.dp),
+                        modifier = Modifier.fillMaxWidth().height(40.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.2f)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("Accessibility", color = Color.White, fontSize = 11.sp)
-                    }
-                    
-                    Button(
-                        onClick = {
-                            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.weight(1f).height(40.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan.copy(alpha = 0.2f)),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Keyboard", color = Color.White, fontSize = 11.sp)
+                        Text("Enable Accessibility", color = Color.White, fontSize = 11.sp)
                     }
                 }
             }

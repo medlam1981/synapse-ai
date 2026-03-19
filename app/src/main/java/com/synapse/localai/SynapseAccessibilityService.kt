@@ -656,35 +656,8 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     // ===== TEXT INPUT & KEYBOARD MANAGEMENT =====
 
-    private var savedImeId: String? = null
-
-    /** Called when agent starts thinking — switch to Synapse keyboard */
-    fun switchToSynapseKeyboard() {
-        if (savedImeId != null) return // Already switched
-        val currentIme = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-        val myImeId = SynapseKeyboardIME.getImeId(this)
-        if (currentIme == myImeId) return // Already our keyboard
-        savedImeId = currentIme
-        Log.i(TAG, "Agent starting → switching IME to Synapse: $currentIme → $myImeId")
-        switchIme(myImeId)
-    }
-
-    /** Called when agent finishes — restore original keyboard */
-    fun restoreKeyboard() {
-        val oldIme = savedImeId ?: return
-        savedImeId = null
-        Log.i(TAG, "Agent done → restoring IME: $oldIme")
-        switchIme(oldIme)
-    }
-
     fun typeText(text: String): Boolean {
-        // Try IME first if available and selected
-        val ime = SynapseKeyboardIME.instance
-        if (ime != null && SynapseKeyboardIME.isSelected(this) && ime.hasInputConnection()) {
-            return ime.inputText(text, clear = true)
-        }
-        // Fallback to accessibility
-        val root = rootInActiveWindow ?: return false
+        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
         val focused = findFocusedEditable(root)
         root.recycle()
         if (focused != null) {
@@ -696,19 +669,6 @@ class SynapseAccessibilityService : AccessibilityService() {
             return result
         }
         return false
-    }
-
-    /** Switch IME using su command */
-    private fun switchIme(imeId: String): Boolean {
-        return try {
-            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c",
-                "settings put secure default_input_method $imeId"))
-            Thread { proc.waitFor() }.apply { isDaemon = true; start() }
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "switchIme failed: ${e.message}")
-            false
-        }
     }
 
     private fun findFocusedEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

@@ -241,9 +241,6 @@ CRITICAL RULES:
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
 
-        // Force switch to Synapse Keyboard for automation
-        viewModelScope.launch(Dispatchers.IO) { runShell("ime enable com.synapse.localai/.SynapseKeyboardIME && ime set com.synapse.localai/.SynapseKeyboardIME") }
-        
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }
             
@@ -372,7 +369,7 @@ CRITICAL RULES:
 
     private suspend fun runShell(cmd: String): String = withContext(Dispatchers.IO) {
         try {
-            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
             val reader = BufferedReader(InputStreamReader(proc.inputStream))
             val result = reader.readText()
             proc.waitFor()
