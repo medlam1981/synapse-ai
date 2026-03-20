@@ -811,7 +811,7 @@ fun AnimatedAtom(isSpinning: Boolean = true) {
     }
 }
 
-fun getCpuTemp(): String {
+fun getCpuTemp(): Int {
     try {
         var maxTempC = 0
         val dir = java.io.File("/sys/class/thermal/")
@@ -832,9 +832,9 @@ fun getCpuTemp(): String {
                 }
             }
         }
-        if (maxTempC > 0) return "${maxTempC}°C"
+        return maxTempC
     } catch (e: Exception) {}
-    return "--°C"
+    return 0
 }
 
 data class SystemStats(
@@ -843,6 +843,7 @@ data class SystemStats(
     val ramFree: String = "0GB",
     val storageFree: String = "0GB",
     val cpuTemp: String = "--°C",
+    val cpuTempInt: Int = 0,
     val cpuUsage: String = "0%"
 )
 
@@ -867,12 +868,16 @@ fun getSystemStats(context: android.content.Context): SystemStats {
     val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
     val storageFree = String.format("%.1f GB", stat.availableBlocksLong * stat.blockSizeLong / (1024.0 * 1024.0 * 1024.0))
 
+    val tempInt = getCpuTemp()
+    val tempStr = if (tempInt > 0) "${tempInt}°C" else "--°C"
+
     return SystemStats(
         battery = batLevel, 
         isCharging = isCharging,
         ramFree = ramFree, 
         storageFree = storageFree, 
-        cpuTemp = getCpuTemp(),
+        cpuTemp = tempStr,
+        cpuTempInt = tempInt,
         cpuUsage = if (AgentViewModel.instance?.uiState?.value?.isProcessing == true) "HIGH" else "IDLE"
     )
 }
@@ -979,7 +984,14 @@ fun SystemDashboard(context: android.content.Context) {
             Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Memory, contentDescription = "RAM", tint = NeonPurple, modifier = Modifier.size(iconSize)) }, label = "RAM", value = stats.ramFree) }
             Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.DeveloperBoard, contentDescription = "CPU", tint = NeonCyan, modifier = Modifier.size(iconSize)) }, label = "CPU", value = stats.cpuUsage) }
             Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Storage, contentDescription = "Disk", tint = AccentGlow, modifier = Modifier.size(iconSize)) }, label = "DISK", value = stats.storageFree) }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Thermostat, contentDescription = "Temperature", tint = Color(0xFFFF9F43), modifier = Modifier.size(iconSize)) }, label = "TEMP", value = stats.cpuTemp) }
+            
+            val tempColor = when {
+                stats.cpuTempInt <= 0 -> Color(0xFFFF9F43) // Unknown/Default
+                stats.cpuTempInt < 45 -> NeonCyan // Cool
+                stats.cpuTempInt < 65 -> Color(0xFFFF9F43) // Warm
+                else -> Color(0xFFFF3B30) // Hot
+            }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Thermostat, contentDescription = "Temperature", tint = tempColor, modifier = Modifier.size(iconSize)) }, label = "TEMP", value = stats.cpuTemp) }
         }
     }
 }
