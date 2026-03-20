@@ -339,9 +339,9 @@ class SynapseAccessibilityService : AccessibilityService() {
         }
 
         return if (rootArray.length() == 1) {
-            rootArray.getJSONObject(0).toString(2)
+            rootArray.getJSONObject(0).toString()
         } else {
-            JSONObject().put("windows", rootArray).toString(2)
+            JSONObject().put("windows", rootArray).toString()
         }
     }
 

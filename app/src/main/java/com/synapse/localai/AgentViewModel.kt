@@ -58,7 +58,9 @@ class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "AgentViewModel"
-        private const val MAX_HISTORY_MESSAGES = 20
+        private const val MAX_HISTORY_MESSAGES = 4
+        private const val MAX_TASK_ITERATIONS = 25
+        
         var instance: AgentViewModel? = null
             private set
 
@@ -291,6 +293,8 @@ CRITICAL RULES:
                     }
 
                     val fullResponse = responseSb.toString()
+                    Log.i(TAG, "RAW AGENT RESPONSE: $fullResponse")
+                    
                     if (fullResponse.isNotBlank()) {
                         val cleanResponse = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
                         synchronized(conversationHistory) {
@@ -319,6 +323,8 @@ CRITICAL RULES:
             } finally {
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
+                // Magic! Switch back to original keyboard when iteration loop finishes
+                SynapseAccessibilityService.instance?.restoreOriginalKeyboard()
             }
         }
     }
