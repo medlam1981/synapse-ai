@@ -36,9 +36,9 @@ data class AgentConfig(
     val localModelPath: String = "",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
-    val contextLength: Int = 16384,
+    val contextLength: Int = 4096,
     val threadCount: Int = 6,
-    val maxTokens: Int = 32768,
+    val maxTokens: Int = 4096,
     val temperature: Float = 0.1f
 )
 
@@ -99,7 +99,7 @@ class AgentViewModel : ViewModel() {
             localModelPath = savedPath ?: "",
             serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
             serverPort = prefs.getInt("server_port", 11434),
-            contextLength = prefs.getInt("context_length", 16384),
+            contextLength = prefs.getInt("context_length", 4096),
             threadCount = prefs.getInt("thread_count", 6),
             maxTokens = prefs.getInt("max_tokens", 2048),
             temperature = prefs.getFloat("temperature", 0.1f)
@@ -241,6 +241,9 @@ CRITICAL RULES:
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
 
+        // Magic! Try to auto-switch to Synapse Keyboard for automation (Rootless)
+        SynapseAccessibilityService.instance?.switchToSynapseKeyboard()
+        
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }
             
@@ -343,7 +346,9 @@ CRITICAL RULES:
         currentJob?.cancel()
         currentJob = null
         _uiState.update { it.copy(isProcessing = false) }
-        addLog(LogEntry(sender = "SYSTEM", text = "■ Stopped."))
+        
+        // Magic! Switch back to original keyboard
+        SynapseAccessibilityService.instance?.restoreOriginalKeyboard()
     }
 
     /** Called by Activity.onTrimMemory to reduce memory usage under pressure */
@@ -571,7 +576,6 @@ CRITICAL RULES:
         }
         _uiState.update { it.copy(logs = emptyList()) }
         prefs(context).edit().remove("saved_logs").remove("saved_history").apply()
-        addSystemLog("Conversation cleared. 🗑️")
     }
 
     // ========== TASK SCHEDULING ==========

@@ -8,12 +8,12 @@ No cloud dependencies. No privacy concerns. 100% Local.
 
 ## 🚀 Key Features & Major Upgrades
 
-### 1. 🦾 Autonomous Device Control (The Agent is Back!)
-The agent has been fully restored with its legendary capabilities to operate your Android device:
-* **Visual Perception:** Uses Android Accessibility Services to dump the screen state into a highly optimized, compact JSON tree.
-* **Auto-Execution Loop:** Executes multi-step actions (tap, scroll, swipe, open app, type) and waits for UI transitions before deciding the next move.
-* **Auto-Return (NEW):** Once a task is marked as complete, the agent automatically returns to the main chat interface to report the results.
-* **Synapse Keyboard:** Injects text flawlessly into any app's input fields using its dedicated custom IME.
+### 1. 🦾 Rootless Autonomous Control (NEW!)
+The agent can now operate your Android device **without root access**:
+* **Visual Perception:** Uses Android Accessibility Services to dump the screen state.
+* **Auto-Execution Loop:** Executes multi-step actions and waits for transitions.
+* **Magic Keyboard Switching:** Automatically requests and selects its dedicated **Synapse Keyboard** during tasks using Accessibility magic—no root required!
+* **Auto-Return:** Automatically returns to the main chat interface once a task is done.
 
 ### 2. 📊 Advanced System Dashboard (Real-time Stats)
 A fixed, high-tech dashboard sits below the banner, featuring precision Canvas-drawn icons and live hardware monitoring:

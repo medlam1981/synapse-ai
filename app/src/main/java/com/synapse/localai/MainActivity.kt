@@ -21,6 +21,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -396,22 +399,95 @@ fun ChatApp(viewModel: AgentViewModel) {
                 )
         )
 
-        // System Dashboard
+        // Subtle separator line
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Color.Transparent, NeonCyan.copy(alpha = 0.3f), NeonPurple.copy(alpha = 0.3f), Color.Transparent)
+                    )
+                )
+        )
+
+        // System Dashboard (Fixed)
         SystemDashboard(context = context)
 
-        // Chat Messages
-        LazyColumn(
-            state = listState,
+        Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(vertical = 12.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(uiState.logs, key = { it.id }) { log ->
-                val isLastAgentMessage = uiState.isProcessing && log.id == uiState.logs.lastOrNull { it.sender == "AGENT" }?.id
-                ChatBubble(log, isLastAgentMessage = isLastAgentMessage)
+            val lastUserLog = uiState.logs.lastOrNull { it.sender == "USER" }
+            val lastAgentLog = uiState.logs.lastOrNull { it.sender == "AGENT" }
+            val fullText = lastAgentLog?.text ?: ""
+            
+            // 1. Extract Thought
+            val thinkContent = if (fullText.contains("<think>")) {
+                val start = fullText.indexOf("<think>") + 7
+                val end = fullText.indexOf("</think>")
+                if (end != -1) fullText.substring(start, end).trim()
+                else fullText.substring(start).trim()
+            } else ""
+
+            // 2. Extract Actions/Results
+            val executionContent = if (fullText.contains("</think>")) {
+                fullText.substringAfter("</think>").trim()
+            } else if (!fullText.contains("<think>") && fullText.isNotEmpty()) {
+                fullText
+            } else ""
+
+            // --- BOX 1: USER COMMAND ---
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .border(
+                        BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Black.copy(alpha = 0.2f)))),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .background(MidNavy.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                    .padding(10.dp)
+            ) {
+                val scrollState = rememberScrollState()
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).offset(x = 1.dp, y = 1.dp)) {
+                    Text("USER COMMAND", color = NeonCyan.copy(alpha=0.6f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(text = lastUserLog?.text ?: "Waiting for input...", color = if (lastUserLog != null) NeonPurple else Color.White.copy(alpha = 0.3f), fontFamily = FontFamily.SansSerif, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+
+            // --- BOX 2: EXECUTION & RESULTS ---
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f) // Takes the rest of the space
+                    .border(
+                        BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.1f), Color.Black.copy(alpha = 0.4f)))),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .background(MidNavy.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                    .padding(10.dp)
+            ) {
+                val scrollState = rememberScrollState()
+                LaunchedEffect(executionContent) { scrollState.animateScrollTo(scrollState.maxValue) }
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).offset(x = 1.dp, y = 1.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AnimatedAtom(isSpinning = uiState.isProcessing)
+                        Text(if (uiState.isProcessing) "AGENT EXECUTION & RESULTS" else "STANDBY", color = NeonCyan.copy(alpha=0.8f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (executionContent.isNotEmpty()) executionContent else if (uiState.isProcessing) "Analyzing data and generating response..." else "",
+                        color = Color.White, 
+                        fontFamily = FontFamily.SansSerif, 
+                        fontSize = 12.sp, 
+                        lineHeight = 18.sp
+                    )
+                }
             }
         }
 
@@ -605,82 +681,17 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
         Spacer(modifier = Modifier.height(6.dp))
         
         val fullText = log.text
-        if (log.sender == "AGENT" && fullText.contains("<think>")) {
-            val thinkStart = fullText.indexOf("<think>")
-            val thinkEnd = fullText.indexOf("</think>")
-            
-            val beforeThink = fullText.substring(0, thinkStart).trim()
-            val thinkContent = if (thinkEnd != -1) {
-                fullText.substring(thinkStart + 7, thinkEnd).trim()
-            } else {
-                fullText.substring(thinkStart + 7).trim()
-            }
-            val afterThink = if (thinkEnd != -1) {
-                fullText.substring(thinkEnd + 8).trim()
-            } else {
-                ""
-            }
-
-            if (beforeThink.isNotEmpty()) {
-                Text(
-                    text = beforeThink,
-                    color = textColor,
-                    fontFamily = FontFamily.SansSerif,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    modifier = if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            
-            if (thinkContent.isNotEmpty() || thinkEnd == -1) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .border(engravedBorder, RoundedCornerShape(12.dp))
-                        .padding(12.dp)
-                ) {
-                    Column(modifier = Modifier.offset(x = 1.dp, y = 1.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AnimatedAtom(isSpinning = isLastAgentMessage && thinkEnd == -1)
-                            Text(
-                                "Thought Process", 
-                                color = NeonPurple.copy(alpha=0.7f), 
-                                fontSize = 10.sp, 
-                                fontWeight = FontWeight.Bold, 
-                                letterSpacing = 1.sp
-                            )
-                        }
-                        if (thinkContent.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = thinkContent,
-                                color = Color.White.copy(alpha = 0.6f),
-                                fontFamily = FontFamily.SansSerif,
-                                fontSize = 11.sp,
-                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                lineHeight = 16.sp
-                            )
-                        }
-                    }
-                }
-            }
-            
-            if (afterThink.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = afterThink,
-                    modifier = (if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier).then(if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier),
-                    color = textColor,
-                    fontFamily = FontFamily.SansSerif,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp
-                )
-            }
+        val displayOutput = if (log.sender == "AGENT" && fullText.contains("</think>")) {
+            fullText.substringAfter("</think>").trim()
+        } else if (log.sender == "AGENT" && fullText.contains("<think>")) {
+            "" // Still thinking, nothing to show in history yet
         } else {
+            fullText
+        }
+
+        if (displayOutput.isNotEmpty()) {
             Text(
-                text = log.text,
+                text = displayOutput,
                 modifier = (if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier).then(if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier),
                 color = textColor,
                 fontFamily = FontFamily.SansSerif,

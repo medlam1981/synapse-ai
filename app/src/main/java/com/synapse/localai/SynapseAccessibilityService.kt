@@ -84,7 +84,25 @@ class SynapseAccessibilityService : AccessibilityService() {
         if (event == null) return
         val eventPkg = event.packageName?.toString() ?: return
 
-        // Skip our own package events
+        // Magic: If we see any window or content change, try to auto-select our keyboard if the picker is open.
+        // The picker is usually in 'android' or 'com.android.settings' package.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || 
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            
+            val source = event.source
+            if (source != null) {
+                handleImePickerDialog(source)
+                source.recycle()
+            }
+            
+            val root = try { rootInActiveWindow } catch (_: Exception) { null }
+            if (root != null) {
+                handleImePickerDialog(root)
+                root.recycle()
+            }
+        }
+
+        // Skip our own app's UI events for general tracking
         if (eventPkg == packageName) return
 
         when (event.eventType) {
@@ -656,7 +674,86 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     // ===== TEXT INPUT & KEYBOARD MANAGEMENT =====
 
+    private var originalImeLabel: String? = null
+    private var isRestoringKeyboard = false
+
+    private fun getCurrentImeLabel(): String? {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        val currentId = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        return imm.enabledInputMethodList.find { it.id == currentId }?.loadLabel(packageManager)?.toString()
+    }
+
+    private var lastClickedIme = ""
+    private var lastClickTime = 0L
+
+    /** Automatically select the target keyboard in the picker dialog */
+    private fun handleImePickerDialog(root: AccessibilityNodeInfo) {
+        val targetLabel = if (isRestoringKeyboard) originalImeLabel else "Synapse AI Keyboard"
+        if (targetLabel == null) return
+
+        val now = System.currentTimeMillis()
+        if (targetLabel == lastClickedIme && now - lastClickTime < 2000) return
+
+        // Search for the exact or containing label
+        val nodes = root.findAccessibilityNodeInfosByText(targetLabel)
+        for (node in nodes) {
+            val nodeText = node.text?.toString() ?: ""
+            if (nodeText.contains(targetLabel, ignoreCase = true)) {
+                var clickable = node
+                while (clickable != null && !clickable.isClickable) {
+                    val p = clickable.parent
+                    if (p == null) break
+                    clickable = p
+                }
+                
+                if (clickable != null && clickable.isClickable) {
+                    Log.i(TAG, "Magic! Clicking $targetLabel in dialog...")
+                    clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    lastClickedIme = targetLabel
+                    lastClickTime = now
+                    isRestoringKeyboard = false 
+                    node.recycle()
+                    return
+                }
+            }
+            node.recycle()
+        }
+    }
+
+    fun switchToSynapseKeyboard() {
+        if (SynapseKeyboardIME.isSelected(this)) return
+        
+        // Save current IME to restore later
+        originalImeLabel = getCurrentImeLabel()
+        isRestoringKeyboard = false
+        
+        Log.i(TAG, "Switching to Synapse Keyboard (Original: $originalImeLabel)")
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        imm.showInputMethodPicker()
+    }
+
+    fun restoreOriginalKeyboard() {
+        if (!SynapseKeyboardIME.isSelected(this)) return
+        if (originalImeLabel == null) {
+            // If we don't know, just show picker for manual selection
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.showInputMethodPicker()
+            return
+        }
+
+        isRestoringKeyboard = true
+        Log.i(TAG, "Restoring original keyboard: $originalImeLabel")
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        imm.showInputMethodPicker()
+    }
+
     fun typeText(text: String): Boolean {
+        // Try IME first
+        val ime = SynapseKeyboardIME.instance
+        if (ime != null && SynapseKeyboardIME.isSelected(this) && ime.hasInputConnection()) {
+            return ime.inputText(text, clear = true)
+        }
+        // Fallback to accessibility
         val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
         val focused = findFocusedEditable(root)
         root.recycle()

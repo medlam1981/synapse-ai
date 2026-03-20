@@ -403,9 +403,9 @@ fun SettingsScreen(
                         val newConfig = config.copy(
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 11434,
-                            contextLength = contextLength.toIntOrNull() ?: 16384,
+                            contextLength = contextLength.toIntOrNull() ?: 4096,
                             threadCount = threadCount.toIntOrNull() ?: 6,
-                            maxTokens = maxTokens.toIntOrNull() ?: 16384,
+                            maxTokens = maxTokens.toIntOrNull() ?: 4096,
                             temperature = temperature
                         )
                         viewModel.saveConfig(context, newConfig)
@@ -448,13 +448,33 @@ fun SettingsScreen(
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         },
-                        modifier = Modifier.fillMaxWidth().height(40.dp),
+                        modifier = Modifier.weight(1f).height(40.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.2f)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("Enable Accessibility", color = Color.White, fontSize = 11.sp)
+                        Text("Accessibility", color = Color.White, fontSize = 11.sp)
+                    }
+                    
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Keyboard", color = Color.White, fontSize = 11.sp)
                     }
                 }
+                
+                Text(
+                    "Note: Synapse will 'magically' auto-select its keyboard during tasks if enabled above.",
+                    color = Color.White.copy(alpha = 0.3f),
+                    fontSize = 10.sp,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                )
             }
 
             // ═══════ ABOUT SECTION ═══════
