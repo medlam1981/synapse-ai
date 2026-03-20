@@ -58,6 +58,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -424,8 +425,8 @@ fun ChatApp(viewModel: AgentViewModel) {
             val lastUserLog = uiState.logs.lastOrNull { it.sender == "USER" }
             val lastAgentLog = uiState.logs.lastOrNull { it.sender == "AGENT" }
             val fullText = lastAgentLog?.text ?: ""
-            
-            // 1. Extract Thought
+
+            // Extract Thought Process
             val thinkContent = if (fullText.contains("<think>")) {
                 val start = fullText.indexOf("<think>") + 7
                 val end = fullText.indexOf("</think>")
@@ -433,38 +434,18 @@ fun ChatApp(viewModel: AgentViewModel) {
                 else fullText.substring(start).trim()
             } else ""
 
-            // 2. Extract Actions/Results
+            // Extract Actions/Results
             val executionContent = if (fullText.contains("</think>")) {
                 fullText.substringAfter("</think>").trim()
             } else if (!fullText.contains("<think>") && fullText.isNotEmpty()) {
                 fullText
             } else ""
 
-            // --- BOX 1: USER COMMAND ---
+            // --- BOX 1: EXECUTION & RESULTS ---
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .border(
-                        BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Black.copy(alpha = 0.2f)))),
-                        RoundedCornerShape(12.dp)
-                    )
-                    .background(MidNavy.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                    .padding(10.dp)
-            ) {
-                val scrollState = rememberScrollState()
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).offset(x = 1.dp, y = 1.dp)) {
-                    Text("USER COMMAND", color = NeonCyan.copy(alpha=0.6f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(text = lastUserLog?.text ?: "Waiting for input...", color = if (lastUserLog != null) NeonPurple else Color.White.copy(alpha = 0.3f), fontFamily = FontFamily.SansSerif, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                }
-            }
-
-            // --- BOX 2: EXECUTION & RESULTS ---
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f) // Takes the rest of the space
+                    .weight(2f) // Takes twice the space
                     .border(
                         BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.1f), Color.Black.copy(alpha = 0.4f)))),
                         RoundedCornerShape(12.dp)
@@ -472,20 +453,74 @@ fun ChatApp(viewModel: AgentViewModel) {
                     .background(MidNavy.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
                     .padding(10.dp)
             ) {
-                val scrollState = rememberScrollState()
-                LaunchedEffect(executionContent) { scrollState.animateScrollTo(scrollState.maxValue) }
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).offset(x = 1.dp, y = 1.dp)) {
+                Column(modifier = Modifier.fillMaxSize().offset(x = 1.dp, y = 1.dp)) {
+                    // Fixed Header
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AnimatedAtom(isSpinning = uiState.isProcessing)
                         Text(if (uiState.isProcessing) "AGENT EXECUTION & RESULTS" else "STANDBY", color = NeonCyan.copy(alpha=0.8f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
                     }
                     Spacer(modifier = Modifier.height(6.dp))
+                    // Scrollable Content
+                    val scrollState = rememberScrollState()
+                    LaunchedEffect(fullText) { scrollState.animateScrollTo(scrollState.maxValue) }
+                    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
+                        if (thinkContent.isNotEmpty()) {
+                            Text(
+                                text = thinkContent,
+                                color = Color.Yellow.copy(alpha = 0.8f),
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 11.sp,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                lineHeight = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        if (executionContent.isNotEmpty()) {
+                            Text(
+                                text = executionContent,
+                                color = Color.White, 
+                                fontFamily = FontFamily.SansSerif, 
+                                fontSize = 12.sp, 
+                                lineHeight = 18.sp
+                            )
+                        } else if (uiState.isProcessing && thinkContent.isEmpty()) {
+                            Text(
+                                text = "Analyzing data and generating response...",
+                                color = Color.White.copy(alpha = 0.5f), 
+                                fontFamily = FontFamily.SansSerif, 
+                                fontSize = 12.sp, 
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // --- BOX 2: USER COMMAND ---
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f) // Takes less space
+                    .border(
+                        BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Black.copy(alpha = 0.2f)))),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .background(MidNavy.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                    .padding(10.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxSize().offset(x = 1.dp, y = 1.dp)) {
+                    // Fixed Header
+                    Text("USER COMMAND", color = NeonCyan.copy(alpha=0.6f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // Scrollable Content
+                    val scrollState = rememberScrollState()
                     Text(
-                        text = if (executionContent.isNotEmpty()) executionContent else if (uiState.isProcessing) "Analyzing data and generating response..." else "",
-                        color = Color.White, 
+                        text = lastUserLog?.text ?: "Waiting for input...", 
+                        color = Color.White.copy(alpha = if (lastUserLog != null) 1f else 0.3f), 
                         fontFamily = FontFamily.SansSerif, 
-                        fontSize = 12.sp, 
-                        lineHeight = 18.sp
+                        fontSize = 11.sp, 
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.fillMaxSize().verticalScroll(scrollState)
                     )
                 }
             }
@@ -903,7 +938,9 @@ fun SystemDashboard(context: android.content.Context) {
             lineHeight = 13.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp,
-            fontFamily = FontFamily.SansSerif
+            textAlign = TextAlign.Center,
+            fontFamily = FontFamily.SansSerif,
+            modifier = Modifier.fillMaxWidth()
         )
         
         Row(
