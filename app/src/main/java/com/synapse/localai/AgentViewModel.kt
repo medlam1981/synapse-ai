@@ -196,33 +196,33 @@ class AgentViewModel : ViewModel() {
     // ========== synapse-ai-portal CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are a highly advanced AI agent capable of operating an Android device. Your goal is to achieve the user's request.
+        return """You are an AI agent operating an Android device. You must accomplish the user's task by looking at the screen context and taking ONE action at a time.
 
-### TASK EXECUTION FORMAT ###
-You MUST output your response exactly in this format for EVERY single step:
+CRITICAL: DO NOT use <add_memory> or <plan> tags. They are forbidden.
+
+### FORMAT ###
+You MUST output your response exactly like this example:
 
 <think>
-Analyze the screen. Think step-by-step about what needs to be done.
+I need to open the settings app.
 </think>
->>> {"action": "action_name", "text": "optional", "index": 0, "direction": "down"}
+>>> {"action": "open_app", "text": "Settings"}
 
 ### AVAILABLE ACTIONS ###
-Use ONLY these JSON actions (prefixed with >>>):
 - >>> {"action": "open_app", "text": "app name"}
-- >>> {"action": "tap_index", "index": 12} (Tap an element using its [idx] from the screen tree)
-- >>> {"action": "click_text", "text": "Submit"} (Tap text on screen)
-- >>> {"action": "type", "text": "hello"} (Types into focused field)
+- >>> {"action": "tap_index", "index": 12}
+- >>> {"action": "click_text", "text": "Submit"}
+- >>> {"action": "type", "text": "hello"}
 - >>> {"action": "back"}
 - >>> {"action": "home"}
-- >>> {"action": "scroll", "direction": "down|up"}
-- >>> {"action": "swipe", "direction": "left|right|up|down"}
-- >>> {"action": "complete"} (Use this when the task is fully completed)
+- >>> {"action": "scroll", "direction": "down"}
+- >>> {"action": "swipe", "direction": "left"}
+- >>> {"action": "complete"}
 
-CRITICAL RULES:
-1. ALWAYS use `tap_index` if the element has an [idx] number in the screen tree!
-2. You MUST provide exactly ONE action per response.
-3. Do NOT converse in plain text. ONLY output the <think> block and the JSON action.
-4. If you need to remember something, write it inside your <think> block."""
+RULES:
+1. ALWAYS use `tap_index` if the target element has an [idx] in the screen tree!
+2. Do NOT output anything else. Only <think> and the JSON.
+3. Only ONE action per response."""
     }
 
     // ========== CHAT ==========
@@ -410,8 +410,8 @@ CRITICAL RULES:
         if (jsonStr == null) {
             Log.w(TAG, "No valid action JSON found in response.")
             val currentScreen = getScreenContent().take(2000)
-            val feedback = "[System Error] You stopped without providing an action. You MUST end your response with an action exactly like this: >>> {\"action\": \"action_name\"}\n\n[Current Screen Context]\n$currentScreen"
-            addSystemLog("⚠️ Model forgot to provide an action. Nudging it to continue...")
+            val feedback = "[System Error] You did not provide a valid action. DO NOT use <add_memory> or <plan> tags. You MUST output ONLY your <think> block followed immediately by an action like this: >>> {\"action\": \"action_name\"}\n\n[Current Screen Context]\n$currentScreen"
+            addSystemLog("⚠️ Agent deviated from format. Sending course-correction nudge...")
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
             }
