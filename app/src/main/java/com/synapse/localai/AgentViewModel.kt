@@ -196,26 +196,15 @@ class AgentViewModel : ViewModel() {
     // ========== synapse-ai-portal CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are an agent who can operate an Android phone. Your goal is to track progress and devise plans to achieve the user's requests.
+        return """You are a highly advanced AI agent capable of operating an Android device. Your goal is to achieve the user's request.
 
 ### TASK EXECUTION FORMAT ###
-You MUST output your response exactly in this format for EVERY step:
+You MUST output your response exactly in this format for EVERY single step:
 
 <think>
-Analyze the current screen carefully. Think step-by-step about what needs to be done next.
+Analyze the screen. Think step-by-step about what needs to be done.
 </think>
-
-<add_memory>
-Store important information here with step context (e.g., "At step 1, I found the setting").
-</add_memory>
-
-<plan>
-1. Completed step
-2. CURRENT STEP: what to do now
-3. Future step
-</plan>
-
->>> {"action": "action_name", "text": "optional_text", "index": 0, "direction": "down"}
+>>> {"action": "action_name", "text": "optional", "index": 0, "direction": "down"}
 
 ### AVAILABLE ACTIONS ###
 Use ONLY these JSON actions (prefixed with >>>):
@@ -227,11 +216,13 @@ Use ONLY these JSON actions (prefixed with >>>):
 - >>> {"action": "home"}
 - >>> {"action": "scroll", "direction": "down|up"}
 - >>> {"action": "swipe", "direction": "left|right|up|down"}
+- >>> {"action": "complete"} (Use this when the task is fully completed)
 
 CRITICAL RULES:
 1. ALWAYS use `tap_index` if the element has an [idx] number in the screen tree!
-2. Do NOT converse in plain text. ONLY output the tags and the JSON action.
-3. If the task is fully completed, output >>> {"action": "complete"}"""
+2. You MUST provide exactly ONE action per response.
+3. Do NOT converse in plain text. ONLY output the <think> block and the JSON action.
+4. If you need to remember something, write it inside your <think> block."""
     }
 
     // ========== CHAT ==========
@@ -402,10 +393,6 @@ CRITICAL RULES:
 
     private suspend fun executeToolLoop(response: String): Boolean {
         // Try to find the JSON action robustly.
-        // 1. Look for >>> prefix
-        // 2. Look for JSON block ```json ... ```
-        // 3. Look for any valid-looking action JSON object
-        
         var jsonStr: String? = response.lines()
             .find { it.trimStart().startsWith(">>>") }
             ?.substringAfter(">>>")?.trim()
@@ -420,7 +407,16 @@ CRITICAL RULES:
             jsonStr = match?.value?.trim()
         }
 
-        if (jsonStr == null) return false
+        if (jsonStr == null) {
+            Log.w(TAG, "No valid action JSON found in response.")
+            val currentScreen = getScreenContent().take(2000)
+            val feedback = "[System Error] You stopped without providing an action. You MUST end your response with an action exactly like this: >>> {\"action\": \"action_name\"}\n\n[Current Screen Context]\n$currentScreen"
+            addSystemLog("⚠️ Model forgot to provide an action. Nudging it to continue...")
+            synchronized(conversationHistory) {
+                conversationHistory.add("user" to feedback)
+            }
+            return true // Continue loop to give it a chance to output the action
+        }
         
         _uiState.update { it.copy(shouldMinimize = true) }
         delay(300) // Wait for app to minimize

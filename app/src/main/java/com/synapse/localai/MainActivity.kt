@@ -813,12 +813,26 @@ fun AnimatedAtom(isSpinning: Boolean = true) {
 
 fun getCpuTemp(): String {
     try {
-        val tempFile = java.io.File("/sys/class/thermal/thermal_zone0/temp")
-        if (tempFile.exists()) {
-            val tempRaw = tempFile.readText().trim().toIntOrNull() ?: 0
-            val tempC = if (tempRaw > 1000) tempRaw / 1000 else tempRaw
-            if (tempC in 1..150) return "${tempC}°C"
+        var maxTempC = 0
+        val dir = java.io.File("/sys/class/thermal/")
+        if (dir.exists() && dir.isDirectory) {
+            val zones = dir.listFiles { file -> file.name.startsWith("thermal_zone") }
+            if (zones != null) {
+                for (zone in zones) {
+                    val tempFile = java.io.File(zone, "temp")
+                    if (tempFile.exists()) {
+                        try {
+                            val tempRaw = tempFile.readText().trim().toIntOrNull() ?: continue
+                            val tempC = if (tempRaw > 1000) tempRaw / 1000 else tempRaw
+                            if (tempC in 25..110 && tempC > maxTempC) {
+                                maxTempC = tempC
+                            }
+                        } catch (e: Exception) {}
+                    }
+                }
+            }
         }
+        if (maxTempC > 0) return "${maxTempC}°C"
     } catch (e: Exception) {}
     return "--°C"
 }
