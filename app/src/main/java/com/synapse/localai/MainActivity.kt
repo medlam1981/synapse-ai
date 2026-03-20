@@ -14,6 +14,9 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -22,31 +25,40 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.DeveloperBoard
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.invisibleToUser
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import java.util.UUID
 
 // Theme colors matching the brain logo
@@ -200,24 +212,36 @@ fun ChatApp(viewModel: AgentViewModel) {
     }
 
     if (showAboutDialog) {
+        val engravedBorder = BorderStroke(
+            width = 1.dp,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.Black.copy(alpha = 0.5f),
+                    Color.White.copy(alpha = 0.08f)
+                )
+            )
+        )
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
-            title = { Text("Synapse AI Capabilities \uD83E\uDDE0", color = NeonCyan, fontWeight = FontWeight.Bold) },
+            modifier = Modifier.border(engravedBorder, RoundedCornerShape(28.dp)),
+            title = { Text("Synapse AI Capabilities 🧠", color = NeonCyan, fontWeight = FontWeight.Bold, modifier = Modifier.offset(1.dp, 1.dp)) },
             text = {
                 Text(
-                    "Synapse is an advanced, fully autonomous on-device Neural Agent.\n\n" +
-                    "• ⚡ 100% Local Inference: Your data never leaves the device.\n" +
-                    "• \uD83D\uDC41\uFE0F Visual Perception: Sees screen UI trees instantly.\n" +
-                    "• \uD83E\uDD16 Autonomous Control: Operates your device like a human.\n" +
-                    "• \uD83D\uDD11 Deep System Hooks: Custom IME and Accessibility tracking.\n" +
-                    "• \uD83D\uDE80 Built for Speed: Utilizes mmap and advanced thread batching.",
-                    color = Color.White,
-                    fontSize = 14.sp
+                    "I am Synapse, your autonomous on-device Neural Agent.\n\n" +
+                            "• 100% Local & Private Execution\n" +
+                            "• Visual Screen Perception & Analysis\n" +
+                            "• Multi-step Autonomous Task Planning\n" +
+                            "• Rootless Device Control (Gestures & Text)\n" +
+                            "• Ollama-Compatible Local Server",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.offset(1.dp, 1.dp)
                 )
             },
             confirmButton = {
                 TextButton(onClick = { showAboutDialog = false }) {
-                    Text("OK", color = NeonPurple)
+                    Text("AWESOME", color = NeonPurple)
                 }
             },
             containerColor = DarkCard,
@@ -255,7 +279,11 @@ fun ChatApp(viewModel: AgentViewModel) {
                 Image(
                     painter = painterResource(id = R.drawable.super_android_logo),
                     contentDescription = "Synapse AI",
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .shadow(elevation = 8.dp, shape = CircleShape, clip = false)
+                        .offset(y = 2.dp),
+                    colorFilter = ColorFilter.tint(Color.White),
                     contentScale = ContentScale.Fit
                 )
                 Column(modifier = Modifier.weight(1f)) {
@@ -272,7 +300,9 @@ fun ChatApp(viewModel: AgentViewModel) {
                         fontSize = 10.sp,
                         letterSpacing = 1.sp,
                         maxLines = 1,
-                        modifier = Modifier.basicMarquee()
+                        modifier = Modifier
+                            .basicMarquee()
+                            .offset(x = 1.dp, y = 1.dp)
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -425,69 +455,81 @@ private fun ChatInputBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            OutlinedTextField(
-                value = inputText,
-                onValueChange = { inputText = it },
-                placeholder = {
-                    Text(
-                        "Ask me anything...",
-                        color = Color.White.copy(alpha = 0.15f),
-                        fontSize = 12.sp
-                    )
-                },
-                modifier = Modifier.weight(1f),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontFamily = FontFamily.SansSerif,
-                    fontSize = 11.sp,
-                    color = Color.White
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NeonCyan.copy(alpha = 0.3f),
-                    unfocusedBorderColor = NeonPurple.copy(alpha = 0.1f),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    cursorColor = NeonCyan,
-                    focusedContainerColor = MidNavy.copy(alpha = 0.5f),
-                    unfocusedContainerColor = DarkCard.copy(alpha = 0.5f)
-                ),
-                shape = RoundedCornerShape(24.dp),
-                singleLine = false,
-                maxLines = 3,
-                leadingIcon = {
+        val engravedBorder = BorderStroke(
+            width = 1.dp,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.Black.copy(alpha = 0.6f),
+                    Color.White.copy(alpha = 0.1f)
+                )
+            )
+        )
+        OutlinedTextField(
+            value = inputText,
+            onValueChange = { inputText = it },
+            placeholder = {
+                Text(
+                    "Ask me anything...",
+                    color = Color.White.copy(alpha = 0.3f),
+                    fontSize = 12.sp,
+                    modifier = Modifier.offset(x = 1.dp, y = 1.dp)
+                )
+            },
+            modifier = Modifier
+                .weight(1f)
+                .border(engravedBorder, RoundedCornerShape(24.dp)),
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontSize = 11.sp,
+                color = Color.White
+            ),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color.Transparent,
+                unfocusedBorderColor = Color.Transparent,
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = NeonCyan,
+                focusedContainerColor = Color.Black.copy(alpha = 0.2f),
+                unfocusedContainerColor = Color.Black.copy(alpha = 0.2f)
+            ),
+            shape = RoundedCornerShape(24.dp),
+            singleLine = false,
+            maxLines = 3,
+            leadingIcon = {
+                IconButton(
+                    onClick = { launcher.launch("*/*") },
+                    modifier = Modifier.size(36.dp).offset(x = 1.dp, y = 1.dp)
+                ) {
+                    Text("📎", fontSize = 18.sp, color = NeonCyan.copy(alpha = 0.7f))
+                }
+            },
+            trailingIcon = {
+                Box(modifier = Modifier.padding(end = 4.dp).offset(x = 1.dp, y = 1.dp)) {
                     IconButton(
-                        onClick = { launcher.launch("*/*") },
+                        onClick = {
+                            if (isProcessing) {
+                                onStop()
+                            } else if (inputText.isNotBlank()) {
+                                onSend(inputText.trim())
+                                inputText = ""
+                            }
+                        },
+                        enabled = inputText.isNotBlank() || isProcessing,
                         modifier = Modifier.size(36.dp)
                     ) {
-                        Text("📎", fontSize = 18.sp, color = NeonCyan.copy(alpha = 0.7f))
-                    }
-                },
-                trailingIcon = {
-                    Box(modifier = Modifier.padding(end = 4.dp)) {
-                        IconButton(
-                            onClick = {
-                                if (isProcessing) {
-                                    onStop()
-                                } else if (inputText.isNotBlank()) {
-                                    onSend(inputText.trim())
-                                    inputText = ""
-                                }
-                            },
-                            enabled = inputText.isNotBlank() || isProcessing,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Text(
-                                if (isProcessing) "\u25A0" else "\u25B6",
-                                fontSize = 18.sp,
-                                color = when {
-                                    isProcessing -> Color(0xFFFF3B30)
-                                    inputText.isNotBlank() -> NeonCyan
-                                    else -> NeonCyan.copy(alpha = 0.3f)
-                                }
-                            )
-                        }
+                        Text(
+                            if (isProcessing) "■" else "▶",
+                            fontSize = 18.sp,
+                            color = when {
+                                isProcessing -> Color(0xFFFF3B30)
+                                inputText.isNotBlank() -> NeonCyan
+                                else -> NeonCyan.copy(alpha = 0.3f)
+                            }
+                        )
                     }
                 }
-            )
+            }
+        )
         }
     }
 }
@@ -497,11 +539,23 @@ private fun ChatInputBar(
 fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
     val isUser = log.sender == "USER"
     val isSystem = log.sender == "SYSTEM"
-    
-    val bubbleColor = when {
-        isSystem -> Color.Transparent
-        isUser -> MidNavy.copy(alpha = 0.6f)
-        else -> Color.Transparent
+
+    val engravedBorder = BorderStroke(
+        width = 1.dp,
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color.Black.copy(alpha = 0.4f),
+                Color.White.copy(alpha = 0.08f)
+            )
+        )
+    )
+
+    val contentModifier = if (isUser) {
+        Modifier
+            .border(engravedBorder, RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    } else {
+        Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
     }
     
     val textColor = when {
@@ -526,10 +580,13 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(bubbleColor, RoundedCornerShape(if (isUser) 12.dp else 0.dp))
-            .padding(if (isUser) 12.dp else 0.dp)
+            .then(contentModifier)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically, 
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier
+        ) {
             if (!isSystem) {
                 Box(
                     modifier = Modifier
@@ -545,7 +602,7 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
                 letterSpacing = 1.5.sp
             )
         }
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         
         val fullText = log.text
         if (log.sender == "AGENT" && fullText.contains("<think>")) {
@@ -570,9 +627,10 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
                     color = textColor,
                     fontFamily = FontFamily.SansSerif,
                     fontSize = 13.sp,
-                    lineHeight = 18.sp
+                    lineHeight = 18.sp,
+                    modifier = if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
             }
             
             if (thinkContent.isNotEmpty() || thinkEnd == -1) {
@@ -580,11 +638,10 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
-                        .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                        .border(1.dp, NeonPurple.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .border(engravedBorder, RoundedCornerShape(12.dp))
                         .padding(12.dp)
                 ) {
-                    Column {
+                    Column(modifier = Modifier.offset(x = 1.dp, y = 1.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             AnimatedAtom(isSpinning = isLastAgentMessage && thinkEnd == -1)
                             Text(
@@ -599,7 +656,7 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = thinkContent,
-                                color = Color.White.copy(alpha = 0.5f),
+                                color = Color.White.copy(alpha = 0.6f),
                                 fontFamily = FontFamily.SansSerif,
                                 fontSize = 11.sp,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
@@ -611,10 +668,10 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
             }
             
             if (afterThink.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = afterThink,
-                    modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
+                    modifier = (if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier).then(if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier),
                     color = textColor,
                     fontFamily = FontFamily.SansSerif,
                     fontSize = 13.sp,
@@ -624,7 +681,7 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
         } else {
             Text(
                 text = log.text,
-                modifier = if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier,
+                modifier = (if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier).then(if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier),
                 color = textColor,
                 fontFamily = FontFamily.SansSerif,
                 fontSize = 12.sp,
@@ -722,6 +779,7 @@ fun getCpuTemp(): String {
 
 data class SystemStats(
     val battery: Int = 100,
+    val isCharging: Boolean = false,
     val ramFree: String = "0GB",
     val storageFree: String = "0GB",
     val cpuTemp: String = "--°C",
@@ -732,6 +790,12 @@ fun getSystemStats(context: android.content.Context): SystemStats {
     // Battery
     val bm = context.getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
     val batLevel = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    
+    val ifilter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+    val batteryStatus = context.registerReceiver(null, ifilter)
+    val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+    val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                     status == android.os.BatteryManager.BATTERY_STATUS_FULL
 
     // RAM
     val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
@@ -745,6 +809,7 @@ fun getSystemStats(context: android.content.Context): SystemStats {
 
     return SystemStats(
         battery = batLevel, 
+        isCharging = isCharging,
         ramFree = ramFree, 
         storageFree = storageFree, 
         cpuTemp = getCpuTemp(),
@@ -794,10 +859,20 @@ fun SystemDashboard(context: android.content.Context) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(DarkCard, RoundedCornerShape(12.dp))
-            .border(1.dp, NeonCyan.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .border(
+                BorderStroke(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.5f),
+                            Color.White.copy(alpha = 0.08f)
+                        )
+                    )
+                ),
+                shape = RoundedCornerShape(16.dp)
+            )
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AnimatedAtom(isSpinning = false)
@@ -825,129 +900,26 @@ fun SystemDashboard(context: android.content.Context) {
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             val weight = 1f
-            Box(Modifier.weight(weight)) { StatBadge(icon = { BatteryIcon(stats.battery) }, label = "PWR", value = "${stats.battery}%") }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { ChipIcon() }, label = "RAM", value = stats.ramFree) }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { CpuIcon() }, label = "CPU", value = stats.cpuUsage) }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { StorageIcon() }, label = "DISK", value = stats.storageFree) }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { TempIcon() }, label = "TEMP", value = stats.cpuTemp) }
+            val iconSize = 10.dp
+            Box(Modifier.weight(weight)) { 
+                StatBadge(
+                    icon = { 
+                        Icon(
+                            if (stats.isCharging) androidx.compose.material.icons.Icons.Filled.BatteryChargingFull else androidx.compose.material.icons.Icons.Filled.BatteryFull, 
+                            contentDescription = "Battery", 
+                            tint = if (stats.isCharging) NeonMagenta else NeonCyan,
+                            modifier = Modifier.size(iconSize)
+                        ) 
+                    }, 
+                    label = "PWR", 
+                    value = "${stats.battery}%"
+                ) 
+            }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Memory, contentDescription = "RAM", tint = NeonPurple, modifier = Modifier.size(iconSize)) }, label = "RAM", value = stats.ramFree) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.DeveloperBoard, contentDescription = "CPU", tint = NeonCyan, modifier = Modifier.size(iconSize)) }, label = "CPU", value = stats.cpuUsage) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Storage, contentDescription = "Disk", tint = AccentGlow, modifier = Modifier.size(iconSize)) }, label = "DISK", value = stats.storageFree) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Thermostat, contentDescription = "Temperature", tint = Color(0xFFFF9F43), modifier = Modifier.size(iconSize)) }, label = "TEMP", value = stats.cpuTemp) }
         }
-    }
-}
-
-@Composable
-fun BatteryIcon(level: Int) {
-    Canvas(modifier = Modifier.size(12.dp)) {
-        val stroke = 1.dp.toPx()
-        val w = size.width
-        val h = size.height
-        // Body
-        drawRoundRect(
-            color = if (level < 20) Color(0xFFEF4444) else NeonCyan.copy(alpha = 0.8f),
-            size = androidx.compose.ui.geometry.Size(w * 0.85f, h * 0.6f),
-            topLeft = androidx.compose.ui.geometry.Offset(0f, h * 0.2f),
-            style = Stroke(width = stroke),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
-        )
-        // Tip
-        drawRect(
-            color = NeonCyan.copy(alpha = 0.8f),
-            size = androidx.compose.ui.geometry.Size(w * 0.1f, h * 0.25f),
-            topLeft = androidx.compose.ui.geometry.Offset(w * 0.88f, h * 0.375f)
-        )
-        // Fill
-        drawRect(
-            color = if (level < 20) Color(0xFFEF4444) else NeonCyan.copy(alpha = 0.5f),
-            size = androidx.compose.ui.geometry.Size((w * 0.75f) * (level / 100f), h * 0.4f),
-            topLeft = androidx.compose.ui.geometry.Offset(w * 0.05f, h * 0.3f)
-        )
-    }
-}
-
-@Composable
-fun ChipIcon() {
-    Canvas(modifier = Modifier.size(12.dp)) {
-        val stroke = 0.8.dp.toPx()
-        val s = size.width
-        // Main square
-        drawRect(
-            color = NeonPurple.copy(alpha = 0.8f),
-            style = Stroke(width = stroke),
-            size = androidx.compose.ui.geometry.Size(s * 0.7f, s * 0.7f),
-            topLeft = androidx.compose.ui.geometry.Offset(s * 0.15f, s * 0.15f)
-        )
-        // Pins
-        val pinLen = s * 0.15f
-        for (i in 0..2) {
-            val pos = s * 0.3f + (i * s * 0.2f)
-            // Top
-            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(pos, 0f), androidx.compose.ui.geometry.Offset(pos, pinLen), stroke)
-            // Bottom
-            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(pos, s), androidx.compose.ui.geometry.Offset(pos, s - pinLen), stroke)
-            // Left
-            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(0f, pos), androidx.compose.ui.geometry.Offset(pinLen, pos), stroke)
-            // Right
-            drawLine(NeonPurple.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s, pos), androidx.compose.ui.geometry.Offset(s - pinLen, pos), stroke)
-        }
-    }
-}
-
-@Composable
-fun StorageIcon() {
-    Canvas(modifier = Modifier.size(12.dp)) {
-        val stroke = 0.8.dp.toPx()
-        val w = size.width
-        val h = size.height
-        // Drive body
-        drawRect(
-            color = AccentGlow.copy(alpha = 0.8f),
-            style = Stroke(width = stroke),
-            size = androidx.compose.ui.geometry.Size(w * 0.8f, h * 0.9f),
-            topLeft = androidx.compose.ui.geometry.Offset(w * 0.1f, 0f)
-        )
-        // Platters circle
-        drawCircle(
-            color = AccentGlow.copy(alpha = 0.4f),
-            radius = w * 0.25f,
-            center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.4f),
-            style = Stroke(width = stroke)
-        )
-        // Arm
-        drawLine(
-            color = AccentGlow.copy(alpha = 0.8f),
-            start = androidx.compose.ui.geometry.Offset(w * 0.8f, h * 0.8f),
-            end = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.5f),
-            strokeWidth = stroke
-        )
-    }
-}
-
-@Composable
-fun TempIcon() {
-    Canvas(modifier = Modifier.size(12.dp)) {
-        val stroke = 1.dp.toPx()
-        val w = size.width
-        val h = size.height
-        // Thermometer stem
-        drawRoundRect(
-            color = Color(0xFFFF9F43).copy(alpha = 0.8f),
-            size = androidx.compose.ui.geometry.Size(w * 0.3f, h * 0.7f),
-            topLeft = androidx.compose.ui.geometry.Offset(w * 0.35f, 0f),
-            style = Stroke(width = stroke),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.15f)
-        )
-        // Bulb
-        drawCircle(
-            color = Color(0xFFFF9F43).copy(alpha = 0.8f),
-            radius = w * 0.25f,
-            center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.75f),
-            style = Stroke(width = stroke)
-        )
-        // Inner fill
-        drawCircle(
-            color = Color(0xFFFF9F43).copy(alpha = 0.6f),
-            radius = w * 0.12f,
-            center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.75f)
-        )
     }
 }
 
@@ -956,13 +928,26 @@ fun StatBadge(icon: @Composable () -> Unit, label: String, value: String) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(12.dp))
             .fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+            .border(
+                BorderStroke(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.1f),
+                            Color.Black.copy(alpha = 0.2f)
+                        )
+                    )
+                ),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .background(DarkCard)
             .padding(horizontal = 4.dp, vertical = 6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             icon()
-            Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = Color.White.copy(alpha = 0.6f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(value, color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)

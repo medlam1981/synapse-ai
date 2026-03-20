@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -482,22 +483,44 @@ private fun SettingsCard(
     statusText: String? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = DarkCard),
-        shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                BorderStroke(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.5f),
+                            Color.White.copy(alpha = 0.08f)
+                        )
+                    )
+                ),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .padding(1.dp) // Clip the inner content
+            .background(DarkCard, RoundedCornerShape(15.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(title, color = titleColor, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
+                Text(
+                    title, 
+                    color = titleColor, 
+                    fontWeight = FontWeight.Bold, 
+                    fontSize = 14.sp, 
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.offset(x = 1.dp, y = 1.dp)
+                )
                 if (statusDot != null && statusText != null) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.offset(x = 1.dp, y = 1.dp)
                     ) {
                         Box(
                             modifier = Modifier
@@ -510,7 +533,6 @@ private fun SettingsCard(
             }
             Divider(color = titleColor.copy(alpha = 0.1f))
             content()
-        }
     }
 }
 
