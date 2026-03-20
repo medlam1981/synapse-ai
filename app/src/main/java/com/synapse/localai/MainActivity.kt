@@ -467,7 +467,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                         if (thinkContent.isNotEmpty()) {
                             Text(
                                 text = thinkContent,
-                                color = Color.Yellow.copy(alpha = 0.8f),
+                                color = Color.Gray.copy(alpha = 0.8f),
                                 fontFamily = FontFamily.SansSerif,
                                 fontSize = 11.sp,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
@@ -920,16 +920,15 @@ fun SystemDashboard(context: android.content.Context) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AnimatedAtom(isSpinning = false)
-            Text(
-                "SYNAPSE SYSTEM ACTIVE",
-                color = NeonCyan,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 2.sp
-            )
-        }
+        Text(
+            "SYNAPSE SYSTEM ACTIVE",
+            color = NeonCyan,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 2.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
         
         Text(
             "WELCOME TO SYNAPSE. YOUR PRIVATE NEURAL ENGINE IS ACTIVE. EXPERIENCE UNRIVALED ON-DEVICE INTELLIGENCE WITH ZERO CLOUD LATENCY. SYSTEM READY FOR COMPUTATION.",
