@@ -434,8 +434,9 @@ CRITICAL RULES:
                 "<invoke name=\"${match.groupValues[1]}\"></invoke>"
             }
             
-            val invokeRegex = "<invoke\\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)</invoke>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val paramRegex = "<parameter\\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)</parameter>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            // Match invoke block even if </invoke> is missing (matches until next <invoke or end of string)
+            val invokeRegex = "<invoke\\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)(?=</invoke>|<invoke|$)".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val paramRegex = "<parameter\\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)(?=</parameter>|<parameter|$)".toRegex(RegexOption.DOT_MATCHES_ALL)
             
             val invokes = invokeRegex.findAll(invokesBlock).toList()
             

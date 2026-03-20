@@ -821,6 +821,17 @@ class SynapseAccessibilityService : AccessibilityService() {
             val pm = packageManager
             val normalizedName = appName.trim().lowercase()
 
+            // Try if appName is directly a valid package name (like "com.synapse.localai")
+            if (appName.contains(".")) {
+                val directIntent = pm.getLaunchIntentForPackage(appName)
+                if (directIntent != null) {
+                    directIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    startActivity(directIntent)
+                    Log.d(TAG, "Launched direct package: $appName")
+                    return true
+                }
+            }
+
             // Try direct package name mapping first
             val mappedPackage = APP_NAME_MAP[normalizedName]
             if (mappedPackage != null) {
