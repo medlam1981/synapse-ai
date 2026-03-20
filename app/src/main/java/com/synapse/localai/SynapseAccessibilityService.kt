@@ -819,50 +819,19 @@ class SynapseAccessibilityService : AccessibilityService() {
     fun launchApp(appName: String): Boolean {
         try {
             val pm = packageManager
-            val normalizedName = appName.trim().lowercase()
-
-            // Try if appName is directly a valid package name (like "com.synapse.localai")
-            if (appName.contains(".")) {
-                val directIntent = pm.getLaunchIntentForPackage(appName)
-                if (directIntent != null) {
-                    directIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    startActivity(directIntent)
-                    Log.d(TAG, "Launched direct package: $appName")
-                    return true
-                }
-            }
-
-            // Try direct package name mapping first
-            val mappedPackage = APP_NAME_MAP[normalizedName]
-            if (mappedPackage != null) {
-                val launchIntent = pm.getLaunchIntentForPackage(mappedPackage)
+            val resolvedPkg = resolvePackageName(appName)
+            
+            if (resolvedPkg != null) {
+                val launchIntent = pm.getLaunchIntentForPackage(resolvedPkg)
                 if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     startActivity(launchIntent)
-                    Log.d(TAG, "Launched via map: $mappedPackage")
+                    Log.d(TAG, "Launched app: $resolvedPkg")
                     return true
                 }
             }
-
-            // Fallback: search installed apps by label
-            val intent = pm.queryIntentActivities(
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
-            )
-            val match = intent.find {
-                it.loadLabel(pm).toString().equals(appName, ignoreCase = true)
-            } ?: intent.find {
-                it.loadLabel(pm).toString().contains(appName, ignoreCase = true)
-            }
-            if (match != null) {
-                val launchIntent = pm.getLaunchIntentForPackage(match.activityInfo.packageName)
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(launchIntent)
-                    Log.d(TAG, "Launched: ${match.loadLabel(pm)} (${match.activityInfo.packageName})")
-                    return true
-                }
-            }
-            Log.w(TAG, "App not found: $appName")
+            
+            Log.w(TAG, "App not found or not launchable: $appName")
             return false
         } catch (e: Exception) {
             Log.e(TAG, "launchApp failed", e)
@@ -948,21 +917,28 @@ class SynapseAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {}
 
         // Try APP_NAME_MAP
-        val mapped = APP_NAME_MAP[nameOrPackage.trim().lowercase()]
-        if (mapped != null) {
-            try { pm.getPackageInfo(mapped, 0); return mapped } catch (_: Exception) {}
-        }
+        val mapped = APP_NAME_MAP[nameOrPackage.lowercase().trim()]
+        if (mapped != null) return mapped
 
-        // Try label search
-        val mainIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val apps = pm.queryIntentActivities(mainIntent, 0)
-        val exact = apps.find { it.loadLabel(pm).toString().equals(nameOrPackage, ignoreCase = true) }
-        if (exact != null) return exact.activityInfo.packageName
-        val fuzzy = apps.find {
+        // Search by label
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val list = pm.queryIntentActivities(intent, 0)
+        return list.find { it.loadLabel(pm).toString().equals(nameOrPackage, ignoreCase = true) }?.activityInfo?.packageName
+            ?: list.find { it.loadLabel(pm).toString().contains(nameOrPackage, ignoreCase = true) }?.activityInfo?.packageName
+    }
+
+    fun getInstalledApps(): String {
+        val pm = packageManager
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val list = pm.queryIntentActivities(intent, 0)
+        
+        val apps = list.map { 
             val label = it.loadLabel(pm).toString()
-            label.contains(nameOrPackage, ignoreCase = true) || nameOrPackage.contains(label, ignoreCase = true)
-        }
-        return fuzzy?.activityInfo?.packageName
+            val pkg = it.activityInfo.packageName
+            "$label ($pkg)"
+        }.sorted().joinToString(", ")
+        
+        return "Available Apps on Device: $apps"
     }
 
     // ===== INSTALLED PACKAGES (ported from neural-agent) =====

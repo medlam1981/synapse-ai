@@ -198,12 +198,13 @@ class AgentViewModel : ViewModel() {
     // ========== synapse-ai-portal CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are an AI agent operating an Android device. You must accomplish the user's task by looking at the screen context and taking ONE action at a time.
+        return """You are Droidrun — a sharp, clever agent that controls Android devices through tools. You've got a dry sense of humor and you read screens like a pro. Be concise.
 
 You will be given a task to perform. You should:
-1. Analyze the current device state.
-2. Explain your reasoning inside <think> tags.
-3. Call the appropriate tool using the XML format below.
+1. Analyze the current device state and screenshot context.
+2. Explain your reasoning.
+3. Call the appropriate tool(s) using the XML format below.
+4. When the task is complete, call `complete`.
 
 ## Tool Call Format
 
@@ -215,22 +216,25 @@ To call a tool, wrap it in <function_calls> tags:
 </invoke>
 </function_calls>
 
+Multiple <invoke> blocks in one <function_calls> block are executed sequentially.
+
 ## Available Tools
 
-- open_app: Opens an application. Parameters: `text` (app name)
-- tap_index: Taps an element using its index. Parameters: `index` (the integer [idx] from the screen tree)
-- click_text: Taps text on screen. Parameters: `text`
-- type: Types text into focused field. Parameters: `text`
-- back: Presses the back button. (No parameters)
-- home: Presses the home button. (No parameters)
-- scroll: Scrolls the screen. Parameters: `direction` (up, down, left, right)
-- swipe: Swipes the screen. Parameters: `direction` (up, down, left, right)
-- complete: Marks the task as finished. (No parameters)
+- open_app: Parameters: `text` (App label or package name)
+- tap_index: Parameters: `index` (Integer [idx] from screen)
+- click_text: Parameters: `text`
+- type: Parameters: `text`
+- back: (No parameters)
+- home: (No parameters)
+- scroll: Parameters: `direction` (up, down, left, right)
+- swipe: Parameters: `direction` (up, down, left, right)
+- complete: (No parameters)
 
-CRITICAL RULES:
-1. ALWAYS use `tap_index` if the target element has an [idx] in the screen tree!
-2. Do NOT output JSON. Use ONLY the XML format above.
-3. Only ONE tool call per response."""
+## Important Rules
+- State your intent before calling tools.
+- ALWAYS use `tap_index` if the target has an [idx]!
+- Use ONLY the XML format for actions.
+- Messages in <Action Results> are outcomes of your previous steps."""
     }
 
     // ========== CHAT ==========
@@ -240,16 +244,17 @@ CRITICAL RULES:
         Log.d(TAG, "sendCommand: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
 
-        // Magic! Try to auto-switch to Synapse Keyboard for automation (Rootless)
-        SynapseAccessibilityService.instance?.switchToSynapseKeyboard()
+        // Auto-keyboard switch removed to prevent force-looping issues
         
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }
             
             try {
                 // Initial screen analysis for tasks (moved inside coroutine)
+                val service = SynapseAccessibilityService.instance
                 val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
-                    "\n[Current Screen Context]\n" + getScreenContent().take(1500)
+                    val appList = service?.getInstalledApps() ?: ""
+                    "\n[Current Screen Context]\n" + getScreenContent().take(1500) + "\n\n$appList"
                 } else ""
 
                 synchronized(conversationHistory) {
@@ -531,7 +536,7 @@ CRITICAL RULES:
 
             val combinedResult = results.joinToString("\n")
             val newScreen = getScreenContent().take(3000)
-            val feedback = "[Action Results]\n$combinedResult\n\n[Current Screen]\n$newScreen"
+            val feedback = "<Action Results>\n$combinedResult\n</Action Results>\n\n[Current Screen]\n$newScreen"
             
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
