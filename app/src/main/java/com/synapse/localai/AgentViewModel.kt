@@ -198,31 +198,37 @@ class AgentViewModel : ViewModel() {
     private fun buildSystemPrompt(): String {
         return """You are an AI agent operating an Android device. You must accomplish the user's task by looking at the screen context and taking ONE action at a time.
 
-CRITICAL: DO NOT use <add_memory> or <plan> tags. They are forbidden.
+You will be given a task to perform. You should:
+1. Analyze the current device state.
+2. Explain your reasoning inside <think> tags.
+3. Call the appropriate tool using the XML format below.
 
-### FORMAT ###
-You MUST output your response exactly like this example:
+## Tool Call Format
 
-<think>
-I need to open the settings app.
-</think>
->>> {"action": "open_app", "text": "Settings"}
+To call a tool, wrap it in <function_calls> tags:
 
-### AVAILABLE ACTIONS ###
-- >>> {"action": "open_app", "text": "app name"}
-- >>> {"action": "tap_index", "index": 12}
-- >>> {"action": "click_text", "text": "Submit"}
-- >>> {"action": "type", "text": "hello"}
-- >>> {"action": "back"}
-- >>> {"action": "home"}
-- >>> {"action": "scroll", "direction": "down"}
-- >>> {"action": "swipe", "direction": "left"}
-- >>> {"action": "complete"}
+<function_calls>
+<invoke name="TOOL_NAME">
+<parameter name="PARAM_NAME">value</parameter>
+</invoke>
+</function_calls>
 
-RULES:
+## Available Tools
+
+- open_app: Opens an application. Parameters: `text` (app name)
+- tap_index: Taps an element using its index. Parameters: `index` (the integer [idx] from the screen tree)
+- click_text: Taps text on screen. Parameters: `text`
+- type: Types text into focused field. Parameters: `text`
+- back: Presses the back button. (No parameters)
+- home: Presses the home button. (No parameters)
+- scroll: Scrolls the screen. Parameters: `direction` (up, down, left, right)
+- swipe: Swipes the screen. Parameters: `direction` (up, down, left, right)
+- complete: Marks the task as finished. (No parameters)
+
+CRITICAL RULES:
 1. ALWAYS use `tap_index` if the target element has an [idx] in the screen tree!
-2. Do NOT output anything else. Only <think> and the JSON.
-3. Only ONE action per response."""
+2. Do NOT output JSON. Use ONLY the XML format above.
+3. Only ONE tool call per response."""
     }
 
     // ========== CHAT ==========
@@ -392,26 +398,18 @@ RULES:
     }
 
     private suspend fun executeToolLoop(response: String): Boolean {
-        // Try to find the JSON action robustly.
-        var jsonStr: String? = response.lines()
-            .find { it.trimStart().startsWith(">>>") }
-            ?.substringAfter(">>>")?.trim()
-            
-        if (jsonStr == null) {
-             val match = Regex("```(?:json)?\\s*(\\{.*?\"action\".*?\\})\\s*```", RegexOption.DOT_MATCHES_ALL).find(response)
-             jsonStr = match?.groupValues?.get(1)?.trim()
-        }
-        
-        if (jsonStr == null) {
-            val match = Regex("\\{.*?\"action\"\\s*:.*?\\}", RegexOption.DOT_MATCHES_ALL).find(response)
-            jsonStr = match?.value?.trim()
-        }
+        // Parse Droidrun XML format
+        val functionCallsRegex = "<function_calls>(.*?)</function_calls>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val invokeRegex = "<invoke name=\"([^\"]+)\">(.*?)</invoke>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val paramRegex = "<parameter name=\"([^\"]+)\">(.*?)</parameter>".toRegex(RegexOption.DOT_MATCHES_ALL)
 
-        if (jsonStr == null) {
-            Log.w(TAG, "No valid action JSON found in response.")
+        val functionCallsMatch = functionCallsRegex.find(response)
+
+        if (functionCallsMatch == null) {
+            Log.w(TAG, "No valid <function_calls> XML found in response.")
             val currentScreen = getScreenContent().take(2000)
-            val feedback = "[System Error] You did not provide a valid action. DO NOT use <add_memory> or <plan> tags. You MUST output ONLY your <think> block followed immediately by an action like this: >>> {\"action\": \"action_name\"}\n\n[Current Screen Context]\n$currentScreen"
-            addSystemLog("⚠️ Agent deviated from format. Sending course-correction nudge...")
+            val feedback = "[System Error] You did not provide a valid tool call. You MUST wrap your action(s) in <function_calls> and <invoke> tags.\n\n[Current Screen Context]\n$currentScreen"
+            addSystemLog("⚠️ Agent deviated from format. Sending XML course-correction nudge...")
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
             }
@@ -430,61 +428,89 @@ RULES:
         var shouldContinue = false
 
         try {
-            val json = JSONObject(jsonStr)
-            val action = json.optString("action", "")
+            val invokesBlock = functionCallsMatch.groupValues[1]
+            val invokes = invokeRegex.findAll(invokesBlock).toList()
             
-                            if (action == "complete") {
-                                addSystemLog("✅ Task marked as complete.")
-                                // Automatically return to Synapse AI
-                                service.launchApp("com.synapse.localai")
-                                return false
-                            }            
-            var result = ""
+            if (invokes.isEmpty()) {
+                val feedback = "[System Error] Empty <function_calls> block."
+                synchronized(conversationHistory) { conversationHistory.add("user" to feedback) }
+                return true
+            }
 
-            when (action) {
-                "open_app" -> {
-                    val app = json.optString("text", "")
-                    val success = service.launchApp(app)
-                    result = if (success) "Opened $app" else "Failed to open $app"
+            val results = mutableListOf<String>()
+            var isComplete = false
+
+            for (invokeMatch in invokes) {
+                val action = invokeMatch.groupValues[1]
+                val paramsBlock = invokeMatch.groupValues[2]
+                
+                val params = mutableMapOf<String, String>()
+                paramRegex.findAll(paramsBlock).forEach { match ->
+                    params[match.groupValues[1]] = match.groupValues[2].trim()
                 }
-                "click_text" -> {
-                    val text = json.optString("text", "")
-                    val success = service.clickByText(text)
-                    result = if (success) "Clicked text: $text" else "Text not found: $text"
+                
+                if (action == "complete") {
+                    addSystemLog("✅ Task marked as complete.")
+                    isComplete = true
+                    break
+                }            
+                
+                var result = ""
+
+                when (action) {
+                    "open_app" -> {
+                        val app = params["text"] ?: ""
+                        val success = service.launchApp(app)
+                        result = if (success) "Opened $app" else "Failed to open $app"
+                    }
+                    "click_text" -> {
+                        val text = params["text"] ?: ""
+                        val success = service.clickByText(text)
+                        result = if (success) "Clicked text: $text" else "Text not found: $text"
+                    }
+                    "tap_index", "click" -> {
+                        val indexStr = params["index"] ?: "-1"
+                        val index = indexStr.toIntOrNull() ?: -1
+                        val success = service.clickByIndex(index)
+                        result = if (success) "Tapped index: $index" else "Index not found: $index"
+                    }
+                    "type" -> {
+                        val text = params["text"] ?: ""
+                        val success = service.typeText(text)
+                        result = if (success) "Typed: $text" else "Failed to type (no focused input)"
+                    }
+                    "back" -> { service.goBack(); result = "Pressed back" }
+                    "home" -> { service.goHome(); result = "Pressed home" }
+                    "scroll" -> {
+                        val dir = params["direction"] ?: "down"
+                        val success = service.scrollScreen(dir)
+                        result = if (success) "Scrolled $dir" else "Failed to scroll"
+                    }
+                    "swipe" -> {
+                        val dir = params["direction"] ?: "down"
+                        val success = service.swipeDirection(dir)
+                        result = if (success) "Swiped $dir" else "Failed to swipe"
+                    }
+                    else -> {
+                        result = "Unknown action: $action"
+                    }
                 }
-                "tap_index" -> {
-                    val index = json.optInt("index", -1)
-                    val success = service.clickByIndex(index)
-                    result = if (success) "Tapped index: $index" else "Index not found: $index"
-                }
-                "type" -> {
-                    val text = json.optString("text", "")
-                    val success = service.typeText(text)
-                    result = if (success) "Typed: $text" else "Failed to type (no focused input)"
-                }
-                "back" -> { service.goBack(); result = "Pressed back" }
-                "home" -> { service.goHome(); result = "Pressed home" }
-                "scroll" -> {
-                    val dir = json.optString("direction", "down")
-                    val success = service.scrollScreen(dir)
-                    result = if (success) "Scrolled $dir" else "Failed to scroll"
-                }
-                "swipe" -> {
-                    val dir = json.optString("direction", "down")
-                    val success = service.swipeDirection(dir)
-                    result = if (success) "Swiped $dir" else "Failed to swipe"
-                }
-                else -> {
-                    result = "Unknown action: $action"
-                }
+                
+                addSystemLog("⚡ $result")
+                results.add(result)
+                delay(1000) // Brief delay between batched actions
+            }
+
+            if (isComplete) {
+                service.launchApp("com.synapse.localai")
+                return false
             }
             
-            addSystemLog("⚡ $result")
-            delay(2000) // INCREASED: Wait for UI to completely transition/load before grabbing new screen
+            delay(1500) // Wait for UI to settle after all actions
 
-            // Feed back the screen state after action
+            val combinedResult = results.joinToString("\n")
             val newScreen = getScreenContent().take(3000)
-            val feedback = "[Action Result] $result\n[Current Screen]\n$newScreen"
+            val feedback = "[Action Results]\n$combinedResult\n\n[Current Screen]\n$newScreen"
             
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
@@ -492,8 +518,8 @@ RULES:
 
             shouldContinue = true
         } catch (e: Exception) {
-            Log.e(TAG, "Tool error parsing: $jsonStr", e)
-            val feedback = "[System Error] Failed to parse JSON action: ${e.message}. Please output ONLY valid JSON format."
+            Log.e(TAG, "Tool error parsing XML", e)
+            val feedback = "[System Error] Failed to parse XML action: ${e.message}."
             addSystemLog("⚠️ Action format error, asking agent to retry.")
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
