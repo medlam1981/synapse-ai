@@ -398,11 +398,10 @@ CRITICAL RULES:
     }
 
     private suspend fun executeToolLoop(response: String): Boolean {
-        // Parse Droidrun XML format
-        val functionCallsRegex = "<function_calls>(.*?)</function_calls>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val invokeRegex = "<invoke name=\"([^\"]+)\">(.*?)</invoke>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val paramRegex = "<parameter name=\"([^\"]+)\">(.*?)</parameter>".toRegex(RegexOption.DOT_MATCHES_ALL)
-
+        val service = SynapseAccessibilityService.instance
+        
+        // Relaxed regex to catch block even if closing tag is missing or malformed
+        val functionCallsRegex = "<function_calls>(.*?)(?:</function_calls>|$)".toRegex(RegexOption.DOT_MATCHES_ALL)
         val functionCallsMatch = functionCallsRegex.find(response)
 
         if (functionCallsMatch == null) {
@@ -413,13 +412,13 @@ CRITICAL RULES:
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
             }
+            service?.launchApp("com.synapse.localai")
             return true // Continue loop to give it a chance to output the action
         }
         
         _uiState.update { it.copy(shouldMinimize = true) }
         delay(300) // Wait for app to minimize
 
-        val service = SynapseAccessibilityService.instance
         if (service == null) {
             addSystemLog("⚠️ Cannot execute actions: Accessibility Service disconnected.")
             return false
@@ -428,12 +427,22 @@ CRITICAL RULES:
         var shouldContinue = false
 
         try {
-            val invokesBlock = functionCallsMatch.groupValues[1]
+            var invokesBlock = functionCallsMatch.groupValues[1]
+            
+            // Normalize self-closing tags like <invoke name="back" /> to <invoke name="back"></invoke>
+            invokesBlock = invokesBlock.replace(Regex("<invoke\\s+name=[\"']([^\"']+)[\"'][^>]*/>")) { match ->
+                "<invoke name=\"${match.groupValues[1]}\"></invoke>"
+            }
+            
+            val invokeRegex = "<invoke\\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)</invoke>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val paramRegex = "<parameter\\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)</parameter>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            
             val invokes = invokeRegex.findAll(invokesBlock).toList()
             
             if (invokes.isEmpty()) {
-                val feedback = "[System Error] Empty <function_calls> block."
+                val feedback = "[System Error] Empty <function_calls> block or malformed <invoke> tags. You must use <invoke name=\"...\">...</invoke>."
                 synchronized(conversationHistory) { conversationHistory.add("user" to feedback) }
+                service.launchApp("com.synapse.localai")
                 return true
             }
 
@@ -442,7 +451,12 @@ CRITICAL RULES:
 
             for (invokeMatch in invokes) {
                 val action = invokeMatch.groupValues[1]
-                val paramsBlock = invokeMatch.groupValues[2]
+                var paramsBlock = invokeMatch.groupValues[2]
+                
+                // Normalize self-closing parameters <parameter name="x" />
+                paramsBlock = paramsBlock.replace(Regex("<parameter\\s+name=[\"']([^\"']+)[\"'][^>]*/>")) { match ->
+                    "<parameter name=\"${match.groupValues[1]}\"></parameter>"
+                }
                 
                 val params = mutableMapOf<String, String>()
                 paramRegex.findAll(paramsBlock).forEach { match ->
@@ -524,6 +538,7 @@ CRITICAL RULES:
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
             }
+            service.launchApp("com.synapse.localai")
             shouldContinue = true
         }
         
