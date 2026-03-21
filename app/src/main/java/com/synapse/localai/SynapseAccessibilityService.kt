@@ -608,33 +608,40 @@ class SynapseAccessibilityService : AccessibilityService() {
     // ===== SCROLL & DIRECTIONAL SWIPE =====
 
     fun scrollScreen(direction: String): Boolean {
-        val root = rootInActiveWindow ?: return false
+        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
         val scrollable = findScrollable(root)
-        root.recycle()
+        
         if (scrollable != null) {
             val action = if (direction.uppercase() == "UP")
                 AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
             else
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            
             val result = scrollable.performAction(action)
             scrollable.recycle()
-            return result
+            root.recycle()
+            Log.d(TAG, "Native scroll $direction: $result")
+            if (result) return true
+        } else {
+            root.recycle()
         }
-        // Fallback: gesture swipe to scroll
+
+        // Fallback: gesture swipe to scroll (more reliable for some apps)
         val dm = resources.displayMetrics
         val midX = dm.widthPixels / 2f
         val midY = dm.heightPixels / 2f
         val path = Path()
         when (direction.uppercase()) {
-            "UP" -> { path.moveTo(midX, midY + 300); path.lineTo(midX, midY - 300) }
-            "DOWN" -> { path.moveTo(midX, midY - 300); path.lineTo(midX, midY + 300) }
-            "LEFT" -> { path.moveTo(midX + 300, midY); path.lineTo(midX - 300, midY) }
-            "RIGHT" -> { path.moveTo(midX - 300, midY); path.lineTo(midX + 300, midY) }
-            else -> { path.moveTo(midX, midY + 300); path.lineTo(midX, midY - 300) }
+            "UP" -> { path.moveTo(midX, midY - 400); path.lineTo(midX, midY + 400) }
+            "DOWN" -> { path.moveTo(midX, midY + 400); path.lineTo(midX, midY - 400) }
+            "LEFT" -> { path.moveTo(midX + 400, midY); path.lineTo(midX - 400, midY) }
+            "RIGHT" -> { path.moveTo(midX - 400, midY); path.lineTo(midX + 400, midY) }
+            else -> { path.moveTo(midX, midY + 400); path.lineTo(midX, midY - 400) }
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 400))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
             .build()
+        Log.d(TAG, "Gesture scroll fallback: $direction")
         return dispatchGesture(gesture, null, null)
     }
 
@@ -658,8 +665,11 @@ class SynapseAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             val result = findScrollable(child)
+            if (result != null) {
+                child.recycle()
+                return result
+            }
             child.recycle()
-            if (result != null) return result
         }
         return null
     }

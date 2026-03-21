@@ -524,7 +524,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 
                 addSystemLog("⚡ $result")
                 results.add(result)
-                delay(1000) // Brief delay between batched actions
+                delay(1500) // Delay between batched actions
             }
 
             if (isComplete) {
@@ -532,7 +532,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 return false
             }
             
-            delay(1500) // Wait for UI to settle after all actions
+            delay(3000) // INCREASED: Wait for UI to settle after all actions before grabbing new screen
 
             val combinedResult = results.joinToString("\n")
             val newScreen = getScreenContent().take(3000)
