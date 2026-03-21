@@ -228,6 +228,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
 - home: (No parameters)
 - scroll: Parameters: `direction` (up, down, left, right)
 - swipe: Parameters: `direction` (up, down, left, right)
+- read_notifications: (No parameters) Gets recent incoming messages.
 - complete: (No parameters)
 
 ## Important Rules
@@ -516,6 +517,10 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                         val dir = params["direction"] ?: "down"
                         val success = service.swipeDirection(dir)
                         result = if (success) "Swiped $dir" else "Failed to swipe"
+                    }
+                    "read_notifications" -> {
+                        val notifications = SynapseNotificationService.getRecentAndClear()
+                        result = "Recent Notifications:\n$notifications"
                     }
                     else -> {
                         result = "Unknown action: $action"

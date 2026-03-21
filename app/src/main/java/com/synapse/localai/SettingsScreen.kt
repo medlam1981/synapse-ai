@@ -467,6 +467,19 @@ fun SettingsScreen(
                     ) {
                         Text("Keyboard", color = Color.White, fontSize = 11.sp)
                     }
+                    
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9F43).copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Notifications", color = Color.White, fontSize = 11.sp)
+                    }
                 }
                 
                 Text(

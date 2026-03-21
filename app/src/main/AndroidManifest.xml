@@ -70,5 +70,15 @@
                 android:resource="@xml/method" />
         </service>
 
+        <service
+            android:name=".SynapseNotificationService"
+            android:label="Synapse AI Notifications"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>
