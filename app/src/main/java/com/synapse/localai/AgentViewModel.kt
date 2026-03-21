@@ -234,6 +234,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
 - scroll: Parameters: `direction` (up, down, left, right)
 - swipe: Parameters: `direction` (up, down, left, right)
 - read_notifications: (No parameters) Gets recent incoming messages.
+- schedule_task: Parameters: `description` (task name), `command` (the instruction to run), `delay` (minutes from now)
 - complete: (No parameters)
 
 ## Important Rules
@@ -259,10 +260,13 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
             try {
                 // Initial screen analysis for tasks (moved inside coroutine)
                 val service = SynapseAccessibilityService.instance
+                val timeNow = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
                 val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
                     val appList = service?.getInstalledApps() ?: ""
-                    "\n[Current Screen Context]\n" + getScreenContent().take(1500) + "\n\n$appList"
-                } else ""
+                    "\n[Current Time: $timeNow]\n[Current Screen Context]\n" + getScreenContent().take(1500) + "\n\n$appList"
+                } else {
+                    "\n[Current Time: $timeNow]"
+                }
 
                 synchronized(conversationHistory) {
                     conversationHistory.add("user" to command + screenData)
@@ -527,6 +531,16 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                     "read_notifications" -> {
                         val notifications = SynapseNotificationService.getRecentAndClear()
                         result = "Recent Notifications:\n$notifications"
+                    }
+                    "schedule_task" -> {
+                        val desc = params["description"] ?: "Task"
+                        val cmd = params["command"] ?: ""
+                        val delay = params["delay"]?.toIntOrNull() ?: 1
+                        if (cmd.isNotBlank()) {
+                            result = scheduleTask(desc, cmd, delay)
+                        } else {
+                            result = "Failed to schedule: command is empty"
+                        }
                     }
                     else -> {
                         result = "Unknown action: $action"
