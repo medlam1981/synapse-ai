@@ -415,6 +415,10 @@ fun ChatApp(viewModel: AgentViewModel) {
         // System Dashboard (Fixed)
         SystemDashboard(context = context)
 
+        if (uiState.scheduledTasks.isNotEmpty()) {
+            ScheduledTasksTicker(tasks = uiState.scheduledTasks)
+        }
+
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -1024,5 +1028,41 @@ fun StatBadge(icon: @Composable () -> Unit, label: String, value: String) {
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(value, color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun ScheduledTasksTicker(tasks: List<ScheduledTask>) {
+    val pendingTasks = tasks.filter { it.status == "pending" }.sortedBy { it.executeAt }
+    if (pendingTasks.isEmpty()) return
+    
+    val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+    val tickerText = pendingTasks.joinToString("   •   ") { "⏳ ${fmt.format(java.util.Date(it.executeAt))} - ${it.description}" }
+    
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .background(Color(0xFF10141D), RoundedCornerShape(8.dp))
+            .border(
+                1.dp, 
+                Brush.horizontalGradient(listOf(NeonPurple.copy(alpha = 0.2f), NeonCyan.copy(alpha = 0.5f), NeonPurple.copy(alpha = 0.2f))),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = tickerText,
+            color = NeonCyan,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            modifier = Modifier.basicMarquee(
+                iterations = Int.MAX_VALUE,
+                velocity = 35.dp // smooth scrolling speed
+            )
+        )
     }
 }

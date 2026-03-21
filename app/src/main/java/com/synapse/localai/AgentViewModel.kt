@@ -51,7 +51,8 @@ data class AgentUiState(
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
     val streamVersion: Int = 0,
-    val shouldMinimize: Boolean = false
+    val shouldMinimize: Boolean = false,
+    val scheduledTasks: List<ScheduledTask> = emptyList()
 )
 
 class AgentViewModel : ViewModel() {
@@ -654,6 +655,10 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
 
     // ========== TASK SCHEDULING ==========
 
+    private fun updateUiTasks() {
+        _uiState.update { it.copy(scheduledTasks = synchronized(scheduledTasks) { scheduledTasks.toList() }) }
+    }
+
     fun startScheduler() {
         if (schedulerJob != null) return
         schedulerJob = viewModelScope.launch {
@@ -675,12 +680,14 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 val idx = scheduledTasks.indexOfFirst { it.id == task.id }
                 if (idx >= 0) scheduledTasks[idx] = task.copy(status = "running")
             }
+            updateUiTasks()
             addSystemLog("⏰ Running scheduled task: ${task.description}")
             sendCommand(task.command)
             synchronized(scheduledTasks) {
                 val idx = scheduledTasks.indexOfFirst { it.id == task.id }
                 if (idx >= 0) scheduledTasks[idx] = scheduledTasks[idx].copy(status = "done")
             }
+            updateUiTasks()
         }
     }
 
@@ -692,6 +699,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
             executeAt = executeAt
         )
         synchronized(scheduledTasks) { scheduledTasks.add(task) }
+        updateUiTasks()
         startScheduler()
         val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(executeAt))
         Log.i(TAG, "Task scheduled: '${task.description}' at $timeStr")
@@ -712,7 +720,11 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
             val idx = scheduledTasks.indexOfFirst {
                 it.status == "pending" && it.description.contains(description, ignoreCase = true)
             }
-            if (idx >= 0) { scheduledTasks.removeAt(idx); true } else false
+            if (idx >= 0) { 
+                scheduledTasks.removeAt(idx)
+                updateUiTasks()
+                true 
+            } else false
         }
     }
 
