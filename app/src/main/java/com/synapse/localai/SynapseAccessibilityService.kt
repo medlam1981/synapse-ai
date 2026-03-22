@@ -285,47 +285,28 @@ class SynapseAccessibilityService : AccessibilityService() {
         return sb.toString()
     }
 
-    /** Build compact JSON tree from ALL windows (like droidrun portal) */
-    fun getCompactScreenTreeJson(): String {
-        val screenBounds = getScreenBounds()
-        val counter = java.util.concurrent.atomic.AtomicInteger(0)
-        val indexRef = intArrayOf(0)
+    /** Build flat indexed text tree (Droidrun Format) */
+    fun getDroidrunScreenTree(): String {
+        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return "[No active window]"
+        val sb = StringBuilder()
+        val dm = resources.displayMetrics
+        val screenBounds = Rect(0, 0, dm.widthPixels, dm.heightPixels)
+        
         val tempElements = mutableListOf<IndexedElement>()
+        val indexCounter = intArrayOf(1)
         
-        val rootArray = JSONArray()
+        sb.append("Current Clickable UI elements:\n")
+        sb.append("'index. className: resourceId; checkedState, text - bounds(x1,y1,x2,y2)'\n")
         
-        try {
-            val windowList = windows
-            if (windowList.isNotEmpty()) {
-                // Sort windows by layer/type if needed, but usually iterating is fine
-                for (window in windowList) {
-                    val root = try { window.root } catch (_: Exception) { null } ?: continue
-                    val windowTree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef, tempElements)
-                    root.recycle()
-                    if (windowTree != null) {
-                        rootArray.put(windowTree)
-                    }
-                }
-            } else {
-                // Fallback to active window
-                val root = try { rootInActiveWindow } catch (_: Exception) { null }
-                if (root != null) {
-                    val windowTree = buildCompactTreeJson(root, screenBounds, 0, counter, indexRef, tempElements)
-                    root.recycle()
-                    if (windowTree != null) rootArray.put(windowTree)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error building multi-window tree: ${e.message}")
-        }
+        traverseAndFormatDroidrun(root, sb, screenBounds, indexCounter, tempElements)
+        root.recycle()
 
-        // Safely update the master list
         synchronized(lastIndexedElements) {
             lastIndexedElements.clear()
             lastIndexedElements.addAll(tempElements)
         }
 
-        // Force a HUD redraw with the exact new elements
+        // Refresh HUD
         if (overlayVisible) {
             overlayManager?.let { om ->
                 om.clearElements()
@@ -338,18 +319,14 @@ class SynapseAccessibilityService : AccessibilityService() {
             }
         }
 
-        return if (rootArray.length() == 1) {
-            rootArray.getJSONObject(0).toString()
-        } else {
-            JSONObject().put("windows", rootArray).toString()
-        }
+        return sb.toString()
     }
 
-    /** Internal refresh with processing guard — ALWAYS collects element data using the full tree logic */
+    /** Internal refresh with processing guard — ALWAYS collects element data using the Droidrun logic */
     private fun refreshOverlayInternal() {
         if (!isProcessing.compareAndSet(false, true)) return
         try {
-            getCompactScreenTreeJson() // This already handles building elements and refreshing the HUD
+            getDroidrunScreenTree() // This already handles building elements and refreshing the HUD
         } catch (e: Exception) {
             Log.e(TAG, "refreshOverlay error: ${e.message}")
         } finally {
@@ -357,68 +334,86 @@ class SynapseAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun buildCompactTreeJson(
-        node: AccessibilityNodeInfo, screenBounds: Rect,
-        depth: Int, nodeCount: java.util.concurrent.atomic.AtomicInteger,
+    private fun traverseAndFormatDroidrun(
+        node: AccessibilityNodeInfo,
+        sb: StringBuilder,
+        screenBounds: Rect,
         indexRef: IntArray,
         outElements: MutableList<IndexedElement>
-    ): JSONObject? {
-        if (depth > MAX_DEPTH || nodeCount.get() > MAX_COMPACT_NODES) return null
-
+    ) {
         val rect = Rect()
         node.getBoundsInScreen(rect)
-
-        val className = node.className?.toString() ?: ""
+        
         if (screenBounds.width() > 0) {
             val vp = getVisiblePercentage(rect, screenBounds)
-            if (vp < VISIBILITY_THRESHOLD) return null
-        }
-
-        val childrenArray = JSONArray()
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val childJson = buildCompactTreeJson(child, screenBounds, depth + 1, nodeCount, indexRef, outElements)
-            child.recycle()
-            if (childJson != null) childrenArray.put(childJson)
+            if (vp < VISIBILITY_THRESHOLD) return
         }
 
         val text = node.text?.toString() ?: ""
         val desc = node.contentDescription?.toString() ?: ""
-        val resId = node.viewIdResourceName ?: ""
-        val isClickable = node.isClickable
+        val resId = node.viewIdResourceName?.substringAfterLast('/') ?: ""
+        val className = node.className?.toString()?.substringAfterLast('.') ?: "View"
+        val isClickable = node.isClickable || node.isCheckable
         val isEditable = node.isEditable
-        val isFocusable = node.isFocusable
+        
+        val isMeaningful = text.isNotEmpty() || desc.isNotEmpty() || resId.isNotEmpty() || isEditable
 
-        val isMeaningful = text.isNotEmpty() || desc.isNotEmpty() || resId.isNotEmpty() ||
-                isClickable || isEditable || isFocusable
-
-        if (!isMeaningful && childrenArray.length() == 0) return null
-        nodeCount.incrementAndGet()
-
-        val isInteractive = isClickable || isEditable || node.isCheckable || isFocusable
-        val elementIndex = if ((isInteractive || text.isNotEmpty() || desc.isNotEmpty()) &&
-            rect.width() >= MIN_ELEMENT_SIZE && rect.height() >= MIN_ELEMENT_SIZE) {
+        if (isMeaningful || isClickable) {
             val idx = indexRef[0]
             indexRef[0]++
-            val label = if (text.isNotEmpty()) text.take(80) else desc.take(80)
+            
+            val label = text.ifEmpty { desc }.replace("\n", " ").take(60)
             outElements.add(IndexedElement(idx, Rect(rect), label))
-            idx
-        } else -1
-
-        return JSONObject().apply {
-            if (resId.isNotEmpty()) put("id", resId.substringAfterLast('/'))
-            if (text.isNotEmpty()) put("text", text.take(120))
-            if (desc.isNotEmpty()) put("desc", desc.take(120))
-            put("class", className.substringAfterLast('.'))
-            put("bounds", "[${rect.left},${rect.top}][${rect.right},${rect.bottom}]")
-            if (elementIndex >= 0) put("idx", elementIndex)
-            if (isClickable) put("clickable", true)
-            if (isEditable) put("editable", true)
-            if (isFocusable) put("focusable", true)
-            if (node.isFocused) put("focused", true)
-            if (node.isScrollable) put("scrollable", true)
-            if (childrenArray.length() > 0) put("children", childrenArray)
+            
+            val checkedState = if (node.isCheckable) {
+                if (node.isChecked) "; isChecked=True" else "; isChecked=False"
+            } else ""
+            
+            val details = mutableListOf<String>()
+            if (resId.isNotEmpty()) details.add("\"$resId\"")
+            if (label.isNotEmpty()) details.add("\"$label\"")
+            
+            val detailsStr = if (details.isNotEmpty()) details.joinToString(", ") else ""
+            
+            sb.append("${idx}. ${className}: ${detailsStr}${checkedState} - (${rect.left},${rect.top},${rect.right},${rect.bottom})\n")
         }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            traverseAndFormatDroidrun(child, sb, screenBounds, indexRef, outElements)
+            child.recycle()
+        }
+    }
+
+    /** Helper for Droidrun parity: Get phone state summary */
+    fun getDroidrunPhoneState(): String {
+        val root = try { rootInActiveWindow } catch (_: Exception) { null }
+        val pkg = root?.packageName?.toString() ?: "Unknown"
+        val focused = root?.let { findFocusedNode(it) }
+        val focusedText = focused?.text?.toString() ?: focused?.contentDescription?.toString() ?: ""
+        val isKeyboardVisible = focused?.isEditable == true
+        
+        root?.recycle()
+        focused?.recycle()
+
+        return """**Current Phone State:**
+• **App:** $pkg
+• **Keyboard:** ${if (isKeyboardVisible) "Visible" else "Hidden"}
+• **Focused Element:** '$focusedText'"""
+    }
+
+    private fun findFocusedNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isFocused) return AccessibilityNodeInfo.obtain(node)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val res = findFocusedNode(child)
+            if (res != null) {
+                child.recycle()
+                return res
+            }
+            child.recycle()
+        }
+        return null
     }
 
     private fun traverseTree(node: AccessibilityNodeInfo, sb: StringBuilder, depth: Int, startIndex: Int): Int {
@@ -476,7 +471,7 @@ class SynapseAccessibilityService : AccessibilityService() {
             return true
         }
         
-        getCompactScreenTreeJson() // Force a refresh using the compact JSON logic
+        getDroidrunScreenTree() // Force a refresh using the Droidrun logic
         
         synchronized(lastIndexedElements) {
             element = lastIndexedElements.find { it.index == index }
@@ -608,6 +603,10 @@ class SynapseAccessibilityService : AccessibilityService() {
     // ===== SCROLL & DIRECTIONAL SWIPE =====
 
     fun scrollScreen(direction: String): Boolean {
+        val rootBefore = try { rootInActiveWindow } catch (_: Exception) { null }
+        val beforeHash = rootBefore?.let { getNodeHash(it) } ?: ""
+        rootBefore?.recycle()
+
         val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
         val scrollable = findScrollable(root)
         
@@ -617,16 +616,12 @@ class SynapseAccessibilityService : AccessibilityService() {
             else
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
             
-            val result = scrollable.performAction(action)
+            scrollable.performAction(action)
             scrollable.recycle()
-            root.recycle()
-            Log.d(TAG, "Native scroll $direction: $result")
-            if (result) return true
-        } else {
-            root.recycle()
         }
+        root.recycle()
 
-        // Fallback: gesture swipe to scroll (more reliable for some apps)
+        // Fallback/Reinforce with gesture swipe
         val dm = resources.displayMetrics
         val midX = dm.widthPixels / 2f
         val midY = dm.heightPixels / 2f
@@ -641,8 +636,36 @@ class SynapseAccessibilityService : AccessibilityService() {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
             .build()
-        Log.d(TAG, "Gesture scroll fallback: $direction")
-        return dispatchGesture(gesture, null, null)
+        
+        // Blocking wait for gesture to finish
+        val gestureDone = java.util.concurrent.CountDownLatch(1)
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) { gestureDone.countDown() }
+            override fun onCancelled(g: GestureDescription?) { gestureDone.countDown() }
+        }, null)
+        try { gestureDone.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+
+        // Verification: Did it actually move?
+        val rootAfter = try { rootInActiveWindow } catch (_: Exception) { null }
+        val afterHash = rootAfter?.let { getNodeHash(it) } ?: ""
+        rootAfter?.recycle()
+
+        val moved = beforeHash != afterHash
+        Log.d(TAG, "Scroll $direction move detection: $moved (Before: $beforeHash, After: $afterHash)")
+        return moved
+    }
+
+    private fun getNodeHash(node: AccessibilityNodeInfo): String {
+        val sb = StringBuilder()
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        sb.append("${node.className}:${rect.top}:${rect.left};")
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            sb.append(getNodeHash(child))
+            child.recycle()
+        }
+        return sb.toString().hashCode().toString()
     }
 
     /** Directional swipe: swipe up/down/left/right from screen center */

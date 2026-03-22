@@ -60,8 +60,14 @@ class PortalServer(private val viewModel: AgentViewModel) {
             
             when (action) {
                 "get_state" -> {
-                    val screen = viewModel.getScreenContent()
-                    JSONObject().put("status", "success").put("ui_tree", screen).toString()
+                    val service = SynapseAccessibilityService.instance
+                    val tree = service?.getDroidrunScreenTree() ?: "[No Service]"
+                    val state = service?.getDroidrunPhoneState() ?: "[No State]"
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("ui_tree", tree as Any)
+                        put("phone_state", state as Any)
+                    }.toString()
                 }
                 "execute" -> {
                     val cmd = json.getString("command")

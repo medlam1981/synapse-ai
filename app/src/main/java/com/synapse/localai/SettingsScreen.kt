@@ -10,32 +10,37 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Colors imported from MainActivity.kt — no duplicates
 
 private val SCAN_DIRS = listOf(
-    "/sdcard",
     "/sdcard/Download",
     "/sdcard/Models",
     "/storage/emulated/0/Download",
     "/storage/emulated/0/Models",
-    "/sdcard",
     "/data/local/tmp/synapse"
 )
 
@@ -67,7 +72,17 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val config = uiState.config
 
-    var models by remember { mutableStateOf(scanForModels()) }
+    var models by remember { mutableStateOf<List<File>>(emptyList()) }
+    var isScanning by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(Unit) {
+        isScanning = true
+        models = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            scanForModels()
+        }
+        isScanning = false
+    }
+
     var selectedPath by remember(config.localModelPath) { mutableStateOf(config.localModelPath) }
     var customPath by remember { mutableStateOf("") }
     var showCustomInput by remember { mutableStateOf(false) }
@@ -83,71 +98,120 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkNavy)
+            .background(Color(0xFF05070A))
     ) {
         Spacer(modifier = Modifier.statusBarsPadding())
 
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(listOf(DarkCard, MidNavy, DarkCard))
-                )
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Button(
-                onClick = onBack,
-                colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.15f)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("← Back", color = NeonCyan, fontSize = 14.sp)
-            }
-            Text("⚙ SETTINGS", color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 2.sp)
-            Spacer(modifier = Modifier.width(80.dp))
-        }
-
-        // Separator
+        // --- MODERN FULL-WIDTH SETTINGS HEADER ---
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(1.dp)
-                .background(Brush.horizontalGradient(listOf(Color.Transparent, NeonCyan.copy(alpha = 0.3f), NeonPurple.copy(alpha = 0.3f), Color.Transparent)))
-        )
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(NeonPurple.copy(alpha = 0.15f), Color.Transparent)
+                    )
+                )
+                .background(DarkCard.copy(alpha = 0.95f))
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Title on the LEFT
+                Column(horizontalAlignment = Alignment.Start) {
+                    Text(
+                        "SYSTEM SETTINGS",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        "CONFIGURATION CORE",
+                        color = NeonPurple.copy(alpha = 0.7f),
+                        fontSize = 7.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                // Sleek Modern Back Button on the RIGHT
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(NeonCyan.copy(alpha = 0.1f), androidx.compose.foundation.shape.CircleShape)
+                        .border(BorderStroke(1.2.dp, NeonCyan.copy(alpha = 0.4f)), androidx.compose.foundation.shape.CircleShape)
+                        .clickable { onBack() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.ArrowForward,
+                        contentDescription = "Back",
+                        tint = NeonPurple,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
 
         Column(
             modifier = Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(vertical = 12.dp), // Removed horizontal padding
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // ═══════ AI MODEL SECTION ═══════
-            SettingsCard(title = "AI MODELS", titleColor = NeonCyan, statusDot = when {
-                uiState.localModelLoaded -> Color(0xFF34D399)
-                uiState.localModelLoading -> Color(0xFFFBBF24)
-                else -> Color(0xFFEF4444)
-            }, statusText = when {
-                uiState.localModelLoading -> "Loading..."
-                uiState.localModelLoaded -> "Ready"
-                else -> "Idle"
-            }) {
-                if (models.isNotEmpty()) {
-                    Text("Discovered Models", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            
+            var useLocalModel by remember(config.useLocalModel) { mutableStateOf(config.useLocalModel) }
+            var geminiKeys by remember(config.geminiApiKeys) { mutableStateOf(config.geminiApiKeys) }
 
-                    models.forEach { file ->
-                        val isSelected = selectedPath == file.absolutePath
-                        val isCurrentlyLoaded = isSelected && uiState.localModelLoaded
-                        val modelType = AgentViewModel.detectModelType(file.absolutePath)
-                        val typeLabel = if (modelType == ModelType.GGUF) "GGUF" else "LiteRT"
-                        val typeColor = if (modelType == ModelType.GGUF) Color(0xFFFF9F43) else NeonCyan
+            // Mode Toggle
+            Row(
+                modifier = Modifier.fillMaxWidth().background(DarkCard, RoundedCornerShape(12.dp)).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Execution Mode", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(if (useLocalModel) "Local (GGUF/LiteRT)" else "Cloud (Gemini API)", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                }
+                Switch(
+                    checked = useLocalModel,
+                    onCheckedChange = { useLocalModel = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = NeonCyan, checkedTrackColor = NeonCyan.copy(alpha = 0.3f))
+                )
+            }
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
+            if (useLocalModel) {
+                // ═══════ AI MODEL SECTION (LOCAL) ═══════
+                SettingsCard(title = "LOCAL MODELS", titleColor = NeonCyan, statusDot = when {
+                    uiState.localModelLoaded && uiState.activeModelType != ModelType.GEMINI -> Color(0xFF34D399)
+                    uiState.localModelLoading -> Color(0xFFFBBF24)
+                    else -> Color(0xFFEF4444)
+                }, statusText = when {
+                    uiState.localModelLoading -> "Loading..."
+                    uiState.localModelLoaded && uiState.activeModelType != ModelType.GEMINI -> "Ready"
+                    else -> "Idle"
+                }) {
+                                    if (isScanning) {
+                                        Text("Scanning device for models... Please wait.", color = NeonCyan, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
+                                    } else if (models.isNotEmpty()) {
+                                        Text("Discovered Models", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        models.forEach { file ->
+                            val isSelected = selectedPath == file.absolutePath
+                            val isCurrentlyLoaded = isSelected && uiState.localModelLoaded && uiState.activeModelType != ModelType.GEMINI
+                            val modelType = AgentViewModel.detectModelType(file.absolutePath)
+                            val typeLabel = if (modelType == ModelType.GGUF) "GGUF" else "LiteRT"
+                            val typeColor = if (modelType == ModelType.GGUF) Color(0xFFFF9F43) else NeonCyan
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
                                     if (isSelected) NeonCyan.copy(alpha = 0.08f) else Color.Transparent,
                                     RoundedCornerShape(12.dp)
                                 )
@@ -209,18 +273,26 @@ fun SettingsScreen(
                     }
                 }
 
+                val scanScope = rememberCoroutineScope()
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { models = scanForModels() },
+                        onClick = { 
+                            scanScope.launch {
+                                isScanning = true
+                                models = withContext(kotlinx.coroutines.Dispatchers.IO) { scanForModels() }
+                                isScanning = false
+                            }
+                        },
+                        enabled = !isScanning,
                         shape = RoundedCornerShape(10.dp),
                         border = ButtonDefaults.outlinedButtonBorder.copy(
                             brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.2f))
                         )
                     ) {
-                        Text("↻ Rescan", color = NeonCyan.copy(alpha = 0.7f), fontSize = 12.sp)
+                        Text(if (isScanning) "Scanning..." else "↻ Rescan", color = NeonCyan.copy(alpha = 0.7f), fontSize = 12.sp)
                     }
                     OutlinedButton(
                         onClick = { showCustomInput = !showCustomInput },
@@ -271,23 +343,65 @@ fun SettingsScreen(
                     fontFamily = FontFamily.Monospace
                 )
             }
+            } else {
+                // ═══════ AI MODEL SECTION (CLOUD) ═══════
+                SettingsCard(title = "CLOUD MODELS", titleColor = Color(0xFF34D399), statusDot = when {
+                    uiState.localModelLoaded && uiState.activeModelType == ModelType.GEMINI -> Color(0xFF34D399)
+                    uiState.localModelLoading -> Color(0xFFFBBF24)
+                    else -> Color(0xFFEF4444)
+                }, statusText = when {
+                    uiState.localModelLoading -> "Connecting..."
+                    uiState.localModelLoaded && uiState.activeModelType == ModelType.GEMINI -> "Connected"
+                    else -> "Disconnected"
+                }) {
+                    Text("Zero Rate Limit Mode (Key Pool)", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Enter multiple free Gemini API keys separated by commas. Synapse will automatically rotate them if a rate limit (429) is hit.", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, lineHeight = 16.sp)
+                    
+                    OutlinedTextField(
+                        value = geminiKeys,
+                        onValueChange = { geminiKeys = it },
+                        label = { Text("Gemini API Keys", color = Color.White.copy(alpha = 0.3f)) },
+                        placeholder = { Text("AIzaSy..., AIzaSy...", color = Color.White.copy(alpha = 0.12f), fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = settingsFieldColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        minLines = 3,
+                        maxLines = 5,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = Color.White
+                        )
+                    )
+                }
+            }
 
             // Load Model Button
             Button(
                 onClick = {
-                    val newConfig = config.copy(useLocalModel = true, localModelPath = selectedPath)
+                    val newConfig = config.copy(
+                        useLocalModel = useLocalModel, 
+                        localModelPath = selectedPath,
+                        geminiApiKeys = geminiKeys,
+                        serverHost = serverHost,
+                        serverPort = serverPort.toIntOrNull() ?: 11434,
+                        contextLength = contextLength.toIntOrNull() ?: 4096,
+                        threadCount = threadCount.toIntOrNull() ?: 6,
+                        maxTokens = maxTokens.toIntOrNull() ?: 2048,
+                        temperature = temperature
+                    )
                     viewModel.saveConfig(context, newConfig)
                 },
                 modifier = Modifier.fillMaxWidth().height(52.dp),
-                enabled = selectedPath.isNotBlank() && !uiState.localModelLoading,
+                enabled = (useLocalModel && selectedPath.isNotBlank() && !uiState.localModelLoading) || (!useLocalModel && geminiKeys.isNotBlank() && !uiState.localModelLoading),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = NeonCyan,
-                    disabledContainerColor = NeonCyan.copy(alpha = 0.15f)
+                    containerColor = if (useLocalModel) NeonCyan else Color(0xFF34D399),
+                    disabledContainerColor = if (useLocalModel) NeonCyan.copy(alpha = 0.15f) else Color(0xFF34D399).copy(alpha = 0.15f)
                 ),
                 shape = RoundedCornerShape(14.dp)
             ) {
                 Text(
-                    if (uiState.localModelLoading) "Loading..." else "Load Selected Model",
+                    if (uiState.localModelLoading) "Connecting..." else if (useLocalModel) "Load Selected Model" else "Connect to Gemini",
                     color = if (uiState.localModelLoading) Color.White.copy(alpha = 0.4f) else DarkNavy,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
@@ -440,19 +554,29 @@ fun SettingsScreen(
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    val btnModifier = Modifier.weight(1f).height(38.dp)
+                    val btnShape = RoundedCornerShape(6.dp)
+                    val textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 8.sp,
+                        textAlign = TextAlign.Center
+                    )
+
                     Button(
                         onClick = {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         },
-                        modifier = Modifier.weight(1f).height(40.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.2f)),
-                        shape = RoundedCornerShape(8.dp)
+                        modifier = btnModifier,
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.25f)),
+                        shape = btnShape,
+                        contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Accessibility", color = Color.White, fontSize = 11.sp)
+                        Text("ACCESSIBILITY", color = Color.White, style = textStyle)
                     }
                     
                     Button(
@@ -461,11 +585,12 @@ fun SettingsScreen(
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         },
-                        modifier = Modifier.weight(1f).height(40.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan.copy(alpha = 0.2f)),
-                        shape = RoundedCornerShape(8.dp)
+                        modifier = btnModifier,
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan.copy(alpha = 0.25f)),
+                        shape = btnShape,
+                        contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Keyboard", color = Color.White, fontSize = 11.sp)
+                        Text("KEYBOARD", color = Color.White, style = textStyle)
                     }
                     
                     Button(
@@ -474,11 +599,12 @@ fun SettingsScreen(
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         },
-                        modifier = Modifier.weight(1f).height(40.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9F43).copy(alpha = 0.2f)),
-                        shape = RoundedCornerShape(8.dp)
+                        modifier = btnModifier,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9F43).copy(alpha = 0.25f)),
+                        shape = btnShape,
+                        contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Notifications", color = Color.White, fontSize = 11.sp)
+                        Text("NOTIFICATIONS", color = Color.White, style = textStyle)
                     }
                 }
                 
@@ -516,59 +642,59 @@ private fun SettingsCard(
     statusText: String? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
+            .background(DarkCard.copy(alpha = 0.5f))
             .border(
-                BorderStroke(
-                    width = 1.dp,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.5f),
-                            Color.White.copy(alpha = 0.08f)
-                        )
-                    )
-                ),
-                shape = RoundedCornerShape(16.dp)
+                0.5.dp,
+                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)),
+                RectangleShape
             )
-            .padding(1.dp) // Clip the inner content
-            .background(DarkCard, RoundedCornerShape(15.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    title, 
-                    color = titleColor, 
-                    fontWeight = FontWeight.Bold, 
-                    fontSize = 14.sp, 
-                    letterSpacing = 2.sp,
-                    modifier = Modifier.offset(x = 1.dp, y = 1.dp)
-                )
-                if (statusDot != null && statusText != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.offset(x = 1.dp, y = 1.dp)
-                    ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (statusDot != null) {
                         Box(
                             modifier = Modifier
-                                .size(8.dp)
-                                .background(statusDot, RoundedCornerShape(4.dp))
+                                .size(6.dp)
+                                .background(statusDot, CircleShape)
                         )
-                        Text(statusText, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
                     }
+                    Text(
+                        text = title,
+                        color = titleColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+                }
+                if (statusText != null) {
+                    Text(
+                        text = statusText,
+                        color = Color.White.copy(alpha = 0.3f),
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
-            Divider(color = titleColor.copy(alpha = 0.1f))
-            content()
+            
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                content()
+            }
+        }
     }
 }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(

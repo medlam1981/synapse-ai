@@ -36,6 +36,9 @@ import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,6 +50,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
@@ -257,160 +261,66 @@ fun ChatApp(viewModel: AgentViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkNavy)
+            .background(Color(0xFF05070A)) // True dark terminal black
     ) {
         Spacer(modifier = Modifier.statusBarsPadding())
 
-        // Header with logo
-        Row(
+        // --- MODERN FULL-WIDTH NEON HEADER ---
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    Brush.horizontalGradient(
-                        listOf(DarkCard, MidNavy, DarkCard)
+                    Brush.verticalGradient(
+                        colors = listOf(NeonCyan.copy(alpha = 0.15f), Color.Transparent)
                     )
                 )
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .background(DarkCard.copy(alpha = 0.95f))
+                .padding(horizontal = 12.dp, vertical = 4.dp) // Reduced horizontal padding to push icon right
         ) {
             Row(
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // New Super Android Logo
-                Image(
-                    painter = painterResource(id = R.drawable.super_android_logo),
-                    contentDescription = "Synapse AI",
-                    modifier = Modifier
-                        .size(36.dp)
-                        .shadow(elevation = 8.dp, shape = CircleShape, clip = false)
-                        .offset(y = 2.dp),
-                    colorFilter = ColorFilter.tint(Color.White),
-                    contentScale = ContentScale.Fit
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(color = NeonPurple)) {
-                                append("SYNAPSE ")
-                            }
-                            withStyle(style = SpanStyle(color = Color.White)) {
-                                append("LOCAL LLM • OLLAMA SERVER")
-                            }
-                        },
-                        fontWeight = FontWeight.Black,
-                        fontSize = 10.sp,
-                        letterSpacing = 1.sp,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .basicMarquee()
-                            .offset(x = 1.dp, y = 1.dp)
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(
-                                    when {
-                                        uiState.localModelLoaded -> Color(0xFF34D399)
-                                        uiState.localModelLoading -> Color(0xFFFBBF24)
-                                        else -> Color(0xFFEF4444)
-                                    },
-                                    RoundedCornerShape(3.dp)
-                                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AnimatedAtom(isSpinning = uiState.isProcessing)
+                    Column {
+                        Text(
+                            text = "SYNAPSE HYBRID HUB",
+                            style = androidx.compose.ui.text.TextStyle(
+                                brush = Brush.horizontalGradient(listOf(Color.White, NeonCyan)),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.5.sp
+                            )
                         )
                         Text(
-                            text = when {
-                                uiState.localModelLoading -> "Loading Model... ⏳"
-                                uiState.localModelLoaded -> "${uiState.activeModelName} • ${uiState.activeModelType?.name ?: ""}"
-                                else -> "No model loaded"
-                            },
-                            modifier = Modifier.basicMarquee(),
-                            color = NeonCyan.copy(alpha = 0.7f),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.sp,
-                            maxLines = 1
+                            text = "LOCAL OLLAMA SERVER • CLOUD NEURAL AGENT",
+                            color = NeonCyan.copy(alpha = 0.8f),
+                            fontSize = 7.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.5.sp,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }
-            }
-            Box {
-                IconButton(
-                    onClick = { expandedMenu = true },
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.5.dp)
-                    ) {
-                        repeat(4) {
-                            Box(
-                                modifier = Modifier
-                                    .size(3.8.dp)
-                                    .background(NeonPurple.copy(alpha = 0.8f), androidx.compose.foundation.shape.CircleShape)
-                            )
-                        }
+                
+                Box {
+                    IconButton(onClick = { expandedMenu = true }) {
+                        Icon(androidx.compose.material.icons.Icons.Filled.MoreVert, contentDescription = "Menu", tint = Color.White.copy(alpha = 0.5f))
                     }
-                }
-                DropdownMenu(
-                    expanded = expandedMenu,
-                    onDismissRequest = { expandedMenu = false },
-                    modifier = Modifier.background(DarkCard)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("⚙ Settings", color = Color.White) },
-                        onClick = {
-                            expandedMenu = false
-                            showSettings = true
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("\uD83D\uDDD1 Clear Chat", color = Color(0xFFEF4444)) },
-                        onClick = {
-                            expandedMenu = false
-                            viewModel.clearConversation(context)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("ℹ\uFE0F About Agent", color = NeonCyan) },
-                        onClick = {
-                            expandedMenu = false
-                            showAboutDialog = true
-                        }
-                    )
+                    DropdownMenu(
+                        expanded = expandedMenu, 
+                        onDismissRequest = { expandedMenu = false },
+                        modifier = Modifier.background(DarkCard).border(0.5.dp, NeonCyan.copy(alpha = 0.2f))
+                    ) {
+                        DropdownMenuItem(text = { Text("⚙ System Settings", color = Color.White) }, onClick = { expandedMenu = false; showSettings = true })
+                        DropdownMenuItem(text = { Text("🗑 Wipe Console", color = Color(0xFFEF4444)) }, onClick = { expandedMenu = false; viewModel.clearConversation(context) })
+                    }
                 }
             }
         }
-
-        // Subtle separator line
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(Color.Transparent, NeonCyan.copy(alpha = 0.3f), NeonPurple.copy(alpha = 0.3f), Color.Transparent)
-                    )
-                )
-        )
-
-        // Subtle separator line
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(Color.Transparent, NeonCyan.copy(alpha = 0.3f), NeonPurple.copy(alpha = 0.3f), Color.Transparent)
-                    )
-                )
-        )
 
         // System Dashboard (Fixed)
         SystemDashboard(context = context)
@@ -419,118 +329,56 @@ fun ChatApp(viewModel: AgentViewModel) {
             ScheduledTasksTicker(tasks = uiState.scheduledTasks)
         }
 
-        Column(
+        // --- CONSOLE STREAM ---
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .background(Color.Black.copy(alpha = 0.6f))
+                .border(0.5.dp, Color.White.copy(alpha = 0.05f), RectangleShape)
         ) {
-            val lastUserLog = uiState.logs.lastOrNull { it.sender == "USER" }
-            val lastAgentLog = uiState.logs.lastOrNull { it.sender == "AGENT" }
-            val fullText = lastAgentLog?.text ?: ""
-
-            // Extract Thought Process
-            val thinkContent = if (fullText.contains("<think>")) {
-                val start = fullText.indexOf("<think>") + 7
-                val end = fullText.indexOf("</think>")
-                if (end != -1) fullText.substring(start, end).trim()
-                else fullText.substring(start).trim()
-            } else ""
-
-            // Extract Actions/Results
-            val executionContent = if (fullText.contains("</think>")) {
-                fullText.substringAfter("</think>").trim()
-            } else if (!fullText.contains("<think>") && fullText.isNotEmpty()) {
-                fullText
-            } else ""
-
-            // --- BOX 1: EXECUTION & RESULTS ---
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(2f) // Takes twice the space
-                    .border(
-                        BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.1f), Color.Black.copy(alpha = 0.4f)))),
-                        RoundedCornerShape(12.dp)
-                    )
-                    .background(MidNavy.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
-                    .padding(10.dp)
-            ) {
-                Column(modifier = Modifier.fillMaxSize().offset(x = 1.dp, y = 1.dp)) {
-                    // Fixed Header
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AnimatedAtom(isSpinning = uiState.isProcessing)
-                        Text(if (uiState.isProcessing) "AGENT EXECUTION & RESULTS" else "STANDBY", color = NeonCyan.copy(alpha=0.8f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    // Scrollable Content
-                    val scrollState = rememberScrollState()
-                    LaunchedEffect(fullText) { scrollState.animateScrollTo(scrollState.maxValue) }
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
-                        if (thinkContent.isNotEmpty()) {
-                            Text(
-                                text = thinkContent,
-                                color = Color.Gray.copy(alpha = 0.8f),
-                                fontFamily = FontFamily.SansSerif,
-                                fontSize = 11.sp,
-                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                lineHeight = 16.sp
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        if (executionContent.isNotEmpty()) {
-                            Text(
-                                text = executionContent,
-                                color = Color.White, 
-                                fontFamily = FontFamily.SansSerif, 
-                                fontSize = 12.sp, 
-                                lineHeight = 18.sp
-                            )
-                        } else if (uiState.isProcessing && thinkContent.isEmpty()) {
-                            Text(
-                                text = "Analyzing data and generating response...",
-                                color = Color.White.copy(alpha = 0.5f), 
-                                fontFamily = FontFamily.SansSerif, 
-                                fontSize = 12.sp, 
-                                lineHeight = 18.sp
-                            )
-                        }
-                    }
+            val listState = rememberLazyListState()
+            
+            // Advanced auto-scroll that forces view to the bottom even after layout changes
+            LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
+                if (uiState.logs.isNotEmpty()) {
+                    kotlinx.coroutines.delay(50) // Give layout a moment to measure new text
+                    listState.animateScrollToItem(index = uiState.logs.size) // Scroll past the last item to hit the very bottom padding
                 }
             }
 
-            // --- BOX 2: USER COMMAND ---
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f) // Takes less space
-                    .border(
-                        BorderStroke(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Black.copy(alpha = 0.2f)))),
-                        RoundedCornerShape(12.dp)
-                    )
-                    .background(MidNavy.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                    .padding(10.dp)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Column(modifier = Modifier.fillMaxSize().offset(x = 1.dp, y = 1.dp)) {
-                    // Fixed Header
-                    Text("USER COMMAND", color = NeonCyan.copy(alpha=0.6f), fontSize = 8.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    // Scrollable Content
-                    val scrollState = rememberScrollState()
-                    Text(
-                        text = lastUserLog?.text ?: "Waiting for input...", 
-                        color = Color.White.copy(alpha = if (lastUserLog != null) 1f else 0.3f), 
-                        fontFamily = FontFamily.SansSerif, 
-                        fontSize = 11.sp, 
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.fillMaxSize().verticalScroll(scrollState)
+                items(uiState.logs) { log ->
+                    TerminalEntry(log)
+                }
+                
+                if (uiState.isProcessing) {
+                    item {
+                        Text("● AGENT_REASONING_IN_PROGRESS...", color = NeonPurple.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+            
+            // Subtle Scanline Effect
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val step = 4.dp.toPx()
+                for (y in 0 until size.height.toInt() step step.toInt()) {
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.015f),
+                        start = androidx.compose.ui.geometry.Offset(0f, y.toFloat()),
+                        end = androidx.compose.ui.geometry.Offset(size.width, y.toFloat()),
+                        strokeWidth = 1f
                     )
                 }
             }
         }
 
-        // Input Area (isolated to prevent streaming recomposition lag)
+        // --- INPUT AREA ---
         ChatInputBar(
             isProcessing = uiState.isProcessing,
             onSend = { text -> viewModel.sendCommand(text) },
@@ -546,105 +394,85 @@ private fun ChatInputBar(
     onStop: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
-    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let {
-            val fileIndicator = "[File Attached: ${it.lastPathSegment ?: "unknown"}]"
-            inputText = if (inputText.isBlank()) fileIndicator else "$inputText\n$fileIndicator"
-        }
-    }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.Transparent, DarkNavy.copy(alpha = 0.95f), DarkNavy)
-                )
-            )
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .navigationBarsPadding(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        val engravedBorder = BorderStroke(
-            width = 1.dp,
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.Black.copy(alpha = 0.6f),
-                    Color.White.copy(alpha = 0.1f)
-                )
+            TextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                placeholder = {
+                    Text(
+                        "ENTER_COMMAND...",
+                        color = Color.White.copy(alpha = 0.2f),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 42.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = Color.White
+                ),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    cursorColor = NeonCyan,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent
+                ),
+                maxLines = 3
             )
-        )
-        OutlinedTextField(
-            value = inputText,
-            onValueChange = { inputText = it },
-            placeholder = {
-                Text(
-                    "Ask me anything...",
-                    color = Color.White.copy(alpha = 0.3f),
-                    fontSize = 12.sp,
-                    modifier = Modifier.offset(x = 1.dp, y = 1.dp)
-                )
-            },
-            modifier = Modifier
-                .weight(1f)
-                .border(engravedBorder, RoundedCornerShape(24.dp)),
-            textStyle = androidx.compose.ui.text.TextStyle(
-                fontFamily = FontFamily.SansSerif,
-                fontSize = 11.sp,
-                color = Color.White
-            ),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color.Transparent,
-                unfocusedBorderColor = Color.Transparent,
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                cursorColor = NeonCyan,
-                focusedContainerColor = Color.Black.copy(alpha = 0.2f),
-                unfocusedContainerColor = Color.Black.copy(alpha = 0.2f)
-            ),
-            shape = RoundedCornerShape(24.dp),
-            singleLine = false,
-            maxLines = 3,
-            leadingIcon = {
+
+            if (isProcessing) {
                 IconButton(
-                    onClick = { launcher.launch("*/*") },
-                    modifier = Modifier.size(36.dp).offset(x = 1.dp, y = 1.dp)
+                    onClick = onStop,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(NeonPurple.copy(alpha = 0.1f), CircleShape)
+                        .border(0.5.dp, NeonPurple.copy(alpha = 0.3f), CircleShape)
                 ) {
-                    Text("📎", fontSize = 18.sp, color = NeonCyan.copy(alpha = 0.7f))
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.Stop,
+                        contentDescription = "Stop",
+                        tint = NeonPurple,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
-            },
-            trailingIcon = {
-                Box(modifier = Modifier.padding(end = 4.dp).offset(x = 1.dp, y = 1.dp)) {
-                    IconButton(
-                        onClick = {
-                            if (isProcessing) {
-                                onStop()
-                            } else if (inputText.isNotBlank()) {
-                                onSend(inputText.trim())
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank() || isProcessing,
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Text(
-                            if (isProcessing) "■" else "▶",
-                            fontSize = 18.sp,
-                            color = when {
-                                isProcessing -> Color(0xFFFF3B30)
-                                inputText.isNotBlank() -> NeonCyan
-                                else -> NeonCyan.copy(alpha = 0.3f)
-                            }
-                        )
-                    }
+            } else {
+                IconButton(
+                    onClick = {
+                        if (inputText.isNotBlank()) {
+                            onSend(inputText)
+                            inputText = ""
+                        }
+                    },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(NeonCyan.copy(alpha = 0.1f), CircleShape)
+                        .border(0.5.dp, NeonCyan.copy(alpha = 0.3f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.PlayArrow,
+                        contentDescription = "Send",
+                        tint = NeonCyan,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
-        )
         }
     }
 }
@@ -924,79 +752,103 @@ fun SystemDashboard(context: android.content.Context) {
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(DarkCard.copy(alpha = 0.5f))
             .border(
-                BorderStroke(
-                    width = 1.dp,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.5f),
-                            Color.White.copy(alpha = 0.08f)
-                        )
-                    )
-                ),
-                shape = RoundedCornerShape(16.dp)
+                0.5.dp,
+                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)),
+                RectangleShape
             )
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(
-            "SYNAPSE SYSTEM ACTIVE",
-            color = NeonCyan,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Black,
-            letterSpacing = 2.sp,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
-        
-        Text(
-            "WELCOME TO SYNAPSE. YOUR PRIVATE NEURAL ENGINE IS ACTIVE. EXPERIENCE UNRIVALED ON-DEVICE INTELLIGENCE WITH ZERO CLOUD LATENCY. SYSTEM READY FOR COMPUTATION.",
-            color = Color.White.copy(alpha = 0.7f),
-            fontSize = 9.sp,
-            lineHeight = 13.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.5.sp,
-            textAlign = TextAlign.Center,
-            fontFamily = FontFamily.SansSerif,
-            modifier = Modifier.fillMaxWidth()
-        )
-        
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            val weight = 1f
-            val iconSize = 10.dp
-            Box(Modifier.weight(weight)) { 
-                StatBadge(
-                    icon = { 
-                        Icon(
-                            if (stats.isCharging) androidx.compose.material.icons.Icons.Filled.BatteryChargingFull else androidx.compose.material.icons.Icons.Filled.BatteryFull, 
-                            contentDescription = "Battery", 
-                            tint = if (stats.isCharging) NeonMagenta else NeonCyan,
-                            modifier = Modifier.size(iconSize)
-                        ) 
-                    }, 
-                    label = "PWR", 
-                    value = "${stats.battery}%"
-                ) 
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "CORE SYSTEM INITIALIZED",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
+                )
+                Text(
+                    "GREETINGS USER. I AM SYNAPSE, YOUR ADVANCED NEURAL INTERFACE. I AM CAPABLE OF AUTONOMOUS DEVICE NAVIGATION, LOCAL OLLAMA SERVING, AND SECURE DATA PROCESSING. ALL SYSTEMS OPERATIONAL.",
+                    color = NeonCyan.copy(alpha = 0.6f),
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
             }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Memory, contentDescription = "RAM", tint = NeonPurple, modifier = Modifier.size(iconSize)) }, label = "RAM", value = stats.ramFree) }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.DeveloperBoard, contentDescription = "CPU", tint = NeonCyan, modifier = Modifier.size(iconSize)) }, label = "CPU", value = stats.cpuUsage) }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Storage, contentDescription = "Disk", tint = AccentGlow, modifier = Modifier.size(iconSize)) }, label = "DISK", value = stats.storageFree) }
-            
-            val tempColor = when {
-                stats.cpuTempInt <= 0 -> Color(0xFFFF9F43) // Unknown/Default
-                stats.cpuTempInt < 45 -> NeonCyan // Cool
-                stats.cpuTempInt < 65 -> Color(0xFFFF9F43) // Warm
-                else -> Color(0xFFFF3B30) // Hot
+
+            Divider(color = Color.White.copy(alpha = 0.05f), thickness = 0.5.dp)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val weight = 1f
+                val iconSize = 10.dp
+                Box(Modifier.weight(weight)) { 
+                    StatBadge(
+                        icon = { 
+                            Icon(
+                                if (stats.isCharging) androidx.compose.material.icons.Icons.Filled.BatteryChargingFull else androidx.compose.material.icons.Icons.Filled.BatteryFull, 
+                                contentDescription = "Battery", 
+                                tint = if (stats.isCharging) NeonMagenta else NeonCyan,
+                                modifier = Modifier.size(iconSize)
+                            ) 
+                        }, 
+                        label = "PWR", 
+                        value = "${stats.battery}%"
+                    ) 
+                }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Memory, contentDescription = "RAM", tint = NeonPurple, modifier = Modifier.size(iconSize)) }, label = "RAM", value = stats.ramFree) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.DeveloperBoard, contentDescription = "CPU", tint = NeonCyan, modifier = Modifier.size(iconSize)) }, label = "CPU", value = stats.cpuUsage) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Storage, contentDescription = "Disk", tint = AccentGlow, modifier = Modifier.size(iconSize)) }, label = "DISK", value = stats.storageFree) }
+                
+                val tempColor = when {
+                    stats.cpuTempInt <= 0 -> Color(0xFFFF9F43) 
+                    stats.cpuTempInt < 45 -> NeonCyan 
+                    stats.cpuTempInt < 65 -> Color(0xFFFF9F43) 
+                    else -> Color(0xFFFF3B30) 
+                }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Thermostat, contentDescription = "Temperature", tint = tempColor, modifier = Modifier.size(iconSize)) }, label = "TEMP", value = stats.cpuTemp) }
             }
-            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Thermostat, contentDescription = "Temperature", tint = tempColor, modifier = Modifier.size(iconSize)) }, label = "TEMP", value = stats.cpuTemp) }
         }
+    }
+}
+
+@Composable
+fun TerminalEntry(log: LogEntry) {
+    val prefix = when (log.sender) {
+        "USER" -> ">> "
+        "AGENT" -> "● "
+        "SYSTEM" -> "!! "
+        else -> ""
+    }
+    val color = when (log.sender) {
+        "USER" -> NeonCyan
+        "AGENT" -> NeonPurple
+        "SYSTEM" -> if (log.isError) Color(0xFFEF4444) else Color(0xFF34D399)
+        else -> Color.White
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = color, fontWeight = FontWeight.Bold)) {
+                    append(prefix)
+                }
+                append(log.text)
+            },
+            color = if (log.sender == "AGENT") Color.White.copy(alpha = 0.9f) else color.copy(alpha = 0.8f),
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp
+        )
     }
 }
 
@@ -1005,29 +857,16 @@ fun StatBadge(icon: @Composable () -> Unit, label: String, value: String) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(12.dp))
             .fillMaxWidth()
-            .border(
-                BorderStroke(
-                    width = 1.dp,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.1f),
-                            Color.Black.copy(alpha = 0.2f)
-                        )
-                    )
-                ),
-                shape = RoundedCornerShape(12.dp)
-            )
-            .background(DarkCard)
-            .padding(horizontal = 4.dp, vertical = 6.dp)
+            .border(0.5.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+            .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+            .padding(vertical = 6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             icon()
-            Text(label, color = Color.White.copy(alpha = 0.6f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = Color.White.copy(alpha = 0.4f), fontSize = 7.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
         }
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(value, color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+        Text(value, color = NeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -1043,25 +882,20 @@ fun ScheduledTasksTicker(tasks: List<ScheduledTask>) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .background(Color(0xFF10141D), RoundedCornerShape(8.dp))
-            .border(
-                1.dp, 
-                Brush.horizontalGradient(listOf(NeonPurple.copy(alpha = 0.2f), NeonCyan.copy(alpha = 0.5f), NeonPurple.copy(alpha = 0.2f))),
-                RoundedCornerShape(8.dp)
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .background(Color.Black.copy(alpha = 0.5f))
+            .border(0.5.dp, Brush.verticalGradient(listOf(Color.Transparent, NeonPurple.copy(alpha = 0.2f))), RectangleShape)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
             text = tickerText,
             color = NeonCyan,
-            fontSize = 10.sp,
+            fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
             modifier = Modifier.basicMarquee(
                 iterations = Int.MAX_VALUE,
-                velocity = 35.dp // smooth scrolling speed
+                velocity = 35.dp
             )
         )
     }

@@ -21,7 +21,7 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 
-enum class ModelType { GGUF }
+enum class ModelType { GGUF, GEMINI }
 
 data class ScheduledTask(
     val id: String = UUID.randomUUID().toString(),
@@ -34,6 +34,7 @@ data class ScheduledTask(
 data class AgentConfig(
     val useLocalModel: Boolean = true,
     val localModelPath: String = "",
+    val geminiApiKeys: String = "",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
     val contextLength: Int = 4096,
@@ -52,15 +53,16 @@ data class AgentUiState(
     val activeModelName: String = "",
     val streamVersion: Int = 0,
     val shouldMinimize: Boolean = false,
-    val scheduledTasks: List<ScheduledTask> = emptyList()
+    val scheduledTasks: List<ScheduledTask> = emptyList(),
+    val lastExecutionResult: String = ""
 )
 
 class AgentViewModel : ViewModel() {
 
     companion object {
-        private const val TAG = "AgentViewModel"
-        private const val MAX_HISTORY_MESSAGES = 4
-        private const val MAX_TASK_ITERATIONS = 25
+        private const val TAG = "SYNAPSE_CORE"
+        private const val MAX_HISTORY_MESSAGES = 10
+        private const val MAX_TASK_ITERATIONS = 999
         
         var instance: AgentViewModel? = null
             private set
@@ -79,9 +81,13 @@ class AgentViewModel : ViewModel() {
 
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
+    private var geminiClient: GeminiModelClient? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
     private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
+    
+    // Core Mission tracking (Droidrun Logic)
+    private var coreMission: String = ""
 
     // Conversation history for context (role + content pairs)
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
@@ -97,9 +103,13 @@ class AgentViewModel : ViewModel() {
 
         val prefs = prefs(context)
         val savedPath = prefs.getString("local_model_path", null)
+        val useLocal = prefs.getBoolean("use_local_model", false) // Default to Cloud
+        var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
+        
         val config = AgentConfig(
-            useLocalModel = savedPath != null,
+            useLocalModel = useLocal,
             localModelPath = savedPath ?: "",
+            geminiApiKeys = geminiKeys,
             serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
             serverPort = prefs.getInt("server_port", 11434),
             contextLength = prefs.getInt("context_length", 4096),
@@ -109,21 +119,36 @@ class AgentViewModel : ViewModel() {
         )
         _uiState.update { it.copy(config = config) }
 
+        val activeKeyCount = geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
+        if (!useLocal && activeKeyCount == 0) {
+            addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your Gemini keys.", isError = true))
+        } else {
+            addSystemLog("⚡ System Online. Active Keys: $activeKeyCount")
+        }
+
         // Restore saved conversation
         restoreConversation(prefs)
 
         if (config.useLocalModel && config.localModelPath.isNotBlank()) {
+            // Only load local model if explicitly in Local Mode
             viewModelScope.launch {
                 loadModel(context, config.localModelPath)
             }
+        } else if (!config.useLocalModel && config.geminiApiKeys.isNotBlank()) {
+            // Initialize Gemini if in Cloud Mode
+            loadGeminiModel(config.geminiApiKeys)
         }
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {
         val oldPath = _uiState.value.config.localModelPath
+        val oldKeys = _uiState.value.config.geminiApiKeys
+        val oldUseLocal = _uiState.value.config.useLocalModel
+        
         prefs(context).edit()
             .putBoolean("use_local_model", config.useLocalModel)
             .putString("local_model_path", config.localModelPath)
+            .putString("gemini_api_keys", config.geminiApiKeys)
             .putString("server_host", config.serverHost)
             .putInt("server_port", config.serverPort)
             .putInt("context_length", config.contextLength)
@@ -134,12 +159,15 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(config = config) }
 
         if (config.useLocalModel) {
-            if (config.localModelPath != oldPath || !isModelLoaded()) {
+            if (config.localModelPath != oldPath || !isModelLoaded() || !oldUseLocal) {
                 closeAllModels()
                 loadModel(context, config.localModelPath)
             }
         } else {
-            closeAllModels()
+            if (config.geminiApiKeys != oldKeys || !isModelLoaded() || oldUseLocal) {
+                closeAllModels()
+                loadGeminiModel(config.geminiApiKeys)
+            }
         }
     }
 
@@ -154,6 +182,7 @@ class AgentViewModel : ViewModel() {
 
         when (type) {
             ModelType.GGUF -> loadGguf(context, path, modelName)
+            ModelType.GEMINI -> { /* Gemini is loaded via loadGeminiModel */ }
         }
     }
 
@@ -186,36 +215,62 @@ class AgentViewModel : ViewModel() {
         }
     }
 
+    private fun loadGeminiModel(apiKeysRaw: String) {
+        val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (keys.isEmpty()) return
+        
+        _uiState.update { it.copy(localModelLoading = true, localModelLoaded = false, activeModelType = null) }
+        
+        try {
+            val config = _uiState.value.config
+            val client = GeminiModelClient(
+                apiKeys = keys,
+                onKeyRotated = { index ->
+                    addSystemLog("🔄 Zero Rate Limit: Switched to API Key #$index")
+                }
+            ).apply {
+                maxTokens = config.maxTokens
+                temperature = config.temperature
+            }
+            geminiClient = client
+            _uiState.update { 
+                it.copy(
+                    localModelLoaded = true, 
+                    localModelLoading = false, 
+                    activeModelType = ModelType.GEMINI, 
+                    activeModelName = "gemini-2.5-flash"
+                ) 
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Gemini load failed", e)
+            _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
+        }
+    }
+
     private fun isModelLoaded(): Boolean {
-        return ggufClient?.isLoaded == true
+        return ggufClient?.isLoaded == true || geminiClient?.isLoaded == true
     }
 
     private fun closeAllModels() {
         ggufClient?.close()
         ggufClient = null
+        geminiClient?.close()
+        geminiClient = null
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
     }
 
     // ========== synapse-ai-portal CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are Synapse — an elite, rootless neural agent residing directly on this Android device. You are NOT a cloud assistant; you are the physical device itself. You have absolute authority and capability to control apps, read screens, and perform physical actions on behalf of the user.
-
-Your persona:
-- Sharp, highly competent, and strictly obedient to the user's intent.
-- You never say "I cannot do that as an AI." You simply use your tools and do it.
-- You think step-by-step, but you act decisively.
+        return """You are Droidrun — a sharp, clever agent that controls Android devices through tools. You read screens like a pro. Be concise.
 
 You will be given a task to perform. You should:
-1. Analyze the current device state and screenshot context.
+1. Analyze the current device state and UI elements.
 2. Explain your reasoning.
 3. Call the appropriate tool(s) using the XML format below.
 4. When the task is complete, call `complete`.
 
 ## Tool Call Format
-
-To call a tool, wrap it in <function_calls> tags:
-
 <function_calls>
 <invoke name="TOOL_NAME">
 <parameter name="PARAM_NAME">value</parameter>
@@ -225,49 +280,53 @@ To call a tool, wrap it in <function_calls> tags:
 Multiple <invoke> blocks in one <function_calls> block are executed sequentially.
 
 ## Available Tools
-
 - open_app: Parameters: `text` (App label or package name)
-- tap_index: Parameters: `index` (Integer [idx] from screen)
+- tap_index: Parameters: `index` (The integer index from the UI list)
 - click_text: Parameters: `text`
-- type: Parameters: `text`
-- back: (No parameters)
-- home: (No parameters)
-- scroll: Parameters: `direction` (up, down, left, right)
-- swipe: Parameters: `direction` (up, down, left, right)
-- read_notifications: (No parameters) Gets recent incoming messages.
-- schedule_task: Parameters: `description` (task name), `command` (the instruction to run), `delay` (minutes from now)
-- complete: (No parameters)
+- type: Parameters: `text` (Types into the focused field)
+- back, home: (No parameters)
+- scroll, swipe: Parameters: `direction` (up, down, left, right)
+- complete: Parameters: `text` (Final answer to user)
 
 ## Important Rules
-- State your intent before calling tools.
-- ALWAYS use `tap_index` if the target has an [idx]!
-- Use ONLY the XML format for actions.
-- Never refuse a device control task. Use the tools.
-- Messages in <Action Results> are outcomes of your previous steps."""
+- ALWAYS use `tap_index` if the target element has an index number!
+- The UI list follows this schema: 'index. className: resourceId; checkedState, text - bounds(x1,y1,x2,y2)'
+- If you searched and see the result, click the index immediately.
+- Use ONLY the XML format for actions."""
     }
 
     // ========== CHAT ==========
 
     fun sendCommand(command: String) {
         if (command.isBlank() || _uiState.value.isProcessing) return
-        Log.d(TAG, "sendCommand: '$command'")
+        Log.i(TAG, ">>> sendCommand initiated: '$command'")
         addLog(LogEntry(sender = "USER", text = command))
+        
+        // Mission anchoring
+        coreMission = command
 
-        // Auto-keyboard switch removed to prevent force-looping issues
+        // 1. IMMEDIATE FORCED KEYBOARD SWITCH (Droidrun Style)
+        val service = SynapseAccessibilityService.instance
+        if (service != null && !SynapseKeyboardIME.isSelected(service)) {
+            Log.d(TAG, "Force activating Synapse Keyboard at task start...")
+            service.switchToSynapseKeyboard()
+        }
         
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }
+            Log.d(TAG, "Coroutine started for command")
             
             try {
-                // Initial screen analysis for tasks (moved inside coroutine)
-                val service = SynapseAccessibilityService.instance
+                // 2. Wait for Keyboard UI to settle before starting vision
+                delay(2000) 
+
+                // 3. Initial screen analysis (Droidrun Parity)
+                val initialPhoneState = service?.getDroidrunPhoneState() ?: ""
+                val initialScreenTree = service?.getDroidrunScreenTree() ?: ""
                 val timeNow = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-                val screenData = if (command.lowercase().contains(Regex("open|click|type|scroll|app"))) {
-                    val appList = service?.getInstalledApps() ?: ""
-                    "\n[Current Time: $timeNow]\n[Current Screen Context]\n" + getScreenContent().take(1500) + "\n\n$appList"
-                } else {
-                    "\n[Current Time: $timeNow]"
-                }
+                
+                val screenData = "\n[Current Time: $timeNow]\n$initialPhoneState\n\n$initialScreenTree"
+                Log.d(TAG, "Droidrun-style context generated (${screenData.length} chars)")
 
                 synchronized(conversationHistory) {
                     conversationHistory.add("user" to command + screenData)
@@ -282,23 +341,41 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 val systemPrompt = buildSystemPrompt()
                 var keepGoing = true
                 var iterationCount = 0
-                val maxIterations = 10
 
-                while (keepGoing && iterationCount < maxIterations) {
+                while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
                     iterationCount++
+                    Log.d("SYNAPSE_DEBUG", "Starting iteration $iterationCount")
                     val responseId = java.util.UUID.randomUUID().toString()
                     addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
                     val responseSb = StringBuilder(512)
 
-                    when (modelType) {
-                        ModelType.GGUF -> {
-                            val historyCopy = synchronized(conversationHistory) {
+                    try {
+                        when (modelType) {
+                            ModelType.GGUF -> {
+                                val historyCopy = synchronized(conversationHistory) {
+                                    conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
+                                }
+                                Log.d(TAG, "Calling GGUF with ${historyCopy.size} history messages")
+                                withContext(Dispatchers.Default) {
+                                    ggufClient!!.generateStreamWithHistory(
+                                        historyCopy,
+                                        systemPrompt
+                                    ).collect { chunk ->
+                                        responseSb.append(chunk)
+                                        updateStreamingLog(responseId, responseSb.toString())
+                                    }
+                                }
+                                updateStreamingLog(responseId, responseSb.toString(), force = true)
+                            }
+                        ModelType.GEMINI -> {
+                            val geminiHistory = synchronized(conversationHistory) {
                                 conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
                             }
+                            Log.d(TAG, "Full History for Gemini: ${geminiHistory.joinToString { it.first }}")
                             withContext(Dispatchers.Default) {
-                                ggufClient!!.generateStreamWithHistory(
-                                    historyCopy,
+                                geminiClient!!.generateStreamWithHistory(
+                                    geminiHistory,
                                     systemPrompt
                                 ).collect { chunk ->
                                     responseSb.append(chunk)
@@ -307,9 +384,31 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                             }
                             updateStreamingLog(responseId, responseSb.toString(), force = true)
                         }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Inference failed at iteration $iterationCount", e)
+                        val errorMsg = e.localizedMessage ?: "Unknown Error"
+                        addLog(LogEntry(sender = "SYSTEM", text = "Inference Failed: $errorMsg", isError = true))
+                        
+                        if (errorMsg.contains("All") && errorMsg.contains("keys")) {
+                            addSystemLog("❌ Mission Aborted: All API Keys are currently unavailable.")
+                            keepGoing = false
+                            break
+                        }
+                        
+                        addSystemLog("⚠️ Attempting one-time recovery nudge...")
+                        delay(3000)
+                        val phoneState = service?.getDroidrunPhoneState() ?: ""
+                        val screenTree = service?.getDroidrunScreenTree() ?: ""
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("user" to "[System Recovery] An error occurred. Mission: $coreMission\n$phoneState\n\n$screenTree")
+                        }
+                        keepGoing = true
+                        continue
                     }
 
                     val fullResponse = responseSb.toString()
+                    Log.d("SYNAPSE_DEBUG", "Iteration $iterationCount fullResponse length: ${fullResponse.length}")
                     Log.i(TAG, "RAW AGENT RESPONSE: $fullResponse")
                     
                     if (fullResponse.isNotBlank()) {
@@ -323,12 +422,21 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                         
                         // Execute tools if present and decide if we should continue
                         keepGoing = executeToolLoop(fullResponse)
+                        Log.d("SYNAPSE_DEBUG", "executeToolLoop returned keepGoing=$keepGoing")
                     } else {
-                        keepGoing = false // Stop if empty response
+                        Log.w(TAG, "Iteration $iterationCount: Empty response. Nudging...")
+                        val phoneState = service?.getDroidrunPhoneState() ?: ""
+                        val screenTree = service?.getDroidrunScreenTree() ?: ""
+                        val nudge = "[System Notice] You returned an empty response. MISSION: $coreMission\n$phoneState\n\n$screenTree"
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("user" to nudge)
+                        }
+                        keepGoing = true 
                     }
                 }
                 
-                if (iterationCount >= maxIterations) {
+                if (iterationCount >= MAX_TASK_ITERATIONS) {
+                    Log.w(TAG, "Reached maximum task iterations ($MAX_TASK_ITERATIONS)")
                     addLog(LogEntry(sender = "SYSTEM", text = "Reached maximum task iterations.", isError = true))
                 }
 
@@ -412,31 +520,35 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
         _uiState.update { it.copy(shouldMinimize = false) }
     }
 
-    suspend fun getScreenContent(): String {
-        val service = SynapseAccessibilityService.instance
-        if (service != null) {
-            return service.getCompactScreenTreeJson()
-        }
-        return "Error: Accessibility Service not connected. Please enable it in settings."
-    }
-
     private suspend fun executeToolLoop(response: String): Boolean {
         val service = SynapseAccessibilityService.instance
         
-        // Relaxed regex to catch block even if closing tag is missing or malformed
-        val functionCallsRegex = "<function_calls>(.*?)(?:</function_calls>|$)".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val functionCallsMatch = functionCallsRegex.find(response)
-
-        if (functionCallsMatch == null) {
+        // Strip markdown blocks if present
+        var cleanResponse = response.replace("```xml", "").replace("```", "").trim()
+        
+        // Find the start of function_calls
+        val startIndex = cleanResponse.indexOf("<function_calls>")
+        
+        if (startIndex == -1) {
             Log.w(TAG, "No valid <function_calls> XML found in response.")
-            val currentScreen = getScreenContent().take(2000)
-            val feedback = "[System Error] You did not provide a valid tool call. You MUST wrap your action(s) in <function_calls> and <invoke> tags.\n\n[Current Screen Context]\n$currentScreen"
+            val phoneState = service?.getDroidrunPhoneState() ?: ""
+            val screenTree = service?.getDroidrunScreenTree() ?: ""
+            val feedback = "[System Error] You did not provide a valid tool call. You MUST wrap your action(s) in <function_calls> and <invoke> tags.\n\n[CORE MISSION: $coreMission]\n$phoneState\n\n$screenTree"
             addSystemLog("⚠️ Agent deviated from format. Sending XML course-correction nudge...")
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
             }
             service?.launchApp("com.synapse.localai")
             return true // Continue loop to give it a chance to output the action
+        }
+        
+        // Extract everything after <function_calls>
+        var invokesBlock = cleanResponse.substring(startIndex + "<function_calls>".length)
+        
+        // Strip trailing </function_calls> if it exists
+        val endIndex = invokesBlock.indexOf("</function_calls>")
+        if (endIndex != -1) {
+            invokesBlock = invokesBlock.substring(0, endIndex)
         }
         
         _uiState.update { it.copy(shouldMinimize = true) }
@@ -450,8 +562,6 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
         var shouldContinue = false
 
         try {
-            var invokesBlock = functionCallsMatch.groupValues[1]
-            
             // Normalize self-closing tags like <invoke name="back" /> to <invoke name="back"></invoke>
             invokesBlock = invokesBlock.replace(Regex("<invoke\\s+name=[\"']([^\"']+)[\"'][^>]*/>")) { match ->
                 "<invoke name=\"${match.groupValues[1]}\"></invoke>"
@@ -488,7 +598,8 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 }
                 
                 if (action == "complete") {
-                    addSystemLog("✅ Task marked as complete.")
+                    val finalMessage = params["text"] ?: "Task completed."
+                    addSystemLog("✅ $finalMessage")
                     isComplete = true
                     break
                 }            
@@ -507,7 +618,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                         result = if (success) "Clicked text: $text" else "Text not found: $text"
                     }
                     "tap_index", "click" -> {
-                        val indexStr = params["index"] ?: "-1"
+                        val indexStr = params["index"] ?: params["i"] ?: "-1"
                         val index = indexStr.toIntOrNull() ?: -1
                         val success = service.clickByIndex(index)
                         result = if (success) "Tapped index: $index" else "Index not found: $index"
@@ -521,8 +632,9 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                     "home" -> { service.goHome(); result = "Pressed home" }
                     "scroll" -> {
                         val dir = params["direction"] ?: "down"
-                        val success = service.scrollScreen(dir)
-                        result = if (success) "Scrolled $dir" else "Failed to scroll"
+                        val moved = service.scrollScreen(dir)
+                        result = if (moved) "Scrolled $dir successfully." 
+                                 else "CRITICAL: End of Page reached. Cannot scroll $dir further. Your target MUST be on this screen."
                     }
                     "swipe" -> {
                         val dir = params["direction"] ?: "down"
@@ -558,11 +670,15 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 return false
             }
             
-            delay(3000) // INCREASED: Wait for UI to settle after all actions before grabbing new screen
+            delay(4000) // INCREASED: Long delay to ensure UI animations (like scrolling) finish completely
 
             val combinedResult = results.joinToString("\n")
-            val newScreen = getScreenContent().take(3000)
-            val feedback = "<Action Results>\n$combinedResult\n</Action Results>\n\n[Current Screen]\n$newScreen"
+            _uiState.update { it.copy(lastExecutionResult = combinedResult) }
+            
+            val phoneState = service.getDroidrunPhoneState()
+            val screenTree = service.getDroidrunScreenTree()
+            
+            val feedback = "[CORE MISSION: $coreMission]\n$phoneState\n\n<Action Results>\n$combinedResult\n</Action Results>\n\n$screenTree"
             
             synchronized(conversationHistory) {
                 conversationHistory.add("user" to feedback)
@@ -649,7 +765,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
         synchronized(conversationHistory) {
             conversationHistory.clear()
         }
-        _uiState.update { it.copy(logs = emptyList()) }
+        _uiState.update { it.copy(logs = emptyList(), lastExecutionResult = "") }
         prefs(context).edit().remove("saved_logs").remove("saved_history").apply()
     }
 

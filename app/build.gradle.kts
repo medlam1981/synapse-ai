@@ -67,5 +67,5 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.kotlinx.coroutines.android)
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.9.0-alpha06")
+    implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 }
