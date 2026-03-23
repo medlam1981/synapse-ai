@@ -1,6 +1,10 @@
 package com.synapse.localai
 
 import android.util.Log
+import android.graphics.BitmapFactory
+import android.util.Base64
+import org.json.JSONArray
+import org.json.JSONObject
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlockThreshold
 import com.google.ai.client.generativeai.type.HarmCategory
@@ -48,6 +52,123 @@ class GeminiModelClient(
     init {
         currentKeyIndex = if (apiKeys.isNotEmpty()) (0 until apiKeys.size).random() else -1
     }
+
+    suspend fun generateStreamWithOllamaMessages(
+        messages: JSONArray,
+        systemPrompt: String = ""
+    ): Flow<String> = flow {
+        Log.d(TAG, "Generating with Gemini (Ollama Vision Engine)...")
+
+        val chatHistory = mutableListOf<com.google.ai.client.generativeai.type.Content>()
+        var promptText = ""
+        var promptImages = mutableListOf<android.graphics.Bitmap>()
+
+        for (i in 0 until messages.length()) {
+            val msg = messages.getJSONObject(i)
+            val role = msg.optString("role", "user")
+            val contentStr = msg.optString("content", "")
+            val imagesArray = msg.optJSONArray("images")
+            
+            val geminiRole = if (role == "user") "user" else "model"
+            
+            if (i == messages.length() - 1 && role == "user") {
+                // Last user message, keep as prompt
+                promptText = contentStr
+                if (imagesArray != null) {
+                    for (j in 0 until imagesArray.length()) {
+                        try {
+                            val base64Str = imagesArray.getString(j)
+                            val decodedString = Base64.decode(base64Str, Base64.DEFAULT)
+                            val decodedByte = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                            promptImages.add(decodedByte)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to decode image: ${e.message}")
+                        }
+                    }
+                }
+            } else {
+                // History message
+                chatHistory.add(content(role = geminiRole) {
+                    text(contentStr)
+                    if (imagesArray != null) {
+                        for (j in 0 until imagesArray.length()) {
+                            try {
+                                val base64Str = imagesArray.getString(j)
+                                val decodedString = Base64.decode(base64Str, Base64.DEFAULT)
+                                val decodedByte = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                                image(decodedByte)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to decode history image: ${e.message}")
+                            }
+                        }
+                    }
+                })
+            }
+        }
+
+        var attempt = 0
+        val totalKeys = apiKeys.size
+        var success = false
+        var lastErrorDetail = ""
+
+        while (attempt < totalKeys && !success) {
+            val apiKey = getNextKey(forceRotate = attempt > 0)
+            try {
+                if (attempt > 0) {
+                    val waitTime = (attempt * 2000L).coerceAtMost(10000L)
+                    kotlinx.coroutines.delay(waitTime)
+                }
+
+                val generativeModel = GenerativeModel(
+                    modelName = modelName,
+                    apiKey = apiKey,
+                    generationConfig = generationConfig {
+                        this.temperature = this@GeminiModelClient.temperature
+                        this.maxOutputTokens = this@GeminiModelClient.maxTokens
+                    },
+                    safetySettings = listOf(
+                        SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
+                    ),
+                    systemInstruction = content { text(systemPrompt) }
+                )
+
+                val chat = generativeModel.startChat(chatHistory)
+                val responseFlow = chat.sendMessageStream(content(role="user"){
+                    text(promptText)
+                    for (img in promptImages) {
+                        image(img)
+                    }
+                })
+                
+                responseFlow.collect { chunk ->
+                    if (coroutineContext.isActive && chunk.text != null) {
+                        emit(chunk.text!!)
+                    }
+                }
+                
+                success = true 
+
+            } catch (t: Throwable) {
+                val errorMsg = t.message ?: t.toString()
+                lastErrorDetail = errorMsg
+                val lowerError = errorMsg.lowercase()
+                
+                if (lowerError.contains("429") || lowerError.contains("quota") || lowerError.contains("limit") || lowerError.contains("exhausted") || lowerError.contains("resource") || lowerError.contains("overloaded") || lowerError.contains("unavailable") || lowerError.contains("safety") || lowerError.contains("recitation") || lowerError.contains("deadline") || t is java.net.SocketTimeoutException) {
+                    attempt++
+                    Log.w(TAG, "Key #$currentKeyIndex failed ($attempt/$totalKeys). Error: $errorMsg")
+                } else {
+                    throw RuntimeException("Gemini Fatal: $errorMsg")
+                }
+            }
+        }
+        
+        if (!success) {
+            throw RuntimeException("All $totalKeys API keys are currently blocked or failed. Last error: $lastErrorDetail")
+        }
+    }.flowOn(Dispatchers.IO)
 
     suspend fun generateStreamWithHistory(
         history: List<Pair<String, String>>,

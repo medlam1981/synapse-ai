@@ -49,22 +49,30 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     var overlayManager: OverlayManager? = null
         private set
-    private var overlayVisible = false // Controls visual display only (user toggle)
+    private var overlayVisible = false 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastUpdateTime = 0L
     private var currentPackageName = ""
     private val isProcessing = AtomicBoolean(false)
     private var wakeLock: PowerManager.WakeLock? = null
+    private var isScreenOn = true
 
-    // Periodic refresh — ALWAYS runs to keep element data fresh for the agent
     private val refreshRunnable = object : Runnable {
         override fun run() {
+            if (!isScreenOn) {
+                mainHandler.postDelayed(this, 5000) // Sleepy mode when screen is off
+                return
+            }
+            
             val now = System.currentTimeMillis()
-            if (now - lastUpdateTime >= MIN_FRAME_TIME_MS) {
+            // Dynamic interval: 1s if processing, 3s if idle
+            val interval = if (AgentViewModel.instance?.uiState?.value?.isProcessing == true) 1000L else 3000L
+            
+            if (now - lastUpdateTime >= interval) {
                 refreshOverlayInternal()
                 lastUpdateTime = now
             }
-            mainHandler.postDelayed(this, REFRESH_INTERVAL_MS)
+            mainHandler.postDelayed(this, 1000)
         }
     }
 
@@ -72,17 +80,38 @@ class SynapseAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         overlayManager = OverlayManager(this)
-        // Always show overlay (agent always needs it), but drawing controlled by overlayVisible
         overlayManager?.showOverlay()
         startForegroundNotification()
-        acquireWakeLock()
+        // WakeLock removed from here - will be managed dynamically by AgentViewModel
         startPeriodicUpdates()
-        Log.i(TAG, "Accessibility service connected, overlay active, periodic updates ON")
+        
+        // Register screen state receiver
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        registerReceiver(object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> {
+                        isScreenOn = true
+                        Log.d(TAG, "Screen ON: Resuming updates")
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        isScreenOn = false
+                        Log.d(TAG, "Screen OFF: Entering power-save mode")
+                    }
+                }
+            }
+        }, filter)
+        
+        Log.i(TAG, "Accessibility service connected, energy optimization active")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
+        if (event == null || !isScreenOn) return
         val eventPkg = event.packageName?.toString() ?: return
+
 
         // Magic: If we see any window or content change, try to auto-select our keyboard if the picker is open.
         // The picker is usually in 'android' or 'com.android.settings' package.
@@ -140,27 +169,30 @@ class SynapseAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Accessibility service destroyed")
     }
 
-    private fun acquireWakeLock() {
+    fun acquireWakeLock() {
         try {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "synapse:agent_wake_lock"
-            ).apply {
-                acquire(24 * 60 * 60 * 1000L) // 24 hours max
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "synapse:agent_wake_lock"
+                )
             }
-            Log.i(TAG, "Wake lock acquired")
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes max per acquisition
+                Log.i(TAG, "Wake lock acquired for task processing")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire wake lock: ${e.message}")
         }
     }
 
-    private fun releaseWakeLock() {
+    fun releaseWakeLock() {
         try {
-            wakeLock?.let {
-                if (it.isHeld) it.release()
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.i(TAG, "Wake lock released")
             }
-            wakeLock = null
         } catch (_: Exception) {}
     }
 

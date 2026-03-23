@@ -129,8 +129,20 @@ class GGUFModelClient {
             
             val pb = ProcessBuilder(cmd)
             pb.redirectErrorStream(true)
-            serverProcess = pb.start()
+            val proc = pb.start()
+            serverProcess = proc
             Log.d(TAG, "Server launched as standard app subprocess (Rootless Mode)")
+
+            // Crucial: Consume output to prevent buffer blocking
+            Thread {
+                try {
+                    val reader = BufferedReader(InputStreamReader(proc.inputStream))
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        // Log.v("LlamaServer", line ?: "") // Optional: log server output
+                    }
+                } catch (_: Exception) {}
+            }.start()
 
             // Start the Ollama proxy to fix the CLI parsing bug
             proxy?.stop()

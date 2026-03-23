@@ -3,6 +3,11 @@ package com.synapse.localai
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import android.net.Uri
+import android.provider.MediaStore
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -16,6 +21,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import org.json.JSONArray
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -82,6 +88,7 @@ class AgentViewModel : ViewModel() {
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
     private var geminiClient: GeminiModelClient? = null
+    private var geminiOllamaServer: GeminiOllamaServer? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
     private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
@@ -233,15 +240,17 @@ class AgentViewModel : ViewModel() {
                 temperature = config.temperature
             }
             geminiClient = client
+            geminiOllamaServer?.stop()
+            geminiOllamaServer = GeminiOllamaServer(11434, client)
+            geminiOllamaServer?.start()
             _uiState.update { 
                 it.copy(
-                    localModelLoaded = true, 
-                    localModelLoading = false, 
-                    activeModelType = ModelType.GEMINI, 
-                    activeModelName = "gemini-2.5-flash"
-                ) 
-            }
-        } catch (e: Exception) {
+                                        localModelLoaded = true,
+                                        localModelLoading = false,
+                                        activeModelType = ModelType.GEMINI,
+                                        activeModelName = "gemini-2.5-flash"
+                                    )
+                                }        } catch (e: Exception) {
             Log.e(TAG, "Gemini load failed", e)
             _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
         }
@@ -254,6 +263,8 @@ class AgentViewModel : ViewModel() {
     private fun closeAllModels() {
         ggufClient?.close()
         ggufClient = null
+        geminiOllamaServer?.stop()
+        geminiOllamaServer = null
         geminiClient?.close()
         geminiClient = null
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
@@ -263,6 +274,8 @@ class AgentViewModel : ViewModel() {
 
     private fun buildSystemPrompt(): String {
         return """You are Droidrun — a sharp, clever agent that controls Android devices through tools. You read screens like a pro. Be concise.
+
+IMPORTANT: Detect the user's language (including Moroccan Darija) and ALWAYS reply in that same language.
 
 You will be given a task to perform. You should:
 1. Analyze the current device state and UI elements.
@@ -297,39 +310,62 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
 
     // ========== CHAT ==========
 
-    fun sendCommand(command: String) {
-        if (command.isBlank() || _uiState.value.isProcessing) return
-        Log.i(TAG, ">>> sendCommand initiated: '$command'")
-        addLog(LogEntry(sender = "USER", text = command))
+    fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
+        if (command.isBlank() && fileUri == null) return
+        if (_uiState.value.isProcessing) return
         
-        // Mission anchoring
+        val displayCommand = if (command.isNotBlank()) command else "[Attached File]"
+        Log.i(TAG, ">>> sendCommand initiated: '$displayCommand'")
+        addLog(LogEntry(sender = "USER", text = displayCommand))
+        
         coreMission = command
 
-        // 1. IMMEDIATE FORCED KEYBOARD SWITCH (Droidrun Style)
         val service = SynapseAccessibilityService.instance
         if (service != null && !SynapseKeyboardIME.isSelected(service)) {
-            Log.d(TAG, "Force activating Synapse Keyboard at task start...")
             service.switchToSynapseKeyboard()
         }
         
+        service?.acquireWakeLock()
+
         currentJob = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true) }
-            Log.d(TAG, "Coroutine started for command")
             
             try {
-                // 2. Wait for Keyboard UI to settle before starting vision
+                // Process File Attachment
+                var finalCommand = command
+                val imageBase64List = mutableListOf<String>()
+
+                if (fileUri != null && context != null) {
+                    val contentResolver = context.contentResolver
+                    val type = contentResolver.getType(fileUri) ?: ""
+                    
+                    if (type.startsWith("image/")) {
+                        val bitmap = MediaStore.Images.Media.getBitmap(contentResolver, fileUri)
+                        val out = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                        imageBase64List.add(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                        if (finalCommand.isBlank()) finalCommand = "Please analyze this image."
+                    } else {
+                        // Try reading as text
+                        try {
+                            val text = contentResolver.openInputStream(fileUri)?.bufferedReader()?.use { it.readText() } ?: ""
+                            finalCommand += "\n\n[FILE_CONTENT]:\n$text"
+                        } catch (e: Exception) {
+                            addSystemLog("⚠️ Could not read file as text: ${e.message}")
+                        }
+                    }
+                }
+
                 delay(2000) 
 
-                // 3. Initial screen analysis (Droidrun Parity)
                 val initialPhoneState = service?.getDroidrunPhoneState() ?: ""
                 val initialScreenTree = service?.getDroidrunScreenTree() ?: ""
                 val timeNow = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
                 
                 val screenData = "\n[Current Time: $timeNow]\n$initialPhoneState\n\n$initialScreenTree"
-                Log.d(TAG, "Droidrun-style context generated (${screenData.length} chars)")
 
                 synchronized(conversationHistory) {
-                    conversationHistory.add("user" to command + screenData)
+                    conversationHistory.add("user" to finalCommand + screenData)
                 }
 
                 val modelType = _uiState.value.activeModelType
@@ -344,7 +380,6 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
 
                 while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
                     iterationCount++
-                    Log.d("SYNAPSE_DEBUG", "Starting iteration $iterationCount")
                     val responseId = java.util.UUID.randomUUID().toString()
                     addLog(LogEntry(id = responseId, sender = "AGENT", text = ""))
 
@@ -356,7 +391,6 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                                 val historyCopy = synchronized(conversationHistory) {
                                     conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
                                 }
-                                Log.d(TAG, "Calling GGUF with ${historyCopy.size} history messages")
                                 withContext(Dispatchers.Default) {
                                     ggufClient!!.generateStreamWithHistory(
                                         historyCopy,
@@ -368,22 +402,38 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                                 }
                                 updateStreamingLog(responseId, responseSb.toString(), force = true)
                             }
-                        ModelType.GEMINI -> {
-                            val geminiHistory = synchronized(conversationHistory) {
-                                conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
-                            }
-                            Log.d(TAG, "Full History for Gemini: ${geminiHistory.joinToString { it.first }}")
-                            withContext(Dispatchers.Default) {
-                                geminiClient!!.generateStreamWithHistory(
-                                    geminiHistory,
-                                    systemPrompt
-                                ).collect { chunk ->
-                                    responseSb.append(chunk)
-                                    updateStreamingLog(responseId, responseSb.toString())
+                            ModelType.GEMINI -> {
+                                // For the first turn of a multimodal request, we need a special call
+                                // but our current architecture uses a list of pairs.
+                                // Let's hack the first message if images exist.
+                                val geminiHistory = synchronized(conversationHistory) {
+                                    conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
                                 }
+                                
+                                // Convert to JSONArray for our internal bridge format
+                                val messagesJson = JSONArray()
+                                for (i in 0 until geminiHistory.size) {
+                                    val msg = JSONObject().put("role", geminiHistory[i].first).put("content", geminiHistory[i].second)
+                                    // Add images to the VERY LAST user message if it's the start of the task
+                                    if (i == geminiHistory.size - 1 && imageBase64List.isNotEmpty()) {
+                                        val imgs = JSONArray()
+                                        imageBase64List.forEach { imgs.put(it) }
+                                        msg.put("images", imgs)
+                                    }
+                                    messagesJson.put(msg)
+                                }
+
+                                withContext(Dispatchers.Default) {
+                                    geminiClient!!.generateStreamWithOllamaMessages(
+                                        messagesJson,
+                                        systemPrompt
+                                    ).collect { chunk ->
+                                        responseSb.append(chunk)
+                                        updateStreamingLog(responseId, responseSb.toString())
+                                    }
+                                }
+                                updateStreamingLog(responseId, responseSb.toString(), force = true)
                             }
-                            updateStreamingLog(responseId, responseSb.toString(), force = true)
-                        }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Inference failed at iteration $iterationCount", e)
@@ -449,7 +499,9 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 currentJob = null
                 _uiState.update { it.copy(isProcessing = false) }
                 // Magic! Switch back to original keyboard when iteration loop finishes
-                SynapseAccessibilityService.instance?.restoreOriginalKeyboard()
+                val s = SynapseAccessibilityService.instance
+                s?.restoreOriginalKeyboard()
+                s?.releaseWakeLock()
             }
         }
     }
@@ -847,7 +899,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
     // ========== HELPERS ==========
 
     private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
-    private fun addSystemLog(text: String) { addLog(LogEntry(sender = "SYSTEM", text = text)) }
+    fun addSystemLog(text: String) { addLog(LogEntry(sender = "SYSTEM", text = text)) }
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)

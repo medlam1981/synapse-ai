@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -21,6 +22,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -39,6 +41,8 @@ import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -183,6 +187,54 @@ fun ChatApp(viewModel: AgentViewModel) {
     var showSettings by remember { mutableStateOf(false) }
     var expandedMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
+
+    // --- Voice & File State ---
+    var isRecording by remember { mutableStateOf(false) }
+    var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
+    val speechRecognizer = remember { android.speech.SpeechRecognizer.createSpeechRecognizer(context) }
+    
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        selectedFileUri = uri
+        if (uri != null) {
+            viewModel.addSystemLog("📎 File attached: ${uri.lastPathSegment}")
+        }
+    }
+
+    val speechRecognizerIntent = remember {
+        Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            // Support ALL languages + Moroccan Darija specifically
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-MA")
+            putExtra(android.speech.RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
+            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val listener = object : android.speech.RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() { isRecording = false }
+            override fun onError(error: Int) { isRecording = false }
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    val text = matches[0]
+                    viewModel.sendCommand(text, selectedFileUri, context)
+                    selectedFileUri = null
+                }
+            }
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        }
+        speechRecognizer.setRecognitionListener(listener)
+        onDispose { speechRecognizer.destroy() }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.loadConfig(context)
@@ -381,8 +433,29 @@ fun ChatApp(viewModel: AgentViewModel) {
         // --- INPUT AREA ---
         ChatInputBar(
             isProcessing = uiState.isProcessing,
-            onSend = { text -> viewModel.sendCommand(text) },
-            onStop = { viewModel.stopAgent() }
+            isRecording = isRecording,
+            selectedFileUri = selectedFileUri,
+            onSend = { text -> 
+                viewModel.sendCommand(text, selectedFileUri, context)
+                selectedFileUri = null
+            },
+            onStop = { viewModel.stopAgent() },
+            onRecordingClick = {
+                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    (context as? ComponentActivity)?.requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 102)
+                } else {
+                    if (isRecording) {
+                        speechRecognizer.stopListening()
+                        isRecording = false
+                    } else {
+                        speechRecognizer.startListening(speechRecognizerIntent)
+                        isRecording = true
+                    }
+                }
+            },
+            onFilePickerClick = {
+                filePickerLauncher.launch("*/*")
+            }
         )
     }
 }
@@ -390,8 +463,12 @@ fun ChatApp(viewModel: AgentViewModel) {
 @Composable
 private fun ChatInputBar(
     isProcessing: Boolean,
+    isRecording: Boolean,
+    selectedFileUri: Uri?,
     onSend: (String) -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onRecordingClick: () -> Unit,
+    onFilePickerClick: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
 
@@ -405,7 +482,7 @@ private fun ChatInputBar(
                 .fillMaxWidth()
                 .navigationBarsPadding(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp) // Clear spacing
         ) {
             TextField(
                 value = inputText,
@@ -437,41 +514,64 @@ private fun ChatInputBar(
                 maxLines = 3
             )
 
-            if (isProcessing) {
-                IconButton(
-                    onClick = onStop,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(NeonPurple.copy(alpha = 0.1f), CircleShape)
-                        .border(0.5.dp, NeonPurple.copy(alpha = 0.3f), CircleShape)
-                ) {
-                    Icon(
-                        imageVector = androidx.compose.material.icons.Icons.Filled.Stop,
-                        contentDescription = "Stop",
-                        tint = NeonPurple,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            } else {
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotBlank()) {
+            // Custom Voice Input Button
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(if (isRecording) NeonMagenta.copy(alpha = 0.2f) else NeonPurple.copy(alpha = 0.1f))
+                    .border(0.5.dp, if (isRecording) NeonMagenta.copy(alpha = 0.5f) else NeonPurple.copy(alpha = 0.3f), CircleShape)
+                    .clickable { onRecordingClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Mic,
+                    contentDescription = "Voice Input",
+                    tint = if (isRecording) NeonMagenta else NeonPurple,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            // Custom File Upload Button
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(if (selectedFileUri != null) NeonCyan.copy(alpha = 0.3f) else NeonCyan.copy(alpha = 0.1f))
+                    .border(0.5.dp, if (selectedFileUri != null) NeonMagenta.copy(alpha = 0.6f) else NeonCyan.copy(alpha = 0.3f), CircleShape)
+                    .clickable { onFilePickerClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AttachFile,
+                    contentDescription = "Attach File",
+                    tint = if (selectedFileUri != null) NeonMagenta else NeonCyan,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            // Custom Send/Stop Button
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(if (isProcessing) NeonMagenta.copy(alpha = 0.1f) else NeonCyan.copy(alpha = 0.1f))
+                    .border(0.5.dp, if (isProcessing) NeonMagenta.copy(alpha = 0.3f) else NeonCyan.copy(alpha = 0.3f), CircleShape)
+                    .clickable { 
+                        if (isProcessing) onStop()
+                        else if (inputText.isNotBlank() || selectedFileUri != null) {
                             onSend(inputText)
                             inputText = ""
                         }
                     },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(NeonCyan.copy(alpha = 0.1f), CircleShape)
-                        .border(0.5.dp, NeonCyan.copy(alpha = 0.3f), CircleShape)
-                ) {
-                    Icon(
-                        imageVector = androidx.compose.material.icons.Icons.Filled.PlayArrow,
-                        contentDescription = "Send",
-                        tint = NeonCyan,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isProcessing) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                    contentDescription = if (isProcessing) "Stop" else "Send",
+                    tint = if (isProcessing) NeonMagenta else NeonCyan,
+                    modifier = Modifier.size(if (isProcessing) 14.dp else 18.dp)
+                )
             }
         }
     }
@@ -700,8 +800,16 @@ fun getSystemStats(context: android.content.Context): SystemStats {
     val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
     val storageFree = String.format("%.1f GB", stat.availableBlocksLong * stat.blockSizeLong / (1024.0 * 1024.0 * 1024.0))
 
-    val tempInt = getCpuTemp()
-    val tempStr = if (tempInt > 0) "${tempInt}°C" else "--°C"
+    // Reliable Temperature from Battery API (Standard Android)
+    val batTempRaw = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+    val tempInt = batTempRaw / 10 
+    val tempStr = if (tempInt > 0) "${tempInt}°C" else "N/A" // Display N/A if temperature is zero or less
+
+    Log.d("SynapseStats", "Battery Level: $batLevel%")
+    Log.d("SynapseStats", "Battery Temp Raw: $batTempRaw")
+    Log.d("SynapseStats", "Calculated Temp Int: $tempInt°C")
+    Log.d("SynapseStats", "Formatted Temp String: $tempStr")
+    Log.d("SynapseStats", "Final SystemStats.cpuTemp: $tempStr")
 
     return SystemStats(
         battery = batLevel, 
@@ -747,7 +855,7 @@ fun SystemDashboard(context: android.content.Context) {
 
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(5000)
+            kotlinx.coroutines.delay(15000) // Lower frequency to save energy
             stats = getSystemStats(context)
         }
     }
@@ -764,22 +872,25 @@ fun SystemDashboard(context: android.content.Context) {
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    "CORE SYSTEM INITIALIZED",
+                    "SYSTEM ONLINE. WELCOME TO THE NEXT EVOLUTION.",
                     color = Color.White,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.sp
+                    letterSpacing = 1.sp,
+                    textAlign = TextAlign.Center
                 )
                 Text(
-                    "GREETINGS USER. I AM SYNAPSE, YOUR ADVANCED NEURAL INTERFACE. I AM CAPABLE OF AUTONOMOUS DEVICE NAVIGATION, LOCAL OLLAMA SERVING, AND SECURE DATA PROCESSING. ALL SYSTEMS OPERATIONAL.",
-                    color = NeonCyan.copy(alpha = 0.6f),
+                    "I AM SYNAPSE, YOUR ADVANCED HYBRID INTERFACE. BY FUSING LOCAL COMPUTATIONAL POWER WITH CLOUD-SCALE REASONING, I PROVIDE SEAMLESS DEVICE CONTROL, INTELLIGENT DATA PROCESSING, AND REAL-TIME AUTOMATION. YOUR DIGITAL ECOSYSTEM HAS NEVER BEEN THIS SMART. AWAITING INPUT.",
+                    color = NeonCyan.copy(alpha = 0.7f),
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,
                     lineHeight = 11.sp,
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 6.dp)
                 )
             }
 
