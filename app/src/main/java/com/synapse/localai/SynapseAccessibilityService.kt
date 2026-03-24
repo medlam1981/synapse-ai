@@ -212,10 +212,10 @@ class SynapseAccessibilityService : AccessibilityService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     NOTIFICATION_CHANNEL_ID,
-                    "Synapse AI Agent",
+                    "Medlam-AI Agent",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
-                    description = "Keeps Synapse AI agent running in background"
+                    description = "Keeps Medlam-AI agent running in background"
                     setShowBadge(false)
                 }
                 val nm = getSystemService(NotificationManager::class.java)
@@ -234,7 +234,7 @@ class SynapseAccessibilityService : AccessibilityService() {
                 @Suppress("DEPRECATION")
                 Notification.Builder(this)
             }
-                .setContentTitle("Synapse AI Active")
+                .setContentTitle("Medlam-AI Active")
                 .setContentText("Agent running • Tap to open")
                 .setSmallIcon(android.R.drawable.ic_menu_manage)
                 .setOngoing(true)
@@ -753,7 +753,7 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     /** Automatically select the target keyboard in the picker dialog */
     private fun handleImePickerDialog(root: AccessibilityNodeInfo) {
-        val targetLabel = if (isRestoringKeyboard) originalImeLabel else "Synapse AI Keyboard"
+        val targetLabel = if (isRestoringKeyboard) originalImeLabel else "Medlam-AI Keyboard"
         if (targetLabel == null) return
 
         val now = System.currentTimeMillis()

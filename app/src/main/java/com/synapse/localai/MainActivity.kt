@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Psychology // Icon for Knowledge Nodes
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,6 +51,10 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -91,16 +96,22 @@ data class LogEntry(
 
 class MainActivity : ComponentActivity() {
     private val viewModel = AgentViewModel()
-    private companion object { private const val TAG = "SynapseMain" }
+    
+    companion object { 
+        private const val TAG = "SynapseMain" 
+        var instance: MainActivity? = null
+            private set
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         
         checkStoragePermissions()
         checkBatteryOptimizations()
         
         setContent {
-            SynapseAITheme {
+            MedlamAITheme {
                 ChatApp(viewModel)
             }
         }
@@ -164,7 +175,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun SynapseAITheme(content: @Composable () -> Unit) {
+fun MedlamAITheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = NeonCyan,
@@ -284,10 +295,10 @@ fun ChatApp(viewModel: AgentViewModel) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
             modifier = Modifier.border(engravedBorder, RoundedCornerShape(28.dp)),
-            title = { Text("Synapse AI Capabilities 🧠", color = NeonCyan, fontWeight = FontWeight.Bold, modifier = Modifier.offset(1.dp, 1.dp)) },
+            title = { Text("Medlam-AI Capabilities 🧠", color = NeonCyan, fontWeight = FontWeight.Bold, modifier = Modifier.offset(1.dp, 1.dp)) },
             text = {
                 Text(
-                    "I am Synapse, your autonomous on-device Neural Agent.\n\n" +
+                    "I am Medlam-AI, your autonomous on-device Neural Agent.\n\n" +
                             "• 100% Local & Private Execution\n" +
                             "• Visual Screen Perception & Analysis\n" +
                             "• Multi-step Autonomous Task Planning\n" +
@@ -336,16 +347,49 @@ fun ChatApp(viewModel: AgentViewModel) {
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     AnimatedAtom(isSpinning = uiState.isProcessing)
+                    val textMeasurer = rememberTextMeasurer()
                     Column {
                         Text(
-                            text = "SYNAPSE HYBRID HUB",
+                            text = "MEDLAM-AI HYBRID HUB",
                             style = androidx.compose.ui.text.TextStyle(
-                                brush = Brush.horizontalGradient(listOf(Color.White, NeonCyan)),
-                                fontSize = 16.sp,
+                                color = Color.Transparent, // Transparent so the background shows through if we wanted, but we use Brush below
+                                fontSize = 19.sp, // Larger font
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
-                                letterSpacing = 1.5.sp
-                            )
+                                letterSpacing = 2.sp,
+                                drawStyle = androidx.compose.ui.graphics.drawscope.Fill
+                            ),
+                            modifier = Modifier.graphicsLayer(alpha = 0.9f)
+                                .drawWithCache {
+                                    onDrawWithContent {
+                                        drawContent()
+                                        // Create the engraved/inner shadow effect
+                                        drawText(
+                                            textMeasurer = textMeasurer,
+                                            text = "MEDLAM-AI HYBRID HUB",
+                                            style = androidx.compose.ui.text.TextStyle(
+                                                color = Color.Black.copy(alpha = 0.8f),
+                                                fontSize = 19.sp,
+                                                fontWeight = FontWeight.Black,
+                                                fontFamily = FontFamily.Monospace,
+                                                letterSpacing = 2.sp
+                                            ),
+                                            topLeft = androidx.compose.ui.geometry.Offset(2f, 2f)
+                                        )
+                                        drawText(
+                                            textMeasurer = textMeasurer,
+                                            text = "MEDLAM-AI HYBRID HUB",
+                                            style = androidx.compose.ui.text.TextStyle(
+                                                brush = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.9f), NeonCyan.copy(alpha = 0.6f))),
+                                                fontSize = 19.sp,
+                                                fontWeight = FontWeight.Black,
+                                                fontFamily = FontFamily.Monospace,
+                                                letterSpacing = 2.sp
+                                            ),
+                                            topLeft = androidx.compose.ui.geometry.Offset(0f, 0f)
+                                        )
+                                    }
+                                }
                         )
                         Text(
                             text = "LOCAL OLLAMA SERVER • CLOUD NEURAL AGENT",
@@ -616,7 +660,7 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
     
     val labelText = when (log.sender) {
         "USER" -> "You"
-        "AGENT" -> "Synapse"
+        "AGENT" -> "Medlam-AI"
         else -> "System"
     }
 
@@ -805,12 +849,6 @@ fun getSystemStats(context: android.content.Context): SystemStats {
     val tempInt = batTempRaw / 10 
     val tempStr = if (tempInt > 0) "${tempInt}°C" else "N/A" // Display N/A if temperature is zero or less
 
-    Log.d("SynapseStats", "Battery Level: $batLevel%")
-    Log.d("SynapseStats", "Battery Temp Raw: $batTempRaw")
-    Log.d("SynapseStats", "Calculated Temp Int: $tempInt°C")
-    Log.d("SynapseStats", "Formatted Temp String: $tempStr")
-    Log.d("SynapseStats", "Final SystemStats.cpuTemp: $tempStr")
-
     return SystemStats(
         battery = batLevel, 
         isCharging = isCharging,
@@ -869,7 +907,7 @@ fun SystemDashboard(context: android.content.Context) {
                 Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)),
                 RectangleShape
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = 12.dp, vertical = 12.dp) // Adjusted padding
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -883,7 +921,7 @@ fun SystemDashboard(context: android.content.Context) {
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    "I AM SYNAPSE, YOUR ADVANCED HYBRID INTERFACE. BY FUSING LOCAL COMPUTATIONAL POWER WITH CLOUD-SCALE REASONING, I PROVIDE SEAMLESS DEVICE CONTROL, INTELLIGENT DATA PROCESSING, AND REAL-TIME AUTOMATION. YOUR DIGITAL ECOSYSTEM HAS NEVER BEEN THIS SMART. AWAITING INPUT.",
+                    "I am Medlam-AI, your advanced hybrid interface. By fusing local computational power with cloud-scale reasoning, I provide seamless device control, intelligent data processing, and real-time automation. Your digital ecosystem has never been this smart. Awaiting input.",
                     color = NeonCyan.copy(alpha = 0.7f),
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,
@@ -898,10 +936,10 @@ fun SystemDashboard(context: android.content.Context) {
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp) // Tighter spacing
             ) {
                 val weight = 1f
-                val iconSize = 10.dp
+                val iconSize = 9.dp
                 Box(Modifier.weight(weight)) { 
                     StatBadge(
                         icon = { 

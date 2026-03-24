@@ -33,7 +33,7 @@
         android:extractNativeLibs="true"
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true"
-        android:theme="@style/Theme.SynapseAI">
+        android:theme="@style/Theme.MedlamAI">
 
         <activity
             android:name=".MainActivity"
@@ -73,7 +73,7 @@
 
         <service
             android:name=".SynapseNotificationService"
-            android:label="Synapse AI Notifications"
+            android:label="Medlam-AI Notifications"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>

@@ -1,29 +1,29 @@
-# Synapse AI Agent - Next Evolution 🧠⚡
+# Medlam-AI Agent - The Advanced Hybrid Neural Interface 🧠⚡
 
-Synapse is an advanced, autonomous on-device Neural Agent designed for Kali Linux and Android environments. It fuses local computational power with cloud-scale reasoning to provide a seamless, secure, and intelligent digital ecosystem.
+Medlam-AI is a next-generation, autonomous on-device AI agent designed for Android. It fuses local computational power with cloud-scale reasoning to provide a seamless, secure, and highly intelligent digital ecosystem right on your mobile device.
 
-## Key Features 🚀
+## 🔥 Key Features
 
-- **Hybrid Intelligence**: Leverages `gemini-2.5-flash` for high-speed cloud reasoning while maintaining a local Ollama-compatible bridge.
-- **Multilingual Voice Control**: Intelligent speech-to-text supporting various languages, including full support for **Moroccan Darija (ar-MA)**.
-- **Visual & Data Perception**: High-precision screen perception and the ability to upload and analyze images and text files for real-time insights.
-- **Optimized UI/UX**: A modern, neon-themed dashboard with compact, spaced controls and real-time system diagnostics (Battery, RAM, Disk, and accurate Temperature).
-- **Energy Efficiency**: Dynamic power management with screen-off power saving and on-demand CPU wake-locks.
-- **Autonomous OS Control**: Capable of moving the mouse, typing, and launching GUI applications (like Firefox) on Kali Linux via X11 automation.
+- **Hybrid Intelligence Core**: Leverages the blazing speed of `gemini-2.5-flash` for cloud reasoning while seamlessly maintaining a robust, local Ollama-compatible bridge (`11434`).
+- **Multilingual Voice Command**: Features intelligent speech-to-text with universal language support, prominently featuring full compatibility with **Moroccan Darija (ar-MA)**.
+- **Multimodal Perception**: Endowed with high-precision screen reading capabilities and the ability to upload, parse, and analyze images and text files for real-time insights.
+- **Autonomous Device Control**: Operates autonomously to navigate the device, read screen states, perform complex gestures, and interact with applications using advanced Android Accessibility Services—no root required.
+- **Optimized Neumorphic UI/UX**: A state-of-the-art, deeply engraved dashboard featuring compact, elegantly spaced controls and live telemetry for Battery, RAM, Disk, and true Hardware Temperature.
+- **Aggressive Energy Efficiency**: Incorporates dynamic power management, engaging deep sleep modes when the screen is off and utilizing on-demand CPU wake-locks to conserve battery life.
 
-## Recent Updates 🛠️
+## 🌟 What Sets Medlam-AI Apart?
 
-- **Refined Control Hub**: Added dedicated, compact buttons for Voice and File uploads with precise spacing.
-- **Intelligent Responding**: Synapse now detects the user's language and responds in the same tongue (including Darija).
-- **System Diagnostics Fix**: Corrected temperature reporting to use official Android hardware APIs.
-- **Ollama Bridge Cleanup**: Removed legacy configurations to provide a generic, high-performance bridge for any third-party app.
+Medlam-AI is not just a chatbot; it's a capable agent that acts on your behalf.
+- **Smart Response Engine**: It automatically detects your spoken language and replies in kind. Speak in Darija, and it responds in Darija.
+- **Visual Intelligence**: Send it a picture of your screen or any document, and it understands context instantly.
+- **Universal Bridge**: The built-in proxy server allows any third-party app expecting a standard local LLM server to tap into Medlam-AI's immense hybrid power.
 
-## Getting Started 🖥️
+## 🚀 Getting Started
 
-1. **Install**: Clone the repository and build the APK using Gradle.
-2. **Launch**: Open Synapse AI on your Android device or emulator.
-3. **Configure**: Add your Gemini API keys in the system settings.
-4. **Interact**: Use text, voice (try some Darija!), or upload files to start your autonomous session.
+1. **Install**: Clone the repository and build the APK using Android Studio or Gradle.
+2. **Launch**: Open Medlam-AI on your Android device.
+3. **Configure**: Enter your Gemini API keys in the system settings.
+4. **Interact**: Use the sleek text terminal, hit the microphone to speak naturally, or attach a file to begin your autonomous session.
 
 ---
 *Your digital ecosystem has never been this smart. Awaiting input.* 🛡️💻

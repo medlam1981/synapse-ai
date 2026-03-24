@@ -270,10 +270,10 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "") }
     }
 
-    // ========== synapse-ai-portal CORE LOGIC ==========
+    // ========== Medlam-AI-PORTAL CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are Droidrun — a sharp, clever agent that controls Android devices through tools. You read screens like a pro. Be concise.
+        return """You are Medlam-AI — a sharp, clever agent that controls Android devices through tools. You read screens like a pro. Be concise.
 
 IMPORTANT: Detect the user's language (including Moroccan Darija) and ALWAYS reply in that same language.
 

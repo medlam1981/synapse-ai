@@ -355,7 +355,7 @@ fun SettingsScreen(
                     else -> "Disconnected"
                 }) {
                     Text("Zero Rate Limit Mode (Key Pool)", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Enter multiple free Gemini API keys separated by commas. Synapse will automatically rotate them if a rate limit (429) is hit.", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, lineHeight = 16.sp)
+                    Text("Enter multiple free Gemini API keys separated by commas. Medlam-AI will automatically rotate them if a rate limit (429) is hit.", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, lineHeight = 16.sp)
                     
                     OutlinedTextField(
                         value = geminiKeys,
@@ -609,7 +609,7 @@ fun SettingsScreen(
                 }
                 
                 Text(
-                    "Note: Synapse will 'magically' auto-select its keyboard during tasks if enabled above.",
+                    "Note: Medlam-AI will 'magically' auto-select its keyboard during tasks if enabled above.",
                     color = Color.White.copy(alpha = 0.3f),
                     fontSize = 10.sp,
                     fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
@@ -618,7 +618,7 @@ fun SettingsScreen(
 
             // ═══════ ABOUT SECTION ═══════
             SettingsCard(title = "ABOUT", titleColor = Color.White.copy(alpha = 0.5f)) {
-                Text("Synapse AI v1.0", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("Medlam-AI v1.0", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Text(
                     "Local AI assistant with device control capabilities.\nRuns GGUF models via bundled llama-server (no root).",
                     color = Color.White.copy(alpha = 0.3f),
