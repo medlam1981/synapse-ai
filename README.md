@@ -2,6 +2,8 @@
 
 Medlam-AI is a next-generation, autonomous on-device AI agent designed for Android. It fuses local computational power with cloud-scale reasoning to provide a seamless, secure, and highly intelligent digital ecosystem right on your mobile device.
 
+📥 **[Download Latest APK (Medlam-AI-Agent-latest.apk)](https://github.com/medlam1981/synapse-ai/raw/main/releases/Medlam-AI-Agent-latest.apk)**
+
 ## 🔥 Key Features
 
 - **Hybrid Intelligence Core**: Leverages the blazing speed of `gemini-2.5-flash` for cloud reasoning while seamlessly maintaining a robust, local Ollama-compatible bridge (`11434`).
