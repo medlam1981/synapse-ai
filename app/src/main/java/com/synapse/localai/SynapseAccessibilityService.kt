@@ -82,8 +82,14 @@ class SynapseAccessibilityService : AccessibilityService() {
         overlayManager = OverlayManager(this)
         overlayManager?.showOverlay()
         startForegroundNotification()
-        // WakeLock removed from here - will be managed dynamically by AgentViewModel
+        
+        // Respect the bubble visibility setting immediately on startup
+        val prefs = getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+        val showBubble = prefs.getBoolean("show_floating_bubble", true)
+        setBubbleVisible(showBubble)
+
         startPeriodicUpdates()
+
         
         // Register screen state receiver
         val filter = android.content.IntentFilter().apply {
@@ -263,6 +269,10 @@ class SynapseAccessibilityService : AccessibilityService() {
     }
 
     fun isOverlayVisible(): Boolean = overlayVisible
+
+    fun setBubbleVisible(visible: Boolean) {
+        overlayManager?.setBubbleVisible(visible)
+    }
 
     /** Public refresh — called by agent commands */
     fun refreshOverlay() {

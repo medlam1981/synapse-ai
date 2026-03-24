@@ -18,6 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 class OverlayManager(private val context: Context) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var overlayView: OverlayView? = null
+    private var bubbleView: View? = null
     private val handler = Handler(Looper.getMainLooper())
     private val elementRects = CopyOnWriteArrayList<ElementInfo>()
     private var isOverlayVisible = false
@@ -30,6 +31,7 @@ class OverlayManager(private val context: Context) {
         private const val TAG = "SynapseHUD"
         private const val INITIAL_STROKE_WIDTH = 3f
         private const val INITIAL_TEXT_SIZE = 24f
+        private const val BUBBLE_SIZE_DP = 56
 
         private val COLOR_SCHEME = arrayOf(
             Color.rgb(0, 122, 255),    // Blue
@@ -112,19 +114,132 @@ class OverlayManager(private val context: Context) {
         }
     }
 
+    private fun createAndAddBubble() {
+        try {
+            val size = (BUBBLE_SIZE_DP * context.resources.displayMetrics.density).toInt()
+            val view = android.widget.FrameLayout(context).apply {
+                // Neon UI for the bubble
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(Color.argb(200, 10, 14, 26)) // DarkNavy with transparency
+                    setStroke(4, Color.rgb(0, 212, 255)) // NeonCyan border
+                }
+                
+                // Add icon inside
+                addView(android.widget.ImageView(context).apply {
+                    setImageResource(android.R.drawable.ic_menu_compass)
+                    setColorFilter(Color.rgb(0, 212, 255))
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                    val padding = (12 * context.resources.displayMetrics.density).toInt()
+                    setPadding(padding, padding, padding, padding)
+                })
+            }
+            
+            bubbleView = view
+
+            val params = WindowManager.LayoutParams(
+                size, size,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+            params.gravity = Gravity.TOP or Gravity.START
+            params.x = 100
+            params.y = 500
+
+            // Draggable Logic
+            view.setOnTouchListener(object : android.view.View.OnTouchListener {
+                private var initialX = 0
+                private var initialY = 0
+                private var initialTouchX = 0f
+                private var initialTouchY = 0f
+                private var startTime = 0L
+
+                override fun onTouch(v: View, event: android.view.MotionEvent): Boolean {
+                    when (event.action) {
+                        android.view.MotionEvent.ACTION_DOWN -> {
+                            initialX = params.x
+                            initialY = params.y
+                            initialTouchX = event.rawX
+                            initialTouchY = event.rawY
+                            startTime = System.currentTimeMillis()
+                            return true
+                        }
+                        android.view.MotionEvent.ACTION_MOVE -> {
+                            params.x = initialX + (event.rawX - initialTouchX).toInt()
+                            params.y = initialY + (event.rawY - initialTouchY).toInt()
+                            windowManager.updateViewLayout(view, params)
+                            return true
+                        }
+                        android.view.MotionEvent.ACTION_UP -> {
+                            val duration = System.currentTimeMillis() - startTime
+                            val distance = Math.sqrt(Math.pow((event.rawX - initialTouchX).toDouble(), 2.0) + Math.pow((event.rawY - initialTouchY).toDouble(), 2.0))
+                            if (duration < 200 && distance < 10) {
+                                // CLICK DETECTED!
+                                handleBubbleClick()
+                            }
+                            return true
+                        }
+                    }
+                    return false
+                }
+            })
+
+            windowManager.addView(view, params)
+            Log.i(TAG, "Medlam Action Bubble deployed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating bubble: ${e.message}")
+        }
+    }
+
+    private fun handleBubbleClick() {
+        Log.i(TAG, "Medlam Action Bubble Tapped! Triggering Screen Analysis...")
+        
+        // Haptic Feedback
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            vibrator.vibrate(50)
+        }
+
+        // Trigger Agent to analyze current context
+        AgentViewModel.instance?.let { vm ->
+            vm.handleBackgroundEvent("[ACTION BUBBLE] User tapped the action bubble over the current screen. CAPTURE the screen, analyze what is under the bubble, and wait for voice input or ask the user how to help.")
+        }
+    }
+
+    fun setBubbleVisible(visible: Boolean) {
+        handler.post {
+            if (visible) {
+                if (bubbleView == null || bubbleView?.parent == null) {
+                    createAndAddBubble()
+                }
+            } else {
+                bubbleView?.let {
+                    try {
+                        if (it.parent != null) windowManager.removeView(it)
+                    } catch (_: Exception) {}
+                }
+                bubbleView = null
+            }
+        }
+    }
+
     fun hideOverlay() {
         handler.post {
             try {
-                overlayView?.let {
-                    if (it.parent != null) windowManager.removeView(it)
-                }
+                overlayView?.let { if (it.parent != null) windowManager.removeView(it) }
+                bubbleView?.let { if (it.parent != null) windowManager.removeView(it) }
             } catch (e: Exception) {
                 Log.e(TAG, "Error removing overlay: ${e.message}")
             }
             overlayView = null
+            bubbleView = null
             isOverlayVisible = false
             elementRects.clear()
-            Log.d(TAG, "Overlay hidden")
+            Log.d(TAG, "Overlay and Bubble hidden")
         }
     }
 

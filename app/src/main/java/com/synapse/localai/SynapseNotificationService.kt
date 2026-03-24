@@ -39,6 +39,9 @@ class SynapseNotificationService : NotificationListenerService() {
                         recentNotifications.removeAt(0)
                     }
                 }
+                
+                // Trigger autonomous reasoning if the agent is idle
+                AgentViewModel.instance?.handleBackgroundEvent(entry)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing notification", e)

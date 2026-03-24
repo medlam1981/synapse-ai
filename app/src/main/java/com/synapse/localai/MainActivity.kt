@@ -43,7 +43,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.Psychology // Icon for Knowledge Nodes
+import androidx.compose.material.icons.filled.VpnKey // Icon for API Key Index
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -64,6 +64,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.invisibleToUser
@@ -452,12 +453,6 @@ fun ChatApp(viewModel: AgentViewModel) {
                 items(uiState.logs) { log ->
                     TerminalEntry(log)
                 }
-                
-                if (uiState.isProcessing) {
-                    item {
-                        Text("● AGENT_REASONING_IN_PROGRESS...", color = NeonPurple.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    }
-                }
             }
             
             // Subtle Scanline Effect
@@ -469,6 +464,44 @@ fun ChatApp(viewModel: AgentViewModel) {
                         start = androidx.compose.ui.geometry.Offset(0f, y.toFloat()),
                         end = androidx.compose.ui.geometry.Offset(size.width, y.toFloat()),
                         strokeWidth = 1f
+                    )
+                }
+            }
+        }
+
+        // --- NEW: FIXED BOTTOM STATUS BAR (Thinking Indicator) ---
+        if (uiState.isProcessing) {
+            val infiniteTransition = rememberInfiniteTransition(label = "thinking_pulse")
+            val alpha by infiniteTransition.animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1000, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "alpha"
+            )
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .border(0.5.dp, NeonPurple.copy(alpha = 0.3f), RectangleShape)
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = NeonPurple,
+                        strokeWidth = 1.5.dp
+                    )
+                    Text(
+                        text = "Medlam-AI is thinking and executing tasks in the background...",
+                        color = NeonPurple.copy(alpha = alpha),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -515,6 +548,14 @@ private fun ChatInputBar(
     onFilePickerClick: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+
+    // Automatically clear focus when processing ends to prevent keyboard from popping up
+    LaunchedEffect(isProcessing) {
+        if (!isProcessing) {
+            focusManager.clearFocus()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -692,12 +733,37 @@ fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
         Spacer(modifier = Modifier.height(6.dp))
         
         val fullText = log.text
-        val displayOutput = if (log.sender == "AGENT" && fullText.contains("</think>")) {
-            fullText.substringAfter("</think>").trim()
-        } else if (log.sender == "AGENT" && fullText.contains("<think>")) {
-            "" // Still thinking, nothing to show in history yet
-        } else {
-            fullText
+        var displayOutput = fullText
+
+        // Hide raw tool execution codes, thinking processes, and plans from the UI
+        if (log.sender == "AGENT") {
+            var previous = ""
+            while (displayOutput != previous) {
+                previous = displayOutput
+                displayOutput = displayOutput
+                    .replace(Regex("<think>.*?</think>", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("<plan>.*?</plan>", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("<function_calls>.*?</function_calls>", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("<tool_code>.*?</tool_code>", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("<execute_bash>.*?</execute_bash>", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("<action>.*?</action>", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("```xml.*?```", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("```bash.*?```", RegexOption.DOT_MATCHES_ALL), "")
+                    .replace(Regex("```[a-zA-Z]*\\n.*?```", RegexOption.DOT_MATCHES_ALL), "")
+                    .trim()
+            }
+            
+            // Clean up standalone unclosed tags if stream is ongoing
+            displayOutput = displayOutput.replace(Regex("<think>.*", RegexOption.DOT_MATCHES_ALL), "")
+                                         .replace(Regex("<plan>.*", RegexOption.DOT_MATCHES_ALL), "")
+                                         .replace(Regex("<function_calls>.*", RegexOption.DOT_MATCHES_ALL), "")
+                                         .replace(Regex("```.*", RegexOption.DOT_MATCHES_ALL), "")
+                                         .trim()
+
+            // If the agent only output code/thoughts, show a generic processing message instead of empty bubble
+            if (displayOutput.isEmpty() && fullText.isNotBlank()) {
+                displayOutput = "⚡ Executing automated sequence..."
+            }
         }
 
         if (displayOutput.isNotEmpty()) {
@@ -820,7 +886,9 @@ data class SystemStats(
     val storageFree: String = "0GB",
     val cpuTemp: String = "--°C",
     val cpuTempInt: Int = 0,
-    val cpuUsage: String = "0%"
+    val cpuUsage: String = "0%",
+    val currentKeyIndex: Int = 0,
+    val totalKeys: Int = 0
 )
 
 fun getSystemStats(context: android.content.Context): SystemStats {
@@ -849,6 +917,16 @@ fun getSystemStats(context: android.content.Context): SystemStats {
     val tempInt = batTempRaw / 10 
     val tempStr = if (tempInt > 0) "${tempInt}°C" else "N/A" // Display N/A if temperature is zero or less
 
+    val vm = AgentViewModel.instance
+    val curKey = vm?.uiState?.value?.currentKeyIndex ?: 0
+    val totKeys = vm?.uiState?.value?.totalKeys ?: 0
+
+    Log.d("SynapseStats", "Battery Level: $batLevel%")
+    Log.d("SynapseStats", "Battery Temp Raw: $batTempRaw")
+    Log.d("SynapseStats", "Calculated Temp Int: $tempInt°C")
+    Log.d("SynapseStats", "Formatted Temp String: $tempStr")
+    Log.d("SynapseStats", "Final SystemStats.cpuTemp: $tempStr")
+
     return SystemStats(
         battery = batLevel, 
         isCharging = isCharging,
@@ -856,7 +934,9 @@ fun getSystemStats(context: android.content.Context): SystemStats {
         storageFree = storageFree, 
         cpuTemp = tempStr,
         cpuTempInt = tempInt,
-        cpuUsage = if (AgentViewModel.instance?.uiState?.value?.isProcessing == true) "HIGH" else "IDLE"
+        cpuUsage = if (AgentViewModel.instance?.uiState?.value?.isProcessing == true) "HIGH" else "IDLE",
+        currentKeyIndex = curKey,
+        totalKeys = totKeys
     )
 }
 
@@ -956,6 +1036,7 @@ fun SystemDashboard(context: android.content.Context) {
                 }
                 Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Memory, contentDescription = "RAM", tint = NeonPurple, modifier = Modifier.size(iconSize)) }, label = "RAM", value = stats.ramFree) }
                 Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.DeveloperBoard, contentDescription = "CPU", tint = NeonCyan, modifier = Modifier.size(iconSize)) }, label = "CPU", value = stats.cpuUsage) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.VpnKey, contentDescription = "Key", tint = NeonMagenta, modifier = Modifier.size(iconSize)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
                 Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Storage, contentDescription = "Disk", tint = AccentGlow, modifier = Modifier.size(iconSize)) }, label = "DISK", value = stats.storageFree) }
                 
                 val tempColor = when {
@@ -972,6 +1053,12 @@ fun SystemDashboard(context: android.content.Context) {
 
 @Composable
 fun TerminalEntry(log: LogEntry) {
+    // 1. SILENCE SYSTEM LOGS: Only show errors or specific success/info markers
+    if (log.sender == "SYSTEM") {
+        val isVisibleMarker = log.isError || log.text.startsWith("✅") || log.text.startsWith("📎")
+        if (!isVisibleMarker) return
+    }
+
     val prefix = when (log.sender) {
         "USER" -> ">> "
         "AGENT" -> "● "
@@ -985,13 +1072,30 @@ fun TerminalEntry(log: LogEntry) {
         else -> Color.White
     }
 
+    var displayOutput = log.text
+
+    if (log.sender == "AGENT") {
+        // 2. ULTRA-STRICT FILTER: If the message contains ANY technical tag, hide the entire entry.
+        // We rely on the 'complete' tool's SYSTEM log to show the final human-readable result.
+        val technicalMarkers = listOf("<think", "<plan", "<function", "<tool", "<execute", "<action", "```")
+        if (technicalMarkers.any { displayOutput.contains(it) }) {
+            return 
+        }
+        
+        // Clean up remaining small artifacts like long URLs
+        displayOutput = displayOutput.replace(Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE), "[LINK]").trim()
+    }
+
+    // Don't render empty entries or purely whitespace messages
+    if (displayOutput.isBlank()) return
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = buildAnnotatedString {
                 withStyle(SpanStyle(color = color, fontWeight = FontWeight.Bold)) {
                     append(prefix)
                 }
-                append(log.text)
+                append(displayOutput)
             },
             color = if (log.sender == "AGENT") Color.White.copy(alpha = 0.9f) else color.copy(alpha = 0.8f),
             fontSize = 10.sp,

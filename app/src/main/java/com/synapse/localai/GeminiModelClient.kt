@@ -38,11 +38,7 @@ class GeminiModelClient(
     private fun getNextKey(forceRotate: Boolean): String {
         if (apiKeys.isEmpty()) throw RuntimeException("No API keys provided")
         if (forceRotate || currentKeyIndex == -1) {
-            if (currentKeyIndex == -1) {
-                currentKeyIndex = (0 until apiKeys.size).random()
-            } else {
-                currentKeyIndex = (currentKeyIndex + 1) % apiKeys.size
-            }
+            currentKeyIndex = (currentKeyIndex + 1) % apiKeys.size
             Log.i(TAG, "Rotating to API key at index $currentKeyIndex")
             onKeyRotated?.invoke(currentKeyIndex)
         }
@@ -50,7 +46,8 @@ class GeminiModelClient(
     }
 
     init {
-        currentKeyIndex = if (apiKeys.isNotEmpty()) (0 until apiKeys.size).random() else -1
+        currentKeyIndex = 0 // Start with the first key
+        if (apiKeys.isNotEmpty()) onKeyRotated?.invoke(0)
     }
 
     suspend fun generateStreamWithOllamaMessages(
@@ -150,17 +147,32 @@ class GeminiModelClient(
                 }
                 
                 success = true 
+                Log.i(TAG, "Inference successful with Key #$currentKeyIndex")
 
             } catch (t: Throwable) {
                 val errorMsg = t.message ?: t.toString()
                 lastErrorDetail = errorMsg
                 val lowerError = errorMsg.lowercase()
                 
-                if (lowerError.contains("429") || lowerError.contains("quota") || lowerError.contains("limit") || lowerError.contains("exhausted") || lowerError.contains("resource") || lowerError.contains("overloaded") || lowerError.contains("unavailable") || lowerError.contains("safety") || lowerError.contains("recitation") || lowerError.contains("deadline") || t is java.net.SocketTimeoutException) {
+                Log.e(TAG, "Key #$currentKeyIndex Error: $errorMsg")
+
+                if (lowerError.contains("429") || 
+                    lowerError.contains("quota") || 
+                    lowerError.contains("limit") || 
+                    lowerError.contains("exhausted") ||
+                    lowerError.contains("resource") ||
+                    lowerError.contains("overloaded") ||
+                    lowerError.contains("unavailable") ||
+                    lowerError.contains("deadline") ||
+                    t is java.net.SocketTimeoutException) {
+                    
                     attempt++
-                    Log.w(TAG, "Key #$currentKeyIndex failed ($attempt/$totalKeys). Error: $errorMsg")
+                    Log.w(TAG, "Key #$currentKeyIndex failed ($attempt/$totalKeys). Attempting rotation...")
+                } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
+                    throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
                 } else {
-                    throw RuntimeException("Gemini Fatal: $errorMsg")
+                    // Fatal configuration error
+                    throw RuntimeException("Gemini Error: $errorMsg")
                 }
             }
         }

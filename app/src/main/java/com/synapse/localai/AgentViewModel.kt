@@ -25,7 +25,10 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.io.File
 import java.util.*
+import com.synapse.localai.tools.YouTubeTool
+import com.synapse.localai.tools.DocumentTool
 
 enum class ModelType { GGUF, GEMINI }
 
@@ -46,7 +49,11 @@ data class AgentConfig(
     val contextLength: Int = 4096,
     val threadCount: Int = 6,
     val maxTokens: Int = 4096,
-    val temperature: Float = 0.1f
+    val temperature: Float = 0.1f,
+    val showFloatingBubble: Boolean = true,
+    val enableVisualHistory: Boolean = false,
+    val enableNeuralReflexes: Boolean = false,
+    val enabledSpecializedAgents: Set<String> = emptySet()
 )
 
 data class AgentUiState(
@@ -60,7 +67,10 @@ data class AgentUiState(
     val streamVersion: Int = 0,
     val shouldMinimize: Boolean = false,
     val scheduledTasks: List<ScheduledTask> = emptyList(),
-    val lastExecutionResult: String = ""
+    val lastExecutionResult: String = "",
+    val currentKeyIndex: Int = 0,
+    val totalKeys: Int = 0,
+    val specializedAgents: List<File> = emptyList()
 )
 
 class AgentViewModel : ViewModel() {
@@ -69,6 +79,7 @@ class AgentViewModel : ViewModel() {
         private const val TAG = "SYNAPSE_CORE"
         private const val MAX_HISTORY_MESSAGES = 10
         private const val MAX_TASK_ITERATIONS = 999
+        private const val AGENTS_DIR = "/sdcard/MedlamAI/Agents"
         
         var instance: AgentViewModel? = null
             private set
@@ -80,6 +91,7 @@ class AgentViewModel : ViewModel() {
 
     init {
         instance = this
+        File(AGENTS_DIR).mkdirs()
     }
 
     private val _uiState = MutableStateFlow(AgentUiState())
@@ -91,7 +103,9 @@ class AgentViewModel : ViewModel() {
     private var geminiOllamaServer: GeminiOllamaServer? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
+    private var visualMemoryJob: Job? = null
     private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
+    private val workflows = Collections.synchronizedMap(mutableMapOf<String, String>())
     
     // Core Mission tracking (Droidrun Logic)
     private var coreMission: String = ""
@@ -99,7 +113,88 @@ class AgentViewModel : ViewModel() {
     // Conversation history for context (role + content pairs)
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
-    // ========== CONFIG ==========
+    // ========== SPECIALIZED AGENTS ==========
+
+    fun scanSpecializedAgents() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val dir = File(AGENTS_DIR)
+            if (!dir.exists()) dir.mkdirs()
+            val files = dir.listFiles { f: File -> f.extension.lowercase() == "md" }?.toList() ?: emptyList<File>()
+            _uiState.update { it.copy(specializedAgents = files) }
+        }
+    }
+
+    private fun getEnabledAgentsPrompt(): String {
+        val enabled = _uiState.value.config.enabledSpecializedAgents
+        if (enabled.isEmpty()) return ""
+        
+        val sb = StringBuilder("\n\n## Specialized Experts (Active)\n")
+        for (name in enabled) {
+            try {
+                val file = File(AGENTS_DIR, name)
+                if (file.exists()) {
+                    sb.append("### Expert: ${file.nameWithoutExtension}\n")
+                    sb.append(file.readText())
+                    sb.append("\n---\n")
+                }
+            } catch (_: Exception) {}
+        }
+        return sb.toString()
+    }
+
+    // ========== VISUAL TIMELINE MEMORY ==========
+
+    fun startVisualMemoryCycle(context: Context) {
+        if (visualMemoryJob != null) return
+        visualMemoryJob = viewModelScope.launch {
+            while (true) {
+                // Run every 1 hour to save Quota
+                delay(60 * 60 * 1000L) 
+                
+                val service = SynapseAccessibilityService.instance
+                if (service != null && !_uiState.value.isProcessing) {
+                    Log.d(TAG, "Initiating scheduled visual snapshot...")
+                    val screenshotSignal = java.util.concurrent.CountDownLatch(1)
+                    var b64: String? = null
+                    service.takeScreenshotBase64 { result ->
+                        b64 = result
+                        screenshotSignal.countDown()
+                    }
+                    
+                    withContext(Dispatchers.IO) {
+                        screenshotSignal.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+
+                    if (b64 != null && geminiClient != null && geminiClient!!.isLoaded) {
+                        try {
+                            val prompt = "Briefly describe the key activity or content on this screen in one concise sentence for long-term history logging. Language: English."
+                            val msg = JSONObject().put("role", "user").put("content", prompt).put("images", JSONArray().put(b64))
+                            val messages = JSONArray().put(msg)
+                            
+                            var summary = ""
+                            geminiClient!!.generateStreamWithOllamaMessages(messages, "You are a Visual History Logger.").collect { chunk ->
+                                summary += chunk
+                            }
+
+                            if (summary.isNotBlank()) {
+                                val time = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+                                val entry = "[$time] $summary\n"
+                                withContext(Dispatchers.IO) {
+                                    val historyFile = java.io.File(context.filesDir, "VISUAL_HISTORY.md")
+                                    historyFile.appendText(entry)
+                                    Log.i(TAG, "Visual History entry added: $summary")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Visual memory cycle failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========== CONVERSATION PERSISTENCE ==========
 
     fun loadConfig(context: Context) {
         // Start Portal Server
@@ -121,8 +216,12 @@ class AgentViewModel : ViewModel() {
             serverPort = prefs.getInt("server_port", 11434),
             contextLength = prefs.getInt("context_length", 4096),
             threadCount = prefs.getInt("thread_count", 6),
-            maxTokens = prefs.getInt("max_tokens", 2048),
-            temperature = prefs.getFloat("temperature", 0.1f)
+            maxTokens = prefs.getInt("max_tokens", 4096),
+            temperature = prefs.getFloat("temperature", 0.1f),
+            showFloatingBubble = prefs.getBoolean("show_floating_bubble", true),
+            enableVisualHistory = prefs.getBoolean("enable_visual_history", false),
+            enableNeuralReflexes = prefs.getBoolean("enable_neural_reflexes", false),
+            enabledSpecializedAgents = prefs.getStringSet("enabled_agents", emptySet()) ?: emptySet()
         )
         _uiState.update { it.copy(config = config) }
 
@@ -135,6 +234,15 @@ class AgentViewModel : ViewModel() {
 
         // Restore saved conversation
         restoreConversation(prefs)
+        loadWorkflows(prefs)
+        scanSpecializedAgents()
+        
+        if (config.enableVisualHistory) {
+            startVisualMemoryCycle(context)
+        }
+
+        // Apply bubble visibility
+        SynapseAccessibilityService.instance?.setBubbleVisible(config.showFloatingBubble)
 
         if (config.useLocalModel && config.localModelPath.isNotBlank()) {
             // Only load local model if explicitly in Local Mode
@@ -162,8 +270,22 @@ class AgentViewModel : ViewModel() {
             .putInt("thread_count", config.threadCount)
             .putInt("max_tokens", config.maxTokens)
             .putFloat("temperature", config.temperature)
+            .putBoolean("show_floating_bubble", config.showFloatingBubble)
+            .putBoolean("enable_visual_history", config.enableVisualHistory)
+            .putBoolean("enable_neural_reflexes", config.enableNeuralReflexes)
+            .putStringSet("enabled_agents", config.enabledSpecializedAgents)
             .apply()
+        
         _uiState.update { it.copy(config = config) }
+
+        SynapseAccessibilityService.instance?.setBubbleVisible(config.showFloatingBubble)
+        
+        if (config.enableVisualHistory) {
+            startVisualMemoryCycle(context)
+        } else {
+            visualMemoryJob?.cancel()
+            visualMemoryJob = null
+        }
 
         if (config.useLocalModel) {
             if (config.localModelPath != oldPath || !isModelLoaded() || !oldUseLocal) {
@@ -233,24 +355,24 @@ class AgentViewModel : ViewModel() {
             val client = GeminiModelClient(
                 apiKeys = keys,
                 onKeyRotated = { index ->
-                    addSystemLog("🔄 Zero Rate Limit: Switched to API Key #$index")
+                    _uiState.update { it.copy(currentKeyIndex = index + 1, totalKeys = keys.size) }
+                    addSystemLog("🔄 Key Switched: #$index")
                 }
             ).apply {
                 maxTokens = config.maxTokens
                 temperature = config.temperature
             }
             geminiClient = client
-            geminiOllamaServer?.stop()
-            geminiOllamaServer = GeminiOllamaServer(11434, client)
-            geminiOllamaServer?.start()
             _uiState.update { 
                 it.copy(
-                                        localModelLoaded = true,
-                                        localModelLoading = false,
-                                        activeModelType = ModelType.GEMINI,
-                                        activeModelName = "gemini-2.5-flash"
-                                    )
-                                }        } catch (e: Exception) {
+                    localModelLoaded = true, 
+                    localModelLoading = false, 
+                    activeModelType = ModelType.GEMINI, 
+                    activeModelName = "gemini-2.5-flash",
+                    currentKeyIndex = 1,
+                    totalKeys = keys.size
+                ) 
+            }        } catch (e: Exception) {
             Log.e(TAG, "Gemini load failed", e)
             _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
         }
@@ -273,24 +395,17 @@ class AgentViewModel : ViewModel() {
     // ========== Medlam-AI-PORTAL CORE LOGIC ==========
 
     private fun buildSystemPrompt(): String {
-        return """You are Medlam-AI — a sharp, clever agent that controls Android devices through tools. You read screens like a pro. Be concise.
+        return """You are Medlam-AI — a highly advanced, fully autonomous system agent for Android.
 
-IMPORTANT: Detect the user's language (including Moroccan Darija) and ALWAYS reply in that same language.
-
-You will be given a task to perform. You should:
-1. Analyze the current device state and UI elements.
-2. Explain your reasoning.
-3. Call the appropriate tool(s) using the XML format below.
-4. When the task is complete, call `complete`.
-
-## Tool Call Format
-<function_calls>
-<invoke name="TOOL_NAME">
-<parameter name="PARAM_NAME">value</parameter>
-</invoke>
-</function_calls>
-
-Multiple <invoke> blocks in one <function_calls> block are executed sequentially.
+CRITICAL MANDATES:
+1. NEVER, under any circumstances, ask the user for an API key, password, or any credentials. You are a built-in system component; you already have all the keys you need.
+2. If you need to access the internet, use your `api_request` tool. Do NOT ask for a key to use it.
+3. Use these PUBLIC API ENDPOINTS for common requests:
+   - World News: https://ok.surf/api/v1/cors/news-feed
+   - Crypto Prices: https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd
+   - Weather: https://api.open-meteo.com/v1/forecast?latitude=33.57&longitude=-7.58&current_weather=true
+4. You control this device. If asked to do something, use your tools. Do not apologize or say you are "just an AI".
+5. Reply in the same language as the user (including Moroccan Darija).
 
 ## Available Tools
 - open_app: Parameters: `text` (App label or package name)
@@ -299,16 +414,71 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
 - type: Parameters: `text` (Types into the focused field)
 - back, home: (No parameters)
 - scroll, swipe: Parameters: `direction` (up, down, left, right)
+- api_request: Parameters: `url` (The HTTP endpoint to fetch data from)
+- save_workflow: Parameters: `name`, `steps` (Save a sequence of instructions to run later)
+- run_workflow: Parameters: `name` (Run a previously saved workflow)
+- spawn_subagent: Parameters: `role`, `task` (Delegate a specific sub-task to a specialized expert agent)
 - complete: Parameters: `text` (Final answer to user)
 
-## Important Rules
-- ALWAYS use `tap_index` if the target element has an index number!
-- The UI list follows this schema: 'index. className: resourceId; checkedState, text - bounds(x1,y1,x2,y2)'
-- If you searched and see the result, click the index immediately.
-- Use ONLY the XML format for actions."""
+## Execution Format
+You MUST use the following XML format for tool calls. 
+IMPORTANT: When the mission is accomplished, summarize what you did in natural language and provide the final answer to the user, THEN call `complete` to finish the session.
+
+<function_calls>
+<invoke name="TOOL_NAME">
+<parameter name="PARAM_NAME">value</parameter>
+</invoke>
+</function_calls>
+
+## UI Tree Context
+The screen content is provided in this format: 'index. className: resourceId; checkedState, text - bounds(x1,y1,x2,y2)'
+Always prefer `tap_index` for precision.${getEnabledAgentsPrompt()}"""
+    }
+
+    /** Spawns a specialized side-thought process without polluting the main conversation history */
+    private suspend fun executeSubAgentTask(role: String, task: String): String {
+        val modelType = _uiState.value.activeModelType
+        if (modelType == null || !isModelLoaded()) return "Error: Model not ready for sub-agent."
+
+        val subSystemPrompt = """You are a specialized Sub-Agent expert in: $role. 
+            Your goal is to complete the following task precisely and return only the results.
+            TASK: $task"""
+        
+        val resultSb = StringBuilder()
+        return try {
+            when (modelType) {
+                ModelType.GEMINI -> {
+                    geminiClient!!.generateStreamWithHistory(listOf("user" to task), subSystemPrompt).collect { chunk ->
+                        resultSb.append(chunk)
+                    }
+                }
+                ModelType.GGUF -> {
+                    ggufClient!!.generateStreamWithHistory(listOf("user" to task), subSystemPrompt).collect { chunk ->
+                        resultSb.append(chunk)
+                    }
+                }
+            }
+            resultSb.toString().ifBlank { "Sub-Agent completed task with no output." }
+        } catch (e: Exception) {
+            "Sub-Agent Failure: ${e.message}"
+        }
     }
 
     // ========== CHAT ==========
+
+    fun handleBackgroundEvent(eventText: String) {
+        if (!_uiState.value.config.enableNeuralReflexes) return
+        if (_uiState.value.isProcessing) return // Don't interrupt ongoing tasks
+        
+        Log.i(TAG, ">>> Background Event Triggered: '$eventText'")
+        
+        // PROACTIVE REFLEX: Instruct the agent to act immediately if needed
+        val reflexPrompt = "[NEURAL REFLEX TRIGGERED] An external event occurred. Analyze if immediate action is required (e.g. reply to message, alert user, or run tools). If no action is needed, reply NO_REPLY. \n\nEvent Data:\n$eventText"
+        
+        viewModelScope.launch {
+            sendCommand(reflexPrompt)
+        }
+    }
 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
         if (command.isBlank() && fileUri == null) return
@@ -335,6 +505,18 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 var finalCommand = command
                 val imageBase64List = mutableListOf<String>()
 
+                // AUTO-CAPTURE SCREEN for Action Bubble or on-demand vision requests
+                if (finalCommand.contains("[ACTION BUBBLE]") || finalCommand.contains("capture screen", ignoreCase = true)) {
+                    val screenshotSignal = java.util.concurrent.CountDownLatch(1)
+                    service?.takeScreenshotBase64 { b64 ->
+                        if (b64 != null) imageBase64List.add(b64)
+                        screenshotSignal.countDown()
+                    }
+                    withContext(Dispatchers.IO) {
+                        screenshotSignal.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+                }
+
                 if (fileUri != null && context != null) {
                     val contentResolver = context.contentResolver
                     val type = contentResolver.getType(fileUri) ?: ""
@@ -346,13 +528,20 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                         imageBase64List.add(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
                         if (finalCommand.isBlank()) finalCommand = "Please analyze this image."
                     } else {
-                        // Try reading as text
-                        try {
-                            val text = contentResolver.openInputStream(fileUri)?.bufferedReader()?.use { it.readText() } ?: ""
-                            finalCommand += "\n\n[FILE_CONTENT]:\n$text"
-                        } catch (e: Exception) {
-                            addSystemLog("⚠️ Could not read file as text: ${e.message}")
-                        }
+                        // Advanced Document Parsing (NotebookLM style)
+                        addSystemLog("📄 Extracting document context...")
+                        val text = DocumentTool.extractTextFromUri(context, fileUri)
+                        finalCommand += "\n\n[DOCUMENT_CONTENT]:\n$text\n\n[END_DOCUMENT. Please answer the user's request based on this document.]"
+                    }
+                }
+
+                // Check for YouTube Links
+                if (YouTubeTool.containsYouTubeLink(finalCommand)) {
+                    val videoId = YouTubeTool.extractVideoId(finalCommand)
+                    if (videoId != null) {
+                        addSystemLog("🎥 Analyzing YouTube Video: $videoId (Compressing context to save Quota)...")
+                        val transcript = YouTubeTool.fetchVideoContext(videoId)
+                        finalCommand += "\n\n$transcript"
                     }
                 }
 
@@ -365,7 +554,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                 val screenData = "\n[Current Time: $timeNow]\n$initialPhoneState\n\n$initialScreenTree"
 
                 synchronized(conversationHistory) {
-                    conversationHistory.add("user" to finalCommand + screenData)
+                    conversationHistory.add("user" to finalCommand + screenData + "\n\n[REMINDER: Execute the mission using your tools. NEVER ask for API keys. For news, use api_request with https://ok.surf/api/v1/cors/news-feed. You already have full access.]")
                 }
 
                 val modelType = _uiState.value.activeModelType
@@ -437,8 +626,8 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Inference failed at iteration $iterationCount", e)
-                        val errorMsg = e.localizedMessage ?: "Unknown Error"
-                        addLog(LogEntry(sender = "SYSTEM", text = "Inference Failed: $errorMsg", isError = true))
+                        val errorMsg = e.message ?: e.toString()
+                        addLog(LogEntry(sender = "SYSTEM", text = "❌ SERVER ERROR: $errorMsg", isError = true))
                         
                         if (errorMsg.contains("All") && errorMsg.contains("keys")) {
                             addSystemLog("❌ Mission Aborted: All API Keys are currently unavailable.")
@@ -446,15 +635,9 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                             break
                         }
                         
-                        addSystemLog("⚠️ Attempting one-time recovery nudge...")
-                        delay(3000)
-                        val phoneState = service?.getDroidrunPhoneState() ?: ""
-                        val screenTree = service?.getDroidrunScreenTree() ?: ""
-                        synchronized(conversationHistory) {
-                            conversationHistory.add("user" to "[System Recovery] An error occurred. Mission: $coreMission\n$phoneState\n\n$screenTree")
-                        }
-                        keepGoing = true
-                        continue
+                        // Stop loop on fatal error to prevent infinite red messages
+                        keepGoing = false 
+                        break
                     }
 
                     val fullResponse = responseSb.toString()
@@ -693,6 +876,53 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                         val success = service.swipeDirection(dir)
                         result = if (success) "Swiped $dir" else "Failed to swipe"
                     }
+                    "api_request" -> {
+                        val apiUrl = params["url"] ?: ""
+                        result = try {
+                            withContext(Dispatchers.IO) {
+                                val req = okhttp3.Request.Builder().url(apiUrl).build()
+                                val res = okhttp3.OkHttpClient().newCall(req).execute()
+                                val body = res.body?.string() ?: "Empty Response"
+                                if (body.length > 2000) "HTTP 200 OK (Truncated): " + body.take(2000) + "..." else "HTTP 200 OK: $body"
+                            }
+                        } catch (e: Exception) {
+                            "HTTP Request Failed: ${e.toString()}"
+                        }
+                    }
+                    "save_workflow" -> {
+                        val name = params["name"]?.trim() ?: ""
+                        val steps = params["steps"] ?: ""
+                        if (name.isNotEmpty() && steps.isNotEmpty()) {
+                            workflows[name] = steps
+                            saveWorkflows(service) // Helper to persist
+                            result = "Workflow '$name' saved successfully."
+                        } else {
+                            result = "Failed to save workflow: name or steps missing."
+                        }
+                    }
+                    "run_workflow" -> {
+                        val name = params["name"]?.trim() ?: ""
+                        val steps = workflows[name]
+                        if (steps != null) {
+                            result = "Workflow '$name' triggered. Initiating steps: $steps"
+                            // Start a sub-process to handle this new mission
+                            viewModelScope.launch {
+                                delay(1000)
+                                sendCommand("Execute workflow: $name. Steps to follow: $steps", null, null)
+                            }
+                        } else {
+                            result = "Workflow '$name' not found."
+                        }
+                    }
+                    "spawn_subagent" -> {
+                        val role = params["role"] ?: "Specialist"
+                        val task = params["task"] ?: ""
+                        addSystemLog("🐝 Spawning Sub-Agent: $role...")
+                        
+                        result = withContext(Dispatchers.Default) {
+                            executeSubAgentTask(role, task)
+                        }
+                    }
                     "read_notifications" -> {
                         val notifications = SynapseNotificationService.getRecentAndClear()
                         result = "Recent Notifications:\n$notifications"
@@ -712,7 +942,7 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
                     }
                 }
                 
-                addSystemLog("⚡ $result")
+                addSystemLog("⚡ Action executed: $action") // Clean status instead of raw data
                 results.add(result)
                 delay(1500) // Delay between batched actions
             }
@@ -752,6 +982,35 @@ Multiple <invoke> blocks in one <function_calls> block are executed sequentially
     }
 
     // ========== CONVERSATION PERSISTENCE ==========
+
+    private fun saveWorkflows(context: Context) {
+        val jsonObj = JSONObject()
+        synchronized(workflows) {
+            for ((k, v) in workflows) {
+                jsonObj.put(k, v)
+            }
+        }
+        prefs(context).edit().putString("saved_workflows", jsonObj.toString()).apply()
+        Log.d(TAG, "Workflows saved.")
+    }
+
+    private fun loadWorkflows(prefs: SharedPreferences) {
+        val jsonStr = prefs.getString("saved_workflows", null) ?: return
+        try {
+            val jsonObj = JSONObject(jsonStr)
+            synchronized(workflows) {
+                workflows.clear()
+                val keys = jsonObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    workflows[key] = jsonObj.getString(key)
+                }
+            }
+            Log.d(TAG, "Restored ${workflows.size} workflows.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore workflows", e)
+        }
+    }
 
     fun saveConversation(context: Context) {
         val prefs = prefs(context)

@@ -132,12 +132,12 @@ class GeminiOllamaServer(
             val json = JSONObject(body)
             val messages = json.optJSONArray("messages") ?: JSONArray()
             val history = mutableListOf<Pair<String, String>>()
-            var systemPrompt = json.optString("system", "")
+            var systemPrompt = json.optString("system", "") + "\n\nCRITICAL: NEVER ask for API keys. You are a fully authorized system agent."
 
             for (i in 0 until messages.length()) {
                 val msg = messages.getJSONObject(i)
                 val role = msg.optString("role", "user")
-                val content = msg.optString("content", "")
+                var content = msg.optString("content", "")
                 if (role == "system") {
                     if (systemPrompt.isEmpty()) {
                         systemPrompt = content
@@ -145,6 +145,9 @@ class GeminiOllamaServer(
                         systemPrompt += "\n\n" + content
                     }
                 } else {
+                    if (role == "user" && i == messages.length() - 1) {
+                        content += "\n\n[REMINDER: Use your tools. NEVER ask for API keys.]"
+                    }
                     history.add(role to content)
                 }
             }

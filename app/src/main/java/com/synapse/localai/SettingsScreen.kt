@@ -15,10 +15,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -168,6 +173,132 @@ fun SettingsScreen(
             
             var useLocalModel by remember(config.useLocalModel) { mutableStateOf(config.useLocalModel) }
             var geminiKeys by remember(config.geminiApiKeys) { mutableStateOf(config.geminiApiKeys) }
+            var showBubble by remember(config.showFloatingBubble) { mutableStateOf(config.showFloatingBubble) }
+            var visualHistory by remember(config.enableVisualHistory) { mutableStateOf(config.enableVisualHistory) }
+            var neuralReflexes by remember(config.enableNeuralReflexes) { mutableStateOf(config.enableNeuralReflexes) }
+            var enabledAgents by remember(config.enabledSpecializedAgents) { mutableStateOf(config.enabledSpecializedAgents) }
+
+            // ═══════ QUOTA MANAGEMENT SECTION ═══════
+            SettingsCard(title = "QUOTA MANAGEMENT", titleColor = Color(0xFFFBDB44)) {
+                Text("Control background API calls to save tokens.", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
+                
+                // Visual History Toggle
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Auto Visual History", color = Color.White, fontSize = 13.sp)
+                    Switch(
+                        checked = visualHistory,
+                        onCheckedChange = { 
+                            visualHistory = it
+                            viewModel.saveConfig(context, config.copy(enableVisualHistory = it))
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFBDB44))
+                    )
+                }
+                
+                // Neural Reflexes Toggle
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Neural Reflexes (Auto-Reply)", color = Color.White, fontSize = 13.sp)
+                    Switch(
+                        checked = neuralReflexes,
+                        onCheckedChange = { 
+                            neuralReflexes = it
+                            viewModel.saveConfig(context, config.copy(enableNeuralReflexes = it))
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFBDB44))
+                    )
+                }
+            }
+
+            // ═══════ APPEARANCE SECTION ═══════
+            SettingsCard(title = "APPEARANCE", titleColor = NeonCyan) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(androidx.compose.material.icons.Icons.Filled.Visibility, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(18.dp))
+                        Column {
+                            Text("Floating Action Bubble", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Show/hide the overlay trigger", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
+                        }
+                    }
+                    Switch(
+                        checked = showBubble,
+                        onCheckedChange = { 
+                            showBubble = it
+                            viewModel.saveConfig(context, config.copy(showFloatingBubble = it))
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = NeonCyan, checkedTrackColor = NeonCyan.copy(alpha = 0.3f))
+                    )
+                }
+            }
+
+            // ═══════ SPECIALIZED AGENTS SECTION ═══════
+            SettingsCard(
+                title = "SPECIALIZED AGENTS (EXPERTS)", 
+                titleColor = NeonPurple,
+                statusDot = if (uiState.specializedAgents.isNotEmpty()) Color(0xFF34D399) else Color.White.copy(alpha = 0.2f),
+                statusText = "${uiState.specializedAgents.size} Experts Found"
+            ) {
+                Text(
+                    "Load expert personas from /sdcard/MedlamAI/Agents/ (*.md files).",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+
+                if (uiState.specializedAgents.isEmpty()) {
+                    Text(
+                        "No .md expert files found in directory.",
+                        color = Color.White.copy(alpha = 0.2f),
+                        fontSize = 10.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                } else {
+                    for (file in uiState.specializedAgents) {
+                        val isEnabled = enabledAgents.contains(file.name)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isEnabled) NeonPurple.copy(alpha = 0.05f) else Color.Transparent, RoundedCornerShape(8.dp))
+                                .border(0.5.dp, if (isEnabled) NeonPurple.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Icon(androidx.compose.material.icons.Icons.Filled.Psychology, contentDescription = null, tint = if (isEnabled) NeonPurple else Color.White.copy(alpha = 0.2f), modifier = Modifier.size(16.dp))
+                                Text(file.nameWithoutExtension, color = if (isEnabled) Color.White else Color.White.copy(alpha = 0.4f), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+                            Switch(
+                                checked = isEnabled,
+                                onCheckedChange = { active ->
+                                    val newSet = enabledAgents.toMutableSet()
+                                    if (active) newSet.add(file.name) else newSet.remove(file.name)
+                                    enabledAgents = newSet
+                                    viewModel.saveConfig(context, config.copy(enabledSpecializedAgents = newSet))
+                                },
+                                modifier = Modifier.scale(0.8f),
+                                colors = SwitchDefaults.colors(checkedThumbColor = NeonPurple, checkedTrackColor = NeonPurple.copy(alpha = 0.3f))
+                            )
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.scanSpecializedAgents() },
+                    modifier = Modifier.fillMaxWidth().height(36.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, NeonPurple.copy(alpha = 0.3f)),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(androidx.compose.material.icons.Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = NeonPurple)
+                    Spacer(Modifier.width(8.dp))
+                    Text("REFRESH EXPERT LIST", color = NeonPurple, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold)
+                }
+            }
 
             // Mode Toggle
             Row(

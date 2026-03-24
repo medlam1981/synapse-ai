@@ -68,4 +68,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.kotlinx.coroutines.android)
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.itextpdf:itextg:5.5.10")
 }
