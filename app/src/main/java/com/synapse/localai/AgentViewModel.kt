@@ -786,9 +786,6 @@ Always prefer `tap_index` for precision.${getEnabledAgentsPrompt()}"""
             invokesBlock = invokesBlock.substring(0, endIndex)
         }
         
-        _uiState.update { it.copy(shouldMinimize = true) }
-        delay(300) // Wait for app to minimize
-
         if (service == null) {
             addSystemLog("⚠️ Cannot execute actions: Accessibility Service disconnected.")
             return false
@@ -813,6 +810,15 @@ Always prefer `tap_index` for precision.${getEnabledAgentsPrompt()}"""
                 synchronized(conversationHistory) { conversationHistory.add("user" to feedback) }
                 service.launchApp("com.synapse.localai")
                 return true
+            }
+
+            // SMART MINIMIZE: Only minimize if we have UI-interactive tools
+            val interactiveTools = listOf("open_app", "click_text", "tap_index", "click", "type", "back", "home", "scroll", "swipe", "run_workflow")
+            val needsMinimize = invokes.any { it.groupValues[1] in interactiveTools }
+            
+            if (needsMinimize) {
+                _uiState.update { it.copy(shouldMinimize = true) }
+                delay(500) // Wait for app to minimize
             }
 
             val results = mutableListOf<String>()
