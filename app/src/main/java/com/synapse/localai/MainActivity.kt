@@ -658,7 +658,7 @@ fun SystemDashboard(context: android.content.Context) {
 
     LaunchedEffect(Unit) {
         while (true) {
-            delay(15000)
+            delay(3000)
             stats = getSystemStats(context)
         }
     }
@@ -879,6 +879,9 @@ data class SystemStats(
     val totalKeys: Int
 )
 
+private var lastCpuTotal: Long = 0
+private var lastCpuIdle: Long = 0
+
 fun getSystemStats(context: android.content.Context): SystemStats {
     val bm = context.getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
     val battery = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -890,8 +893,8 @@ fun getSystemStats(context: android.content.Context): SystemStats {
     activityManager.getMemoryInfo(memoryInfo)
     val ramFree = String.format("%.1fGB", memoryInfo.availMem / 1024.0 / 1024.0 / 1024.0)
 
-    val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
-    val storageFree = String.format("%.0fGB", stat.availableBlocksLong * stat.blockSizeLong / 1024.0 / 1024.0 / 1024.0)
+    val statFs = android.os.StatFs(android.os.Environment.getDataDirectory().path)
+    val storageFree = String.format("%.0fGB", statFs.availableBlocksLong * statFs.blockSizeLong / 1024.0 / 1024.0 / 1024.0)
 
     val prefs = context.getSharedPreferences("synapse_config", android.content.Context.MODE_PRIVATE)
     val geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
@@ -904,38 +907,70 @@ fun getSystemStats(context: android.content.Context): SystemStats {
 
     var maxTemp = 0
     try {
-        // Scan multiple common CPU thermal zones to avoid static fallback values like 37C
-        val zones = listOf(
-            "/sys/class/thermal/thermal_zone16/temp",
-            "/sys/class/thermal/thermal_zone17/temp",
-            "/sys/class/thermal/thermal_zone18/temp",
-            "/sys/class/thermal/thermal_zone7/temp",
-            "/sys/class/thermal/thermal_zone0/temp"
-        )
-        for (path in zones) {
-            val f = File(path)
-            if (f.exists()) {
-                val t = f.readText().trim().toIntOrNull() ?: 0
+        // Broad search for ANY thermal sensor that isn't a static fallback
+        val thermalDir = File("/sys/class/thermal")
+        val zones = thermalDir.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") } ?: emptyArray()
+        
+        for (zone in zones) {
+            val typeFile = File(zone, "type")
+            val tempFile = File(zone, "temp")
+            if (tempFile.exists()) {
+                val type = if (typeFile.exists()) typeFile.readText().lowercase() else ""
+                val t = tempFile.readText().trim().toIntOrNull() ?: 0
                 val normalized = if (t > 1000) t / 1000 else t
-                if (normalized in 20..100 && normalized > maxTemp) {
-                    maxTemp = normalized
+                
+                // Prioritize CPU sensors, ignore static 37C if others exist
+                if (normalized in 20..100) {
+                    if (type.contains("cpu") || type.contains("tsens") || type.contains("cluster")) {
+                        maxTemp = normalized
+                        break // Found a dedicated CPU sensor
+                    }
+                    if (normalized > maxTemp && normalized != 37) {
+                        maxTemp = normalized
+                    }
                 }
             }
         }
-    } catch (e: Exception) {
-        Log.e("SYNAPSE_STATS", "Thermal read failed: ${e.message}")
-    }
+        // Final fallback if everything is 37 or missing
+        if (maxTemp == 0 || maxTemp == 37) {
+             val t0 = File("/sys/class/thermal/thermal_zone0/temp")
+             if (t0.exists()) {
+                 val t = t0.readText().trim().toIntOrNull() ?: 0
+                 maxTemp = if (t > 1000) t / 1000 else t
+             }
+        }
+    } catch (_: Exception) {}
 
-    var cpuUsage = "LOW"
+    var cpuUsage = "0%"
     try {
-        val loadFile = File("/proc/loadavg")
-        if (loadFile.exists()) {
-            val line = loadFile.readText().split(" ")
-            if (line.isNotEmpty()) {
-                val load = line[0].toDoubleOrNull() ?: 0.0
-                val cores = Runtime.getRuntime().availableProcessors()
-                val pct = ((load / cores) * 100).toInt().coerceIn(0, 100)
-                cpuUsage = "$pct%"
+        val statFile = File("/proc/stat")
+        if (statFile.exists()) {
+            val line = statFile.bufferedReader().use { it.readLine() }
+            if (line != null && line.startsWith("cpu")) {
+                val parts = line.split(Regex("\\s+")).filter { it.isNotBlank() }
+                if (parts.size >= 5) {
+                    val user = parts[1].toLong()
+                    val nice = parts[2].toLong()
+                    val system = parts[3].toLong()
+                    val idle = parts[4].toLong()
+                    val iowait = parts.getOrNull(5)?.toLong() ?: 0L
+                    val irq = parts.getOrNull(6)?.toLong() ?: 0L
+                    val softirq = parts.getOrNull(7)?.toLong() ?: 0L
+                    
+                    val currentTotal = user + nice + system + idle + iowait + irq + softirq
+                    val currentIdle = idle + iowait
+                    
+                    if (lastCpuTotal > 0) {
+                        val deltaTotal = currentTotal - lastCpuTotal
+                        val deltaIdle = currentIdle - lastCpuIdle
+                        if (deltaTotal > 0) {
+                            val pct = (100 * (deltaTotal - deltaIdle) / deltaTotal).toInt().coerceIn(0, 100)
+                            cpuUsage = "$pct%"
+                        }
+                    }
+                    lastCpuTotal = currentTotal
+                    lastCpuIdle = currentIdle
+                }
             }
         }
     } catch (_: Exception) {}
