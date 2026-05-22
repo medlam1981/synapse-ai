@@ -247,7 +247,11 @@ class SynapseAccessibilityService : AccessibilityService() {
                 .setContentIntent(pendingIntent)
                 .build()
 
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
             Log.i(TAG, "Foreground notification started")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start foreground notification: ${e.message}", e)
@@ -754,7 +758,11 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     private fun getCurrentImeLabel(): String? {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
-        val currentId = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        val currentId = try {
+            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        } catch (e: Exception) {
+            null
+        }
         return imm.enabledInputMethodList.find { it.id == currentId }?.loadLabel(packageManager)?.toString()
     }
 
@@ -767,32 +775,47 @@ class SynapseAccessibilityService : AccessibilityService() {
         if (targetLabel == null) return
 
         val now = System.currentTimeMillis()
-        if (targetLabel == lastClickedIme && now - lastClickTime < 2000) return
+        if (targetLabel == lastClickedIme && now - lastClickTime < 3000) return
 
-        // Search for the exact or containing label
-        val nodes = root.findAccessibilityNodeInfosByText(targetLabel)
-        for (node in nodes) {
-            val nodeText = node.text?.toString() ?: ""
-            if (nodeText.contains(targetLabel, ignoreCase = true)) {
-                var clickable = node
-                while (clickable != null && !clickable.isClickable) {
-                    val p = clickable.parent
-                    if (p == null) break
-                    clickable = p
-                }
-                
-                if (clickable != null && clickable.isClickable) {
-                    Log.i(TAG, "Magic! Clicking $targetLabel in dialog...")
-                    clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    lastClickedIme = targetLabel
-                    lastClickTime = now
-                    isRestoringKeyboard = false 
-                    node.recycle()
-                    return
-                }
+        Log.d(TAG, "IME Picker Detected. Searching for: $targetLabel")
+        
+        // Recursive search for the text since findAccessibilityNodeInfosByText can be flaky on some OEMs
+        val targetNode = findNodeByTextRecursive(root, targetLabel)
+        
+        if (targetNode != null) {
+            var clickable = targetNode
+            while (clickable != null && !clickable.isClickable) {
+                val p = clickable.parent
+                if (p == null) break
+                clickable = p
             }
-            node.recycle()
+            
+            if (clickable != null && clickable.isClickable) {
+                Log.i(TAG, "Success! Clicking $targetLabel in IME picker...")
+                clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                lastClickedIme = targetLabel
+                lastClickTime = now
+                isRestoringKeyboard = false 
+            }
+            targetNode.recycle()
         }
+    }
+
+    private fun findNodeByTextRecursive(node: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
+        val nodeText = node.text?.toString() ?: ""
+        val contentDesc = node.contentDescription?.toString() ?: ""
+        
+        if (nodeText.contains(text, ignoreCase = true) || contentDesc.contains(text, ignoreCase = true)) {
+            return AccessibilityNodeInfo.obtain(node)
+        }
+        
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findNodeByTextRecursive(child, text)
+            child.recycle()
+            if (result != null) return result
+        }
+        return null
     }
 
     fun switchToSynapseKeyboard() {
@@ -893,23 +916,27 @@ class SynapseAccessibilityService : AccessibilityService() {
 
     fun launchApp(appName: String): Boolean {
         try {
+            Log.d(TAG, "launchApp requested for: '$appName'")
             val pm = packageManager
             val resolvedPkg = resolvePackageName(appName)
             
             if (resolvedPkg != null) {
+                Log.d(TAG, "Resolved '$appName' to package: '$resolvedPkg'")
                 val launchIntent = pm.getLaunchIntentForPackage(resolvedPkg)
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     startActivity(launchIntent)
-                    Log.d(TAG, "Launched app: $resolvedPkg")
+                    Log.i(TAG, "Successfully started intent for: $resolvedPkg")
                     return true
+                } else {
+                    Log.w(TAG, "No launch intent found for package: $resolvedPkg")
                 }
+            } else {
+                Log.w(TAG, "Could not resolve app name/package: '$appName'")
             }
-            
-            Log.w(TAG, "App not found or not launchable: $appName")
             return false
         } catch (e: Exception) {
-            Log.e(TAG, "launchApp failed", e)
+            Log.e(TAG, "launchApp exception: ${e.message}", e)
             return false
         }
     }

@@ -7,24 +7,14 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.os.PowerManager
-import android.provider.Settings
-import android.util.Log
+import android.speech.RecognizerIntent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,61 +22,87 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.BatteryFull
-import androidx.compose.material.icons.filled.DeveloperBoard
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Thermostat
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.VpnKey // Icon for API Key Index
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.draw.drawWithCache
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.invisibleToUser
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.synapse.localai.ui.theme.*
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import android.util.Log
+import java.io.File
+import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.util.UUID
 
-// Theme colors matching the brain logo
-val NeonCyan     = Color(0xFF00D4FF)
-val NeonPurple   = Color(0xFFBB44FF)
-val NeonMagenta  = Color(0xFFFF44DD)
-val DarkNavy     = Color(0xFF0A0E1A)
-val DarkCard     = Color(0xFF0F1328)
-val MidNavy      = Color(0xFF151A30)
-val AccentGlow   = Color(0xFF3B82F6)
+// --- CODE HIGHLIGHTING UTILITIES ---
+
+@Composable
+fun parseMarkdownWithCodeBlocks(text: String): List<AnnotatedString> {
+    val result = mutableListOf<AnnotatedString>()
+    val codeBlockRegex = Regex("```(?:[a-zA-Z]*\\n)?(.*?)```", RegexOption.DOT_MATCHES_ALL)
+    
+    var lastIndex = 0
+    codeBlockRegex.findAll(text).forEach { match ->
+        if (match.range.first > lastIndex) {
+            result.add(AnnotatedString(text.substring(lastIndex, match.range.first)))
+        }
+        val code = match.groupValues[1]
+        result.add(highlightCode(code))
+        lastIndex = match.range.last + 1
+    }
+    
+    if (lastIndex < text.length) {
+        result.add(AnnotatedString(text.substring(lastIndex)))
+    }
+    
+    return if (result.isEmpty() && text.isNotEmpty()) listOf(AnnotatedString(text)) else result
+}
+
+fun highlightCode(code: String): AnnotatedString {
+    val builder = AnnotatedString.Builder(code)
+    
+    val keywords = Regex("\\b(val|var|fun|class|interface|object|if|else|when|for|while|return|import|package|def|function|let|const|break|continue|switch|case|default|public|private|protected|static|final|try|catch|finally|throw|throws)\\b")
+    keywords.findAll(code).forEach { match ->
+        builder.addStyle(SpanStyle(color = CodeKeyword, fontWeight = FontWeight.Bold), match.range.first, match.range.last + 1)
+    }
+    
+    val strings = Regex("\"(.*?)\"|'(.*?)'")
+    strings.findAll(code).forEach { match ->
+        builder.addStyle(SpanStyle(color = CodeString), match.range.first, match.range.last + 1)
+    }
+    
+    val comments = Regex("//.*|/\\*.*?\\*/|#.*", RegexOption.DOT_MATCHES_ALL)
+    comments.findAll(code).forEach { match ->
+        builder.addStyle(SpanStyle(color = CodeComment), match.range.first, match.range.last + 1)
+    }
+    
+    val numbers = Regex("\\b\\d+(\\.\\d+)?\\b")
+    numbers.findAll(code).forEach { match ->
+        builder.addStyle(SpanStyle(color = Color(0xFFD19A66)), match.range.first, match.range.last + 1)
+    }
+
+    return builder.toAnnotatedString()
+}
 
 data class LogEntry(
     val id: String = UUID.randomUUID().toString(),
@@ -98,43 +114,74 @@ data class LogEntry(
 class MainActivity : ComponentActivity() {
     private val viewModel = AgentViewModel()
     
-    companion object { 
-        private const val TAG = "SynapseMain" 
+    companion object {
         var instance: MainActivity? = null
-            private set
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this
+
+        setupGlobalCrashHandler()
         
-        checkStoragePermissions()
-        checkBatteryOptimizations()
+        // coordinated startup
+        lifecycleScope.launch {
+            try {
+                checkStoragePermissions()
+                delay(1500)
+                checkBatteryOptimizations()
+            } catch (e: Exception) {
+                logToCrashFile("Startup Permission Logic Error: ${e.message}")
+            }
+        }
         
         setContent {
-            MedlamAITheme {
-                ChatApp(viewModel)
+            SynapseAITheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    ChatApp(viewModel)
+                }
             }
+        }
+    }
+
+    private fun setupGlobalCrashHandler() {
+        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            val stackTrace = sw.toString()
+            
+            Log.e("CRITICAL_CRASH", stackTrace)
+            logToCrashFile("CRASH in thread ${thread.name}:\n$stackTrace")
+            
+            oldHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    private fun logToCrashFile(message: String) {
+        try {
+            val dir = File("/sdcard/MedlamAI")
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, "crash_report.txt")
+            val fos = FileOutputStream(file, true)
+            fos.write("\n--- SYSTEM LOG AT ${java.util.Date()} ---\n".toByteArray())
+            fos.write(message.toByteArray())
+            fos.write("\n-------------------------------\n".toByteArray())
+            fos.close()
+        } catch (e: Exception) {
+            Log.e("LOG_ERROR", "Failed to write to crash file: ${e.message}")
         }
     }
 
     private fun checkStoragePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                try {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                    intent.addCategory("android.intent.category.DEFAULT")
-                    intent.data = Uri.parse(String.format("package:%s", applicationContext.packageName))
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    val intent = Intent()
-                    intent.action = Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
-                    startActivity(intent)
-                }
-            }
-        } else {
-            if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+            if (!android.os.Environment.isExternalStorageManager()) {
+                val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.data = Uri.parse("package:" + applicationContext.packageName)
+                startActivity(intent)
             }
         }
     }
@@ -142,204 +189,81 @@ class MainActivity : ComponentActivity() {
     private fun checkBatteryOptimizations() {
         val intent = Intent()
         val packageName = packageName
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
         if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-            try {
-                intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-                intent.data = Uri.parse("package:$packageName")
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to request battery optimization ignore", e)
-            }
+            intent.action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            intent.data = Uri.parse("package:$packageName")
+            startActivity(intent)
         }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        viewModel.saveConversation(this)
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        Log.w(TAG, "onTrimMemory level=$level")
-        when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
-                // System is critically low on memory - trim conversation history aggressively
-                viewModel.trimMemory(aggressive = true)
-                System.gc()
-            }
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
-                viewModel.trimMemory(aggressive = false)
-            }
+        if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            viewModel.closeAllModels()
         }
     }
 }
 
-@Composable
-fun MedlamAITheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = NeonCyan,
-            background = DarkNavy,
-            surface = DarkCard,
-            onPrimary = Color.Black,
-            onBackground = Color.White,
-            onSurface = Color.White
-        ),
-        content = content
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatApp(viewModel: AgentViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
-    var expandedMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
-
-    // --- Voice & File State ---
-    var isRecording by remember { mutableStateOf(false) }
+    var expandedMenu by remember { mutableStateOf(false) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
-    val speechRecognizer = remember { android.speech.SpeechRecognizer.createSpeechRecognizer(context) }
-    
+    var isRecording by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        selectedFileUri = uri
-        if (uri != null) {
-            viewModel.addSystemLog("📎 File attached: ${uri.lastPathSegment}")
-        }
-    }
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri -> selectedFileUri = uri }
+    )
 
-    val speechRecognizerIntent = remember {
-        Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            // Support ALL languages + Moroccan Darija specifically
-            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
-            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-MA")
-            putExtra(android.speech.RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
-            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
-    }
-
-    DisposableEffect(Unit) {
-        val listener = object : android.speech.RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() { isRecording = false }
-            override fun onError(error: Int) { isRecording = false }
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    val text = matches[0]
-                    viewModel.sendCommand(text, selectedFileUri, context)
-                    selectedFileUri = null
-                }
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isRecording = false
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                val text = matches[0]
+                viewModel.sendCommand(text, selectedFileUri, context)
+                selectedFileUri = null
             }
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
         }
-        speechRecognizer.setRecognitionListener(listener)
-        onDispose { speechRecognizer.destroy() }
     }
 
     LaunchedEffect(Unit) {
         viewModel.loadConfig(context)
     }
 
-    // Auto-scroll to bottom during streaming without jitter
     LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
         if (uiState.logs.isNotEmpty()) {
-            val lastIndex = uiState.logs.size - 1
-            val layoutInfo = listState.layoutInfo
-            val visibleItems = layoutInfo.visibleItemsInfo
-            
-            // Check if the user is reasonably close to the bottom (e.g., viewing the last 2 items)
-            val isNearBottom = visibleItems.isEmpty() || (visibleItems.last().index >= lastIndex - 2)
-            
-            if (isNearBottom) {
-                // Use scrollToItem instead of animateScrollToItem during fast streaming to prevent jitter
-                listState.scrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE)
-            }
+            listState.animateScrollToItem(uiState.logs.size - 1)
         }
-    }
-
-    // Minimize app when agent interacts with the device
-    LaunchedEffect(uiState.shouldMinimize) {
-        if (uiState.shouldMinimize) {
-            val activity = context as? android.app.Activity
-            activity?.moveTaskToBack(true)
-            viewModel.onMinimized()
-        }
-    }
-
-    if (showSettings) {
-        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
-        return
-    }
-
-    if (showAboutDialog) {
-        val engravedBorder = BorderStroke(
-            width = 1.dp,
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.Black.copy(alpha = 0.5f),
-                    Color.White.copy(alpha = 0.08f)
-                )
-            )
-        )
-        AlertDialog(
-            onDismissRequest = { showAboutDialog = false },
-            modifier = Modifier.border(engravedBorder, RoundedCornerShape(28.dp)),
-            title = { Text("Medlam-AI Capabilities 🧠", color = NeonCyan, fontWeight = FontWeight.Bold, modifier = Modifier.offset(1.dp, 1.dp)) },
-            text = {
-                Text(
-                    "I am Medlam-AI, your autonomous on-device Neural Agent.\n\n" +
-                            "• 100% Local & Private Execution\n" +
-                            "• Visual Screen Perception & Analysis\n" +
-                            "• Multi-step Autonomous Task Planning\n" +
-                            "• Rootless Device Control (Gestures & Text)\n" +
-                            "• Ollama-Compatible Local Server",
-                    color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    modifier = Modifier.offset(1.dp, 1.dp)
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { showAboutDialog = false }) {
-                    Text("AWESOME", color = NeonPurple)
-                }
-            },
-            containerColor = DarkCard,
-            titleContentColor = NeonCyan,
-            textContentColor = Color.White
-        )
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF05070A)) // True dark terminal black
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Spacer(modifier = Modifier.statusBarsPadding())
 
-        // --- MODERN FULL-WIDTH NEON HEADER ---
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(NeonCyan.copy(alpha = 0.15f), Color.Transparent)
+                        colors = listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), Color.Transparent)
                     )
                 )
-                .background(DarkCard.copy(alpha = 0.95f))
-                .padding(horizontal = 12.dp, vertical = 4.dp) // Reduced horizontal padding to push icon right
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+                .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -347,54 +271,22 @@ fun ChatApp(viewModel: AgentViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AnimatedAtom(isSpinning = uiState.isProcessing)
-                    val textMeasurer = rememberTextMeasurer()
+                    AnimatedCdDisc(isSpinning = uiState.isProcessing)
                     Column {
                         Text(
                             text = "MEDLAM-AI HYBRID HUB",
-                            style = androidx.compose.ui.text.TextStyle(
-                                color = Color.Transparent, // Transparent so the background shows through if we wanted, but we use Brush below
-                                fontSize = 19.sp, // Larger font
+                            style = TextStyle(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 19.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
-                                letterSpacing = 2.sp,
-                                drawStyle = androidx.compose.ui.graphics.drawscope.Fill
+                                letterSpacing = 2.sp
                             ),
                             modifier = Modifier.graphicsLayer(alpha = 0.9f)
-                                .drawWithCache {
-                                    onDrawWithContent {
-                                        drawContent()
-                                        // Create the engraved/inner shadow effect
-                                        drawText(
-                                            textMeasurer = textMeasurer,
-                                            text = "MEDLAM-AI HYBRID HUB",
-                                            style = androidx.compose.ui.text.TextStyle(
-                                                color = Color.Black.copy(alpha = 0.8f),
-                                                fontSize = 19.sp,
-                                                fontWeight = FontWeight.Black,
-                                                fontFamily = FontFamily.Monospace,
-                                                letterSpacing = 2.sp
-                                            ),
-                                            topLeft = androidx.compose.ui.geometry.Offset(2f, 2f)
-                                        )
-                                        drawText(
-                                            textMeasurer = textMeasurer,
-                                            text = "MEDLAM-AI HYBRID HUB",
-                                            style = androidx.compose.ui.text.TextStyle(
-                                                brush = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.9f), NeonCyan.copy(alpha = 0.6f))),
-                                                fontSize = 19.sp,
-                                                fontWeight = FontWeight.Black,
-                                                fontFamily = FontFamily.Monospace,
-                                                letterSpacing = 2.sp
-                                            ),
-                                            topLeft = androidx.compose.ui.geometry.Offset(0f, 0f)
-                                        )
-                                    }
-                                }
                         )
                         Text(
                             text = "LOCAL OLLAMA SERVER • CLOUD NEURAL AGENT",
-                            color = NeonCyan.copy(alpha = 0.8f),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
                             fontSize = 7.sp,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = 0.5.sp,
@@ -405,60 +297,46 @@ fun ChatApp(viewModel: AgentViewModel) {
                 
                 Box {
                     IconButton(onClick = { expandedMenu = true }) {
-                        Icon(androidx.compose.material.icons.Icons.Filled.MoreVert, contentDescription = "Menu", tint = Color.White.copy(alpha = 0.5f))
+                        Icon(Icons.Filled.MoreVert, contentDescription = "Menu", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                     }
                     DropdownMenu(
                         expanded = expandedMenu, 
                         onDismissRequest = { expandedMenu = false },
-                        modifier = Modifier.background(DarkCard).border(0.5.dp, NeonCyan.copy(alpha = 0.2f))
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surface).border(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
                     ) {
-                        DropdownMenuItem(text = { Text("⚙ System Settings", color = Color.White) }, onClick = { expandedMenu = false; showSettings = true })
-                        DropdownMenuItem(text = { Text("🗑 Wipe Console", color = Color(0xFFEF4444)) }, onClick = { expandedMenu = false; viewModel.clearConversation(context) })
+                        DropdownMenuItem(
+                            text = { Text("⚙ System Settings", color = MaterialTheme.colorScheme.onSurface) },
+                            onClick = { expandedMenu = false; showSettings = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("🗑 Wipe Console", color = MaterialTheme.colorScheme.error) },
+                            onClick = { expandedMenu = false; viewModel.clearConversation(context) }
+                        )
                     }
                 }
             }
         }
 
-        // System Dashboard (Fixed)
-        SystemDashboard(context = context)
+        SystemDashboard(context)
 
-        if (uiState.scheduledTasks.isNotEmpty()) {
-            ScheduledTasksTicker(tasks = uiState.scheduledTasks)
-        }
+        ScheduledTasksTicker(uiState.scheduledTasks)
 
-        // --- CONSOLE STREAM ---
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.6f))
-                .border(0.5.dp, Color.White.copy(alpha = 0.05f), RectangleShape)
-        ) {
-            val listState = rememberLazyListState()
-            
-            // Advanced auto-scroll that forces view to the bottom even after layout changes
-            LaunchedEffect(uiState.logs.size, uiState.streamVersion) {
-                if (uiState.logs.isNotEmpty()) {
-                    kotlinx.coroutines.delay(50) // Give layout a moment to measure new text
-                    listState.animateScrollToItem(index = uiState.logs.size) // Scroll past the last item to hit the very bottom padding
-                }
-            }
-
+        Box(modifier = Modifier.weight(1f)) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(uiState.logs) { log ->
-                    TerminalEntry(log)
+                items(uiState.logs, key = { it.id }) { log ->
+                    AgentMessageBubble(log)
                 }
             }
             
-            // Subtle Scanline Effect
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val step = 4.dp.toPx()
-                for (y in 0 until size.height.toInt() step step.toInt()) {
+                val height = size.height
+                val scanlineSpacing = 4.dp.toPx()
+                for (y in 0..height.toInt() step scanlineSpacing.toInt()) {
                     drawLine(
                         color = Color.White.copy(alpha = 0.015f),
                         start = androidx.compose.ui.geometry.Offset(0f, y.toFloat()),
@@ -469,501 +347,308 @@ fun ChatApp(viewModel: AgentViewModel) {
             }
         }
 
-        // --- NEW: FIXED BOTTOM STATUS BAR (Thinking Indicator) ---
-        if (uiState.isProcessing) {
-            val infiniteTransition = rememberInfiniteTransition(label = "thinking_pulse")
-            val alpha by infiniteTransition.animateFloat(
-                initialValue = 0.3f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1000, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "alpha"
-            )
-            
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.8f))
-                    .border(0.5.dp, NeonPurple.copy(alpha = 0.3f), RectangleShape)
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        color = NeonPurple,
-                        strokeWidth = 1.5.dp
-                    )
-                    Text(
-                        text = "Medlam-AI is thinking and executing tasks in the background...",
-                        color = NeonPurple.copy(alpha = alpha),
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        // --- INPUT AREA ---
         ChatInputBar(
             isProcessing = uiState.isProcessing,
             isRecording = isRecording,
             selectedFileUri = selectedFileUri,
             onSend = { text -> 
+                focusManager.clearFocus()
                 viewModel.sendCommand(text, selectedFileUri, context)
                 selectedFileUri = null
             },
             onStop = { viewModel.stopAgent() },
+            onFilePickerClick = { filePickerLauncher.launch(arrayOf("*/*")) },
             onRecordingClick = {
-                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    (context as? ComponentActivity)?.requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 102)
-                } else {
-                    if (isRecording) {
-                        speechRecognizer.stopListening()
-                        isRecording = false
-                    } else {
-                        speechRecognizer.startListening(speechRecognizerIntent)
-                        isRecording = true
-                    }
+                isRecording = true
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Awaiting voice command...")
+                }
+                try {
+                    speechLauncher.launch(intent)
+                } catch (e: Exception) {
+                    isRecording = false
+                    Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    if (showSettings) {
+        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
+    }
+
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            title = { Text("Medlam-AI Capabilities 🧠", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "I am Medlam-AI, your autonomous on-device Neural Agent.\n\n" +
+                            "• 100% Local & Private Execution\n" +
+                            "• Visual Screen Perception & Analysis\n" +
+                            "• Multi-step Autonomous Task Planning\n" +
+                            "• Rootless Device Control (Gestures & Text)\n" +
+                            "• Ollama-Compatible Local Server",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showAboutDialog = false }) {
+                    Text("AWESOME", color = MaterialTheme.colorScheme.primary)
                 }
             },
-            onFilePickerClick = {
-                filePickerLauncher.launch("*/*")
-            }
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.primary,
+            textContentColor = MaterialTheme.colorScheme.onSurface
         )
     }
 }
 
 @Composable
-private fun ChatInputBar(
-    isProcessing: Boolean,
-    isRecording: Boolean,
-    selectedFileUri: Uri?,
-    onSend: (String) -> Unit,
-    onStop: () -> Unit,
-    onRecordingClick: () -> Unit,
-    onFilePickerClick: () -> Unit
-) {
-    var inputText by remember { mutableStateOf("") }
-    val focusManager = LocalFocusManager.current
-
-    // Automatically clear focus when processing ends to prevent keyboard from popping up
-    LaunchedEffect(isProcessing) {
-        if (!isProcessing) {
-            focusManager.clearFocus()
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp) // Clear spacing
-        ) {
-            TextField(
-                value = inputText,
-                onValueChange = { inputText = it },
-                placeholder = {
-                    Text(
-                        "ENTER_COMMAND...",
-                        color = Color.White.copy(alpha = 0.2f),
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 42.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = Color.White
-                ),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    cursorColor = NeonCyan,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent
-                ),
-                maxLines = 3
-            )
-
-            // Custom Voice Input Button
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(if (isRecording) NeonMagenta.copy(alpha = 0.2f) else NeonPurple.copy(alpha = 0.1f))
-                    .border(0.5.dp, if (isRecording) NeonMagenta.copy(alpha = 0.5f) else NeonPurple.copy(alpha = 0.3f), CircleShape)
-                    .clickable { onRecordingClick() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Mic,
-                    contentDescription = "Voice Input",
-                    tint = if (isRecording) NeonMagenta else NeonPurple,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-
-            // Custom File Upload Button
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(if (selectedFileUri != null) NeonCyan.copy(alpha = 0.3f) else NeonCyan.copy(alpha = 0.1f))
-                    .border(0.5.dp, if (selectedFileUri != null) NeonMagenta.copy(alpha = 0.6f) else NeonCyan.copy(alpha = 0.3f), CircleShape)
-                    .clickable { onFilePickerClick() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.AttachFile,
-                    contentDescription = "Attach File",
-                    tint = if (selectedFileUri != null) NeonMagenta else NeonCyan,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-
-            // Custom Send/Stop Button
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(if (isProcessing) NeonMagenta.copy(alpha = 0.1f) else NeonCyan.copy(alpha = 0.1f))
-                    .border(0.5.dp, if (isProcessing) NeonMagenta.copy(alpha = 0.3f) else NeonCyan.copy(alpha = 0.3f), CircleShape)
-                    .clickable { 
-                        if (isProcessing) onStop()
-                        else if (inputText.isNotBlank() || selectedFileUri != null) {
-                            onSend(inputText)
-                            inputText = ""
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = if (isProcessing) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                    contentDescription = if (isProcessing) "Stop" else "Send",
-                    tint = if (isProcessing) NeonMagenta else NeonCyan,
-                    modifier = Modifier.size(if (isProcessing) 14.dp else 18.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-@OptIn(ExperimentalComposeUiApi::class)
-fun ChatBubble(log: LogEntry, isLastAgentMessage: Boolean = false) {
+fun AgentMessageBubble(log: LogEntry) {
     val isUser = log.sender == "USER"
     val isSystem = log.sender == "SYSTEM"
-
-    val engravedBorder = BorderStroke(
-        width = 1.dp,
-        brush = Brush.verticalGradient(
-            colors = listOf(
-                Color.Black.copy(alpha = 0.4f),
-                Color.White.copy(alpha = 0.08f)
-            )
-        )
-    )
-
-    val contentModifier = if (isUser) {
-        Modifier
-            .border(engravedBorder, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    } else {
-        Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
-    }
+    val clipboardManager = LocalClipboardManager.current
     
-    val textColor = when {
-        log.isError -> Color(0xFFEF4444)
-        isSystem -> Color.White.copy(alpha = 0.4f)
-        isUser -> Color.White
-        else -> Color.White.copy(alpha = 0.9f)
+    if (isSystem) {
+        val isVisibleMarker = log.isError || log.text.startsWith("✅") || log.text.startsWith("📎")
+        if (!isVisibleMarker) return
     }
 
-    val labelColor = when {
-        isUser -> NeonCyan.copy(alpha = 0.7f)
-        isSystem -> Color.White.copy(alpha = 0.3f)
-        else -> NeonPurple.copy(alpha = 0.8f)
-    }
+    var displayOutput = log.text
+    var isCurrentlyThinking = false
     
-    val labelText = when (log.sender) {
-        "USER" -> "You"
-        "AGENT" -> "Medlam-AI"
-        else -> "System"
+    if (log.sender == "AGENT") {
+        if (displayOutput.contains("<think>") && !displayOutput.contains("</think>")) {
+            isCurrentlyThinking = true
+        }
+
+        // 1. Remove complete thinking blocks
+        displayOutput = displayOutput.replace(Regex("<think>.*?</think>", RegexOption.DOT_MATCHES_ALL), "")
+        
+        // 2. Hide ongoing thinking process during streaming
+        if (displayOutput.contains("<think>")) {
+             displayOutput = displayOutput.substringBefore("<think>")
+        }
+
+        // PROFESSOR FIX: Hide ALL XML tags (function calls, invokes, parameters) for a clean UI
+        displayOutput = displayOutput.replace(Regex("<.*?>", RegexOption.DOT_MATCHES_ALL), "")
+        
+        // Remove ALL asterisks (markdown bold/italic markers) as requested
+        displayOutput = displayOutput.replace("*", "")
+        
+        // Hide technical code blocks
+        displayOutput = displayOutput.replace(Regex("```xml.*?```", RegexOption.DOT_MATCHES_ALL), "")
+                                     .replace(Regex("```bash.*?```", RegexOption.DOT_MATCHES_ALL), "")
+                                     .trim()
+        
+        if (displayOutput.isBlank() && isCurrentlyThinking) {
+            displayOutput = "Medlam-AI is thinking..."
+        }
     }
+
+    if (displayOutput.isBlank()) return
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(contentModifier)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
         Row(
-            verticalAlignment = Alignment.CenterVertically, 
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (!isSystem) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .background(labelColor, androidx.compose.foundation.shape.CircleShape)
+            if (!isUser && !isSystem) {
+                Icon(
+                    imageVector = Icons.Default.Psychology,
+                    contentDescription = null,
+                    tint = NeonPurple,
+                    modifier = Modifier.size(16.dp)
                 )
             }
             Text(
-                labelText,
-                color = labelColor,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.5.sp
+                text = when {
+                    isUser -> "You"
+                    isSystem -> "System"
+                    else -> "Medlam-AI"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (isUser) NeonCyan else if (isSystem) MaterialTheme.colorScheme.outline else NeonPurple,
+                fontWeight = FontWeight.Bold
             )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        
-        val fullText = log.text
-        var displayOutput = fullText
 
-        // Hide raw tool execution codes, thinking processes, and plans from the UI
-        if (log.sender == "AGENT") {
-            var previous = ""
-            while (displayOutput != previous) {
-                previous = displayOutput
-                displayOutput = displayOutput
-                    .replace(Regex("<think>.*?</think>", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("<plan>.*?</plan>", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("<function_calls>.*?</function_calls>", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("<tool_code>.*?</tool_code>", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("<execute_bash>.*?</execute_bash>", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("<action>.*?</action>", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("```xml.*?```", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("```bash.*?```", RegexOption.DOT_MATCHES_ALL), "")
-                    .replace(Regex("```[a-zA-Z]*\\n.*?```", RegexOption.DOT_MATCHES_ALL), "")
-                    .trim()
-            }
-            
-            // Clean up standalone unclosed tags if stream is ongoing
-            displayOutput = displayOutput.replace(Regex("<think>.*", RegexOption.DOT_MATCHES_ALL), "")
-                                         .replace(Regex("<plan>.*", RegexOption.DOT_MATCHES_ALL), "")
-                                         .replace(Regex("<function_calls>.*", RegexOption.DOT_MATCHES_ALL), "")
-                                         .replace(Regex("```.*", RegexOption.DOT_MATCHES_ALL), "")
-                                         .trim()
+        Spacer(modifier = Modifier.height(4.dp))
 
-            // If the agent only output code/thoughts, show a generic processing message instead of empty bubble
-            if (displayOutput.isEmpty() && fullText.isNotBlank()) {
-                displayOutput = "⚡ Executing automated sequence..."
-            }
-        }
-
-        if (displayOutput.isNotEmpty()) {
-            Text(
-                text = displayOutput,
-                modifier = (if (isLastAgentMessage) Modifier.semantics { invisibleToUser() } else Modifier).then(if (isUser) Modifier.offset(x = 1.dp, y = 1.dp) else Modifier),
-                color = textColor,
-                fontFamily = FontFamily.SansSerif,
-                fontSize = 12.sp,
-                fontWeight = if (isUser) FontWeight.Medium else FontWeight.Normal,
-                lineHeight = 17.sp
-            )
-        }
-    }
-}
-
-@Composable
-fun AnimatedAtom(isSpinning: Boolean = true) {
-    val infiniteTransition = rememberInfiniteTransition(label = "atom_rotation")
-    val angle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "angle"
-    )
-
-    Box(
-        modifier = Modifier.size(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val strokeWidth = 1.dp.toPx()
-            val size = size.minDimension
-            val rectSize = androidx.compose.ui.geometry.Size(size, size * 0.35f)
-            val topLeft = androidx.compose.ui.geometry.Offset(0f, size * 0.325f)
-
-            val colors = listOf(NeonCyan, NeonPurple, AccentGlow)
-            val angles = listOf(0f, 120f, 240f)
-
-            for (i in 0..2) {
-                rotate(angles[i]) {
-                    // Static orbit path
-                    drawOval(
-                        color = colors[i].copy(alpha = 0.2f),
-                        style = Stroke(width = strokeWidth),
-                        size = rectSize,
-                        topLeft = topLeft
+        Box(
+            modifier = Modifier
+                .widthIn(max = 340.dp)
+                .clip(
+                    RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = if (isUser) 16.dp else 4.dp,
+                        bottomEnd = if (isUser) 4.dp else 16.dp
                     )
-
-                    if (isSpinning) {
-                        val currentAngle = angle + (i * 80f) // Offset each quark
-                        // Quark with trail
-                        for (j in 0..8) {
-                            val trailAngle = currentAngle - (j * 6f)
-                            val alpha = java.lang.Math.max(0f, 1f - (j * 0.12f))
-                            val width = strokeWidth * java.lang.Math.max(0.1f, 1.8f - j * 0.15f)
-                            drawArc(
-                                color = colors[i].copy(alpha = alpha),
-                                startAngle = trailAngle,
-                                sweepAngle = 7f,
-                                useCenter = false,
-                                topLeft = topLeft,
-                                size = rectSize,
-                                style = Stroke(width = width, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                )
+                .background(
+                    if (isUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    else if (isSystem) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    else MaterialTheme.colorScheme.surfaceVariant
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (isUser) NeonCyan.copy(alpha = 0.3f)
+                            else if (isSystem) MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                            else NeonPurple.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = if (isUser) 16.dp else 4.dp,
+                        bottomEnd = if (isUser) 4.dp else 16.dp
+                    )
+                )
+                .padding(12.dp)
+        ) {
+            Column {
+                val annotatedParts = parseMarkdownWithCodeBlocks(displayOutput)
+                annotatedParts.forEach { part ->
+                    val isCode = part.spanStyles.any { it.item.color == CodeKeyword || it.item.color == CodeString }
+                    
+                    if (isCode) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            color = CodeBackground,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Box(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = part,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp
+                                    ),
+                                    color = Color(0xFFC9D1D9)
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = part,
+                            style = if (isCurrentlyThinking && displayOutput == "Medlam-AI is thinking...") 
+                                MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic) 
+                                else MaterialTheme.typography.bodyMedium,
+                            color = if (log.isError) MaterialTheme.colorScheme.error 
+                                else if (isCurrentlyThinking && displayOutput == "Medlam-AI is thinking...")
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+                
+                if (!isSystem && !isUser) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        IconButton(
+                            onClick = { clipboardManager.setText(AnnotatedString(displayOutput)) },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy",
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                modifier = Modifier.size(14.dp)
                             )
                         }
                     }
                 }
             }
         }
-        Text(
-            text = "AI",
-            color = Color.White,
-            fontSize = 6.sp,
-            fontWeight = FontWeight.Light,
-            fontFamily = FontFamily.SansSerif,
-            style = androidx.compose.ui.text.TextStyle(
-                shadow = androidx.compose.ui.graphics.Shadow(
-                    color = NeonCyan,
-                    blurRadius = 8f
-                )
-            )
-        )
     }
 }
 
-fun getCpuTemp(): Int {
-    try {
-        var maxTempC = 0
-        val dir = java.io.File("/sys/class/thermal/")
-        if (dir.exists() && dir.isDirectory) {
-            val zones = dir.listFiles { file -> file.name.startsWith("thermal_zone") }
-            if (zones != null) {
-                for (zone in zones) {
-                    val tempFile = java.io.File(zone, "temp")
-                    if (tempFile.exists()) {
-                        try {
-                            val tempRaw = tempFile.readText().trim().toIntOrNull() ?: continue
-                            val tempC = if (tempRaw > 1000) tempRaw / 1000 else tempRaw
-                            if (tempC in 25..110 && tempC > maxTempC) {
-                                maxTempC = tempC
-                            }
-                        } catch (e: Exception) {}
-                    }
-                }
-            }
-        }
-        return maxTempC
-    } catch (e: Exception) {}
-    return 0
-}
-
-data class SystemStats(
-    val battery: Int = 100,
-    val isCharging: Boolean = false,
-    val ramFree: String = "0GB",
-    val storageFree: String = "0GB",
-    val cpuTemp: String = "--°C",
-    val cpuTempInt: Int = 0,
-    val cpuUsage: String = "0%",
-    val currentKeyIndex: Int = 0,
-    val totalKeys: Int = 0
-)
-
-fun getSystemStats(context: android.content.Context): SystemStats {
-    // Battery
-    val bm = context.getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
-    val batLevel = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
-    
-    val ifilter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
-    val batteryStatus = context.registerReceiver(null, ifilter)
-    val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
-    val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
-                     status == android.os.BatteryManager.BATTERY_STATUS_FULL
-
-    // RAM
-    val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-    val memInfo = android.app.ActivityManager.MemoryInfo()
-    am.getMemoryInfo(memInfo)
-    val ramFree = String.format("%.1f GB", memInfo.availMem / (1024.0 * 1024.0 * 1024.0))
-
-    // Storage
-    val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
-    val storageFree = String.format("%.1f GB", stat.availableBlocksLong * stat.blockSizeLong / (1024.0 * 1024.0 * 1024.0))
-
-    // Reliable Temperature from Battery API (Standard Android)
-    val batTempRaw = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
-    val tempInt = batTempRaw / 10 
-    val tempStr = if (tempInt > 0) "${tempInt}°C" else "N/A" // Display N/A if temperature is zero or less
-
-    val vm = AgentViewModel.instance
-    val curKey = vm?.uiState?.value?.currentKeyIndex ?: 0
-    val totKeys = vm?.uiState?.value?.totalKeys ?: 0
-
-    Log.d("SynapseStats", "Battery Level: $batLevel%")
-    Log.d("SynapseStats", "Battery Temp Raw: $batTempRaw")
-    Log.d("SynapseStats", "Calculated Temp Int: $tempInt°C")
-    Log.d("SynapseStats", "Formatted Temp String: $tempStr")
-    Log.d("SynapseStats", "Final SystemStats.cpuTemp: $tempStr")
-
-    return SystemStats(
-        battery = batLevel, 
-        isCharging = isCharging,
-        ramFree = ramFree, 
-        storageFree = storageFree, 
-        cpuTemp = tempStr,
-        cpuTempInt = tempInt,
-        cpuUsage = if (AgentViewModel.instance?.uiState?.value?.isProcessing == true) "HIGH" else "IDLE",
-        currentKeyIndex = curKey,
-        totalKeys = totKeys
-    )
-}
-
 @Composable
-fun CpuIcon() {
-    Canvas(modifier = Modifier.size(12.dp)) {
-        val stroke = 0.8.dp.toPx()
-        val s = size.width
-        // Core center
-        drawCircle(
-            color = NeonCyan.copy(alpha = 0.8f),
-            radius = s * 0.2f,
-            center = androidx.compose.ui.geometry.Offset(s * 0.5f, s * 0.5f),
-            style = Stroke(width = stroke)
+fun AnimatedCdDisc(isSpinning: Boolean = false) {
+    val infiniteTransition = rememberInfiniteTransition(label = "cd_disc")
+    val rotation by if (isSpinning) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(600, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "rotation"
         )
-        // Outer box
-        drawRect(
-            color = NeonCyan.copy(alpha = 0.4f),
-            style = Stroke(width = stroke),
-            size = androidx.compose.ui.geometry.Size(s * 0.8f, s * 0.8f),
-            topLeft = androidx.compose.ui.geometry.Offset(s * 0.1f, s * 0.1f)
-        )
-        // Lines connecting
-        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s*0.5f, 0f), androidx.compose.ui.geometry.Offset(s*0.5f, s*0.3f), stroke)
-        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s*0.5f, s), androidx.compose.ui.geometry.Offset(s*0.5f, s*0.7f), stroke)
-        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(0f, s*0.5f), androidx.compose.ui.geometry.Offset(s*0.3f, s*0.5f), stroke)
-        drawLine(NeonCyan.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(s, s*0.5f), androidx.compose.ui.geometry.Offset(s*0.7f, s*0.5f), stroke)
+    } else {
+        remember { mutableStateOf(0f) }
+    }
+
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .padding(4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val center = Offset(size.width / 2, size.height / 2)
+            val radius = size.minDimension / 2
+
+            rotate(rotation) {
+                // Main disc surface with iridescent gradient
+                drawCircle(
+                    brush = Brush.sweepGradient(
+                        colors = listOf(
+                            Color(0xFFE2E2E2), Color(0xFFFFCCCC), Color(0xFFE2E2E2),
+                            Color(0xFFCCCCFF), Color(0xFFCCFFFF), Color(0xFFE2E2E2)
+                        ),
+                        center = center
+                    ),
+                    radius = radius
+                )
+                
+                // Subtle holographic ring
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.3f), Color.Transparent),
+                        center = center,
+                        radius = radius * 0.8f
+                    ),
+                    radius = radius * 0.8f,
+                    style = Stroke(width = 2.dp.toPx())
+                )
+            }
+
+            // Outer border
+            drawCircle(
+                color = Color.White.copy(alpha = 0.4f),
+                radius = radius,
+                style = Stroke(width = 0.5.dp.toPx())
+            )
+
+            // Inner hole (Center)
+            drawCircle(
+                color = surfaceColor,
+                radius = radius * 0.2f
+            )
+            
+            // Inner plastic ring shadow
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.2f),
+                radius = radius * 0.2f,
+                style = Stroke(width = 1.dp.toPx())
+            )
+        }
     }
 }
 
@@ -973,135 +658,58 @@ fun SystemDashboard(context: android.content.Context) {
 
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(15000) // Lower frequency to save energy
+            delay(15000)
             stats = getSystemStats(context)
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(DarkCard.copy(alpha = 0.5f))
-            .border(
-                0.5.dp,
-                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent)),
-                RectangleShape
-            )
-            .padding(horizontal = 12.dp, vertical = 12.dp) // Adjusted padding
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    "SYSTEM ONLINE. WELCOME TO THE NEXT EVOLUTION.",
-                    color = Color.White,
-                    fontSize = 10.sp,
+                    "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.sp,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    "I am Medlam-AI, your advanced hybrid interface. By fusing local computational power with cloud-scale reasoning, I provide seamless device control, intelligent data processing, and real-time automation. Your digital ecosystem has never been this smart. Awaiting input.",
-                    color = NeonCyan.copy(alpha = 0.7f),
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 6.dp)
+                    letterSpacing = 1.sp
                 )
             }
 
-            Divider(color = Color.White.copy(alpha = 0.05f), thickness = 0.5.dp)
+            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp) // Tighter spacing
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val weight = 1f
-                val iconSize = 9.dp
                 Box(Modifier.weight(weight)) { 
                     StatBadge(
-                        icon = { 
-                            Icon(
-                                if (stats.isCharging) androidx.compose.material.icons.Icons.Filled.BatteryChargingFull else androidx.compose.material.icons.Icons.Filled.BatteryFull, 
-                                contentDescription = "Battery", 
-                                tint = if (stats.isCharging) NeonMagenta else NeonCyan,
-                                modifier = Modifier.size(iconSize)
-                            ) 
-                        }, 
+                        icon = { Icon(if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull, null, tint = if (stats.isCharging) NeonMagenta else NeonCyan, modifier = Modifier.size(12.dp)) }, 
                         label = "PWR", 
                         value = "${stats.battery}%"
                     ) 
                 }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Memory, contentDescription = "RAM", tint = NeonPurple, modifier = Modifier.size(iconSize)) }, label = "RAM", value = stats.ramFree) }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.DeveloperBoard, contentDescription = "CPU", tint = NeonCyan, modifier = Modifier.size(iconSize)) }, label = "CPU", value = stats.cpuUsage) }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.VpnKey, contentDescription = "Key", tint = NeonMagenta, modifier = Modifier.size(iconSize)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Storage, contentDescription = "Disk", tint = AccentGlow, modifier = Modifier.size(iconSize)) }, label = "DISK", value = stats.storageFree) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Memory, null, tint = NeonPurple, modifier = Modifier.size(12.dp)) }, label = "RAM", value = stats.ramFree) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.DeveloperBoard, null, tint = NeonCyan, modifier = Modifier.size(12.dp)) }, label = "CPU", value = stats.cpuUsage) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.VpnKey, null, tint = NeonMagenta, modifier = Modifier.size(12.dp)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
                 
                 val tempColor = when {
-                    stats.cpuTempInt <= 0 -> Color(0xFFFF9F43) 
+                    stats.cpuTempInt <= 0 -> MaterialTheme.colorScheme.primary
                     stats.cpuTempInt < 45 -> NeonCyan 
                     stats.cpuTempInt < 65 -> Color(0xFFFF9F43) 
-                    else -> Color(0xFFFF3B30) 
+                    else -> MaterialTheme.colorScheme.error
                 }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(androidx.compose.material.icons.Icons.Filled.Thermostat, contentDescription = "Temperature", tint = tempColor, modifier = Modifier.size(iconSize)) }, label = "TEMP", value = stats.cpuTemp) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Thermostat, null, tint = tempColor, modifier = Modifier.size(12.dp)) }, label = "TMP", value = stats.cpuTemp) }
             }
         }
-    }
-}
-
-@Composable
-fun TerminalEntry(log: LogEntry) {
-    // 1. SILENCE SYSTEM LOGS: Only show errors or specific success/info markers
-    if (log.sender == "SYSTEM") {
-        val isVisibleMarker = log.isError || log.text.startsWith("✅") || log.text.startsWith("📎")
-        if (!isVisibleMarker) return
-    }
-
-    val prefix = when (log.sender) {
-        "USER" -> ">> "
-        "AGENT" -> "● "
-        "SYSTEM" -> "!! "
-        else -> ""
-    }
-    val color = when (log.sender) {
-        "USER" -> NeonCyan
-        "AGENT" -> NeonPurple
-        "SYSTEM" -> if (log.isError) Color(0xFFEF4444) else Color(0xFF34D399)
-        else -> Color.White
-    }
-
-    var displayOutput = log.text
-
-    if (log.sender == "AGENT") {
-        // 2. ULTRA-STRICT FILTER: If the message contains ANY technical tag, hide the entire entry.
-        // We rely on the 'complete' tool's SYSTEM log to show the final human-readable result.
-        val technicalMarkers = listOf("<think", "<plan", "<function", "<tool", "<execute", "<action", "```")
-        if (technicalMarkers.any { displayOutput.contains(it) }) {
-            return 
-        }
-        
-        // Clean up remaining small artifacts like long URLs
-        displayOutput = displayOutput.replace(Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE), "[LINK]").trim()
-    }
-
-    // Don't render empty entries or purely whitespace messages
-    if (displayOutput.isBlank()) return
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = buildAnnotatedString {
-                withStyle(SpanStyle(color = color, fontWeight = FontWeight.Bold)) {
-                    append(prefix)
-                }
-                append(displayOutput)
-            },
-            color = if (log.sender == "AGENT") Color.White.copy(alpha = 0.9f) else color.copy(alpha = 0.8f),
-            fontSize = 10.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 14.sp
-        )
     }
 }
 
@@ -1111,22 +719,127 @@ fun StatBadge(icon: @Composable () -> Unit, label: String, value: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-            .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-            .padding(vertical = 6.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .padding(vertical = 8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             icon()
-            Text(label, color = Color.White.copy(alpha = 0.4f), fontSize = 7.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp))
         }
-        Text(value, color = NeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+        Text(value, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Black))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatInputBar(
+    isProcessing: Boolean,
+    isRecording: Boolean,
+    selectedFileUri: Uri?,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit,
+    onFilePickerClick: () -> Unit,
+    onRecordingClick: () -> Unit
+) {
+    var inputText by remember { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            TextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                placeholder = {
+                    Text(
+                        "Message Medlam-AI...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    cursorColor = MaterialTheme.colorScheme.primary,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent
+                ),
+                maxLines = 4
+            )
+
+            IconButton(
+                onClick = { onFilePickerClick() },
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(if (selectedFileUri != null) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AttachFile,
+                    contentDescription = "Attach",
+                    tint = if (selectedFileUri != null) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            IconButton(
+                onClick = { onRecordingClick() },
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(if (isRecording) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Mic,
+                    contentDescription = "Voice",
+                    tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+
+            IconButton(
+                onClick = { 
+                    if (isProcessing) onStop()
+                    else if (inputText.isNotBlank() || selectedFileUri != null) {
+                        onSend(inputText)
+                        inputText = ""
+                    }
+                },
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(if (isProcessing) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primary),
+                enabled = isProcessing || inputText.isNotBlank() || selectedFileUri != null
+            ) {
+                Icon(
+                    imageVector = if (isProcessing) Icons.Filled.Stop else Icons.Filled.Send,
+                    contentDescription = if (isProcessing) "Stop" else "Send",
+                    tint = if (isProcessing) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onPrimary
+                )
+            }
+        }
     }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ScheduledTasksTicker(tasks: List<ScheduledTask>) {
-    val pendingTasks = tasks.filter { it.status == "pending" }.sortedBy { it.executeAt }
+    val pendingTasks = tasks.filter { t -> t.status == "pending" }.sortedBy { it.executeAt }
     if (pendingTasks.isEmpty()) return
     
     val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
@@ -1135,14 +848,14 @@ fun ScheduledTasksTicker(tasks: List<ScheduledTask>) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.5f))
-            .border(0.5.dp, Brush.verticalGradient(listOf(Color.Transparent, NeonPurple.copy(alpha = 0.2f))), RectangleShape)
+            .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f))
+            .border(0.5.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.2f), RectangleShape)
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
             text = tickerText,
-            color = NeonCyan,
-            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
@@ -1152,4 +865,90 @@ fun ScheduledTasksTicker(tasks: List<ScheduledTask>) {
             )
         )
     }
+}
+
+data class SystemStats(
+    val battery: Int,
+    val isCharging: Boolean,
+    val ramFree: String,
+    val cpuUsage: String,
+    val storageFree: String,
+    val cpuTemp: String,
+    val cpuTempInt: Int,
+    val currentKeyIndex: Int,
+    val totalKeys: Int
+)
+
+fun getSystemStats(context: android.content.Context): SystemStats {
+    val bm = context.getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
+    val battery = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    val status = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_STATUS)
+    val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+
+    val activityManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+    val memoryInfo = android.app.ActivityManager.MemoryInfo()
+    activityManager.getMemoryInfo(memoryInfo)
+    val ramFree = String.format("%.1fGB", memoryInfo.availMem / 1024.0 / 1024.0 / 1024.0)
+
+    val stat = android.os.StatFs(android.os.Environment.getDataDirectory().path)
+    val storageFree = String.format("%.0fGB", stat.availableBlocksLong * stat.blockSizeLong / 1024.0 / 1024.0 / 1024.0)
+
+    val prefs = context.getSharedPreferences("synapse_config", android.content.Context.MODE_PRIVATE)
+    val geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
+    val openaiKeys = prefs.getString("openai_api_keys", "") ?: ""
+    val preferredType = prefs.getString("preferred_model_type", "GEMINI")
+    
+    val keyList = if (preferredType == "OPENAI") openaiKeys else geminiKeys
+    val totalKeys = if (keyList.isBlank()) 0 else keyList.split(",").size
+    val currentKeyIndex = if (totalKeys > 0) (prefs.getInt("current_key_index", 0) + 1) else 0
+
+    var maxTemp = 0
+    try {
+        // Scan multiple common CPU thermal zones to avoid static fallback values like 37C
+        val zones = listOf(
+            "/sys/class/thermal/thermal_zone16/temp",
+            "/sys/class/thermal/thermal_zone17/temp",
+            "/sys/class/thermal/thermal_zone18/temp",
+            "/sys/class/thermal/thermal_zone7/temp",
+            "/sys/class/thermal/thermal_zone0/temp"
+        )
+        for (path in zones) {
+            val f = File(path)
+            if (f.exists()) {
+                val t = f.readText().trim().toIntOrNull() ?: 0
+                val normalized = if (t > 1000) t / 1000 else t
+                if (normalized in 20..100 && normalized > maxTemp) {
+                    maxTemp = normalized
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("SYNAPSE_STATS", "Thermal read failed: ${e.message}")
+    }
+
+    var cpuUsage = "LOW"
+    try {
+        val loadFile = File("/proc/loadavg")
+        if (loadFile.exists()) {
+            val line = loadFile.readText().split(" ")
+            if (line.isNotEmpty()) {
+                val load = line[0].toDoubleOrNull() ?: 0.0
+                val cores = Runtime.getRuntime().availableProcessors()
+                val pct = ((load / cores) * 100).toInt().coerceIn(0, 100)
+                cpuUsage = "$pct%"
+            }
+        }
+    } catch (_: Exception) {}
+
+    return SystemStats(
+        battery = battery,
+        isCharging = isCharging,
+        ramFree = ramFree,
+        cpuUsage = cpuUsage,
+        storageFree = storageFree,
+        cpuTemp = if (maxTemp > 0) "${maxTemp}°C" else "--",
+        cpuTempInt = maxTemp,
+        currentKeyIndex = currentKeyIndex,
+        totalKeys = totalKeys
+    )
 }

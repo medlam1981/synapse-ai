@@ -21,11 +21,16 @@ android {
         applicationId = "com.synapse.localai"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0-SYNAPSE"
+        versionCode = 2
+        versionName = "2.0-16k-NEURAL"
+
+        // 16k page alignment support
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a"))
+        }
     }
 
-    packagingOptions {
+    packaging {
         jniLibs {
             useLegacyPackaging = true
         }
@@ -35,6 +40,13 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            packaging {
+                jniLibs {
+                    useLegacyPackaging = true
+                }
+            }
         }
     }
 
@@ -67,7 +79,7 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.kotlinx.coroutines.android)
-    implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
+    implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.itextpdf:itextg:5.5.10")
 }

@@ -12,6 +12,7 @@ import com.google.ai.client.generativeai.type.SafetySetting
 import com.google.ai.client.generativeai.type.content
 import com.google.ai.client.generativeai.type.generationConfig
 import kotlinx.coroutines.Dispatchers
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -21,6 +22,7 @@ import kotlin.coroutines.coroutineContext
 
 class GeminiModelClient(
     private val apiKeys: List<String>,
+    initialKeyIndex: Int = 0,
     private val onKeyRotated: ((Int) -> Unit)? = null
 ) {
 
@@ -28,31 +30,48 @@ class GeminiModelClient(
         private const val TAG = "GeminiClient"
     }
 
-    private var currentKeyIndex = 0
+    private var currentKeyIndex = initialKeyIndex.coerceIn(0, (apiKeys.size - 1).coerceAtLeast(0))
 
-    var modelName: String = "gemini-2.5-flash"
+    var modelName: String = "models/gemini-1.5-flash"
     var maxTokens: Int = 4096
     var temperature: Float = 0.1f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
+
+    private fun fileLog(msg: String) {
+        Log.d(TAG, msg)
+        try {
+            val dir = File("/sdcard/MedlamAI")
+            if (!dir.exists()) dir.mkdirs()
+            File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] [GEMINI] $msg\n")
+        } catch (_: Exception) {}
+    }
 
     private fun getNextKey(forceRotate: Boolean): String {
         if (apiKeys.isEmpty()) throw RuntimeException("No API keys provided")
         if (forceRotate || currentKeyIndex == -1) {
             currentKeyIndex = (currentKeyIndex + 1) % apiKeys.size
-            Log.i(TAG, "Rotating to API key at index $currentKeyIndex")
+            fileLog( "Rotating to API key at index $currentKeyIndex")
             onKeyRotated?.invoke(currentKeyIndex)
         }
         return apiKeys[currentKeyIndex]
     }
 
     init {
-        currentKeyIndex = 0 // Start with the first key
-        if (apiKeys.isNotEmpty()) onKeyRotated?.invoke(0)
+        if (apiKeys.isNotEmpty()) onKeyRotated?.invoke(currentKeyIndex)
+    }
+
+    suspend fun generateStream(
+        prompt: String,
+        systemPrompt: String = ""
+    ): Flow<String> = flow {
+        val messages = JSONArray().put(JSONObject().put("role", "user").put("content", prompt))
+        generateStreamWithOllamaMessages(messages, systemPrompt).collect { emit(it) }
     }
 
     suspend fun generateStreamWithOllamaMessages(
         messages: JSONArray,
-        systemPrompt: String = ""
+        systemPrompt: String = "",
+        onRetry: (() -> Unit)? = null
     ): Flow<String> = flow {
         Log.d(TAG, "Generating with Gemini (Ollama Vision Engine)...")
 
@@ -79,7 +98,7 @@ class GeminiModelClient(
                             val decodedByte = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
                             promptImages.add(decodedByte)
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed to decode image: ${e.message}")
+                            fileLog("Failed to decode image: ${e.message}")
                         }
                     }
                 }
@@ -95,7 +114,7 @@ class GeminiModelClient(
                                 val decodedByte = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
                                 image(decodedByte)
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to decode history image: ${e.message}")
+                                fileLog("Failed to decode history image: ${e.message}")
                             }
                         }
                     }
@@ -112,12 +131,15 @@ class GeminiModelClient(
             val apiKey = getNextKey(forceRotate = attempt > 0)
             try {
                 if (attempt > 0) {
-                    val waitTime = (attempt * 2000L).coerceAtMost(10000L)
+                    onRetry?.invoke()
+                    val waitTime = (attempt * 1500L).coerceAtMost(10000L)
                     kotlinx.coroutines.delay(waitTime)
                 }
 
+                val effectiveModelName = if (modelName.contains("/")) modelName else "models/$modelName"
+                
                 val generativeModel = GenerativeModel(
-                    modelName = modelName,
+                    modelName = effectiveModelName,
                     apiKey = apiKey,
                     generationConfig = generationConfig {
                         this.temperature = this@GeminiModelClient.temperature
@@ -147,14 +169,14 @@ class GeminiModelClient(
                 }
                 
                 success = true 
-                Log.i(TAG, "Inference successful with Key #$currentKeyIndex")
+                fileLog( "Inference successful with Key #$currentKeyIndex")
 
             } catch (t: Throwable) {
                 val errorMsg = t.message ?: t.toString()
                 lastErrorDetail = errorMsg
                 val lowerError = errorMsg.lowercase()
                 
-                Log.e(TAG, "Key #$currentKeyIndex Error: $errorMsg")
+                fileLog("Key #$currentKeyIndex [${t.javaClass.simpleName}] Error: $errorMsg")
 
                 if (lowerError.contains("429") || 
                     lowerError.contains("quota") || 
@@ -164,6 +186,8 @@ class GeminiModelClient(
                     lowerError.contains("overloaded") ||
                     lowerError.contains("unavailable") ||
                     lowerError.contains("deadline") ||
+                    lowerError.contains("safety") ||
+                    lowerError.contains("recitation") ||
                     t is java.net.SocketTimeoutException) {
                     
                     attempt++
@@ -184,7 +208,8 @@ class GeminiModelClient(
 
     suspend fun generateStreamWithHistory(
         history: List<Pair<String, String>>,
-        systemPrompt: String = ""
+        systemPrompt: String = "",
+        onRetry: (() -> Unit)? = null
     ): Flow<String> = flow {
         Log.d(TAG, "Generating with Gemini (Resilient Engine)...")
 
@@ -224,13 +249,16 @@ class GeminiModelClient(
             try {
                 // Incremental delay to respect RPM (Requests Per Minute)
                 if (attempt > 0) {
-                    val waitTime = (attempt * 2000L).coerceAtMost(10000L)
+                    onRetry?.invoke()
+                    val waitTime = (attempt * 1500L).coerceAtMost(10000L)
                     Log.d(TAG, "Waiting ${waitTime}ms before retry with next key...")
                     kotlinx.coroutines.delay(waitTime)
                 }
 
+                val effectiveModelName = if (modelName.contains("/")) modelName else "models/$modelName"
+                
                 val generativeModel = GenerativeModel(
-                    modelName = modelName,
+                    modelName = effectiveModelName,
                     apiKey = apiKey,
                     generationConfig = generationConfig {
                         this.temperature = this@GeminiModelClient.temperature

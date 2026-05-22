@@ -22,13 +22,18 @@ class SynapseKeyboardIME : InputMethodService() {
         fun isAvailable(): Boolean = instance != null
 
         fun isSelected(context: android.content.Context): Boolean {
-            val currentId = Settings.Secure.getString(
-                context.contentResolver,
-                Settings.Secure.DEFAULT_INPUT_METHOD
-            )
-            val myId = ComponentName(context, SynapseKeyboardIME::class.java)
-                .flattenToShortString()
-            return currentId == myId
+            return try {
+                val currentId = Settings.Secure.getString(
+                    context.contentResolver,
+                    Settings.Secure.DEFAULT_INPUT_METHOD
+                )
+                val myId = ComponentName(context, SynapseKeyboardIME::class.java)
+                    .flattenToShortString()
+                // Use contains for flexibility (some OEMs add prefixes)
+                currentId != null && currentId.contains(myId)
+            } catch (e: Exception) {
+                false
+            }
         }
 
         /** Get our IME component ID for use with Settings.Secure */
