@@ -1,0 +1,359 @@
+package com.synapse.localai
+
+import android.util.Log
+import android.graphics.BitmapFactory
+import android.util.Base64
+import org.json.JSONArray
+import org.json.JSONObject
+import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.BlockThreshold
+import com.google.ai.client.generativeai.type.HarmCategory
+import com.google.ai.client.generativeai.type.SafetySetting
+import com.google.ai.client.generativeai.type.content
+import com.google.ai.client.generativeai.type.generationConfig
+import kotlinx.coroutines.Dispatchers
+import java.io.File
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
+
+class GeminiModelClient(
+    private val apiKeys: List<String>,
+    initialKeyIndex: Int = 0,
+    private val onKeyRotated: ((Int) -> Unit)? = null,
+    private val onKeyUsed: ((String) -> Unit)? = null
+) {
+
+    companion object {
+        private const val TAG = "GeminiClient"
+    }
+
+    private var currentKeyIndex = initialKeyIndex.coerceIn(0, (apiKeys.size - 1).coerceAtLeast(0))
+    // Track exhausted keys to avoid pointless retries
+    private val exhaustedKeys = mutableSetOf<Int>()
+
+    var modelName: String = "gemini-1.5-flash"
+    var maxTokens: Int = 2048 // Reduced from 4096 to save quota
+    var temperature: Float = 0.1f
+    var isLoaded: Boolean = apiKeys.isNotEmpty()
+
+    private fun fileLog(msg: String) {
+        Log.d(TAG, msg)
+        try {
+            val dir = File("/sdcard/MedlamAI")
+            if (!dir.exists()) dir.mkdirs()
+            File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] [GEMINI] $msg\n")
+        } catch (_: Exception) {}
+    }
+
+    private fun getNextValidKey(forceRotate: Boolean): Pair<String, Int>? {
+        if (apiKeys.isEmpty()) return null
+        val totalKeys = apiKeys.size
+        // Reset exhausted list only when ALL keys are used up
+        if (exhaustedKeys.size >= totalKeys) {
+            fileLog("All keys exhausted. Resetting for next round.")
+            exhaustedKeys.clear()
+        }
+        if (forceRotate) {
+            // Simple round-robin: move to next key, skip exhausted ones
+            for (i in 1..totalKeys) {
+                val nextIdx = (currentKeyIndex + i) % totalKeys
+                if (!exhaustedKeys.contains(nextIdx)) {
+                    currentKeyIndex = nextIdx
+                    onKeyRotated?.invoke(currentKeyIndex)
+                    fileLog("Rotated to key #$currentKeyIndex")
+                    break
+                }
+            }
+        }
+        return if (!exhaustedKeys.contains(currentKeyIndex)) {
+            apiKeys[currentKeyIndex] to currentKeyIndex
+        } else null
+    }
+
+    init {
+        if (apiKeys.isNotEmpty()) onKeyRotated?.invoke(currentKeyIndex)
+    }
+
+    suspend fun generateStream(
+        prompt: String,
+        systemPrompt: String = ""
+    ): Flow<String> = flow {
+        val messages = JSONArray().put(JSONObject().put("role", "user").put("content", prompt))
+        generateStreamWithOllamaMessages(messages, systemPrompt).collect { emit(it) }
+    }
+
+    suspend fun generateStreamWithOllamaMessages(
+        messages: JSONArray,
+        systemPrompt: String = "",
+        onRetry: (() -> Unit)? = null
+    ): Flow<String> = flow {
+        Log.d(TAG, "Generating with Gemini (Ollama Vision Engine)...")
+
+        val chatHistory = mutableListOf<com.google.ai.client.generativeai.type.Content>()
+        var promptText = ""
+        var promptImages = mutableListOf<android.graphics.Bitmap>()
+
+        for (i in 0 until messages.length()) {
+            val msg = messages.getJSONObject(i)
+            val role = msg.optString("role", "user")
+            val contentStr = msg.optString("content", "")
+            val imagesArray = msg.optJSONArray("images")
+            
+            val geminiRole = if (role == "user") "user" else "model"
+            
+            if (i == messages.length() - 1 && role == "user") {
+                // Last user message, keep as prompt
+                promptText = contentStr
+                if (imagesArray != null) {
+                    for (j in 0 until imagesArray.length()) {
+                        try {
+                            val base64Str = imagesArray.getString(j)
+                            val decodedString = Base64.decode(base64Str, Base64.DEFAULT)
+                            val decodedByte = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                            promptImages.add(decodedByte)
+                        } catch (e: Exception) {
+                            fileLog("Failed to decode image: ${e.message}")
+                        }
+                    }
+                }
+            } else {
+                // History message
+                chatHistory.add(content(role = geminiRole) {
+                    text(contentStr)
+                    if (imagesArray != null) {
+                        for (j in 0 until imagesArray.length()) {
+                            try {
+                                val base64Str = imagesArray.getString(j)
+                                val decodedString = Base64.decode(base64Str, Base64.DEFAULT)
+                                val decodedByte = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                                image(decodedByte)
+                            } catch (e: Exception) {
+                                fileLog("Failed to decode history image: ${e.message}")
+                            }
+                        }
+                    }
+                })
+            }
+        }
+
+        var attempt = 0
+        val totalKeys = apiKeys.size
+        var success = false
+        var lastErrorDetail = ""
+
+        while (attempt < totalKeys && !success) {
+            val pair = getNextValidKey(forceRotate = true)
+            if (pair == null) { attempt++; continue }
+            val (apiKey, keyIdx) = pair
+            try {
+                if (attempt > 0) {
+                    onRetry?.invoke()
+                    kotlinx.coroutines.delay(1000L) // Fixed short wait
+                }
+
+                // Normalize model name: SDK accepts shortform e.g. "gemini-2.0-flash"
+                val trimmed = modelName.trim()
+                val effectiveModelName = when {
+                    trimmed.contains("/") -> trimmed
+                    trimmed.startsWith("gemini-") -> trimmed
+                    else -> "models/$trimmed"
+                }
+
+                val generativeModel = GenerativeModel(
+                    modelName = effectiveModelName,
+                    apiKey = apiKey,
+                    generationConfig = generationConfig {
+                        this.temperature = this@GeminiModelClient.temperature
+                        this.maxOutputTokens = this@GeminiModelClient.maxTokens
+                    },
+                    safetySettings = listOf(
+                        SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
+                    ),
+                    systemInstruction = content { text(systemPrompt) }
+                )
+
+                val chat = generativeModel.startChat(chatHistory)
+                val responseFlow = chat.sendMessageStream(content(role="user"){
+                    text(promptText)
+                    for (img in promptImages) {
+                        image(img)
+                    }
+                })
+                
+                responseFlow.collect { chunk ->
+                    if (coroutineContext.isActive && chunk.text != null) {
+                        emit(chunk.text!!)
+                    }
+                }
+                
+                onKeyUsed?.invoke(apiKey)
+                success = true 
+                fileLog( "Inference successful with Key #$keyIdx")
+
+            } catch (t: Throwable) {
+                val errorMsg = t.message ?: t.toString()
+                lastErrorDetail = errorMsg
+                val lowerError = errorMsg.lowercase()
+                
+                fileLog("Key #$keyIdx [${t.javaClass.simpleName}] Error: $errorMsg")
+
+                val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
+                    lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
+                
+                if (isQuotaExhausted) {
+                    exhaustedKeys.add(keyIdx)
+                    onKeyUsed?.invoke(apiKey + "_EXHAUSTED")
+                    fileLog("Key #$keyIdx marked EXHAUSTED. Skipping permanently this session.")
+                }
+
+                val shouldRetry = isQuotaExhausted ||
+                    lowerError.contains("limit") ||
+                    lowerError.contains("overloaded") ||
+                    lowerError.contains("unavailable") ||
+                    lowerError.contains("deadline") ||
+                    lowerError.contains("safety") ||
+                    lowerError.contains("recitation") ||
+                    lowerError.contains("serialization") ||
+                    t is java.net.SocketTimeoutException ||
+                    t.javaClass.simpleName.contains("ServerException") ||
+                    t.javaClass.simpleName.contains("SerializationException")
+
+                if (shouldRetry) {
+                    attempt++
+                    Log.w(TAG, "Key #$keyIdx failed ($attempt/$totalKeys). Attempting rotation...")
+                } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
+                    throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
+                } else {
+                    throw RuntimeException("Gemini Error: $errorMsg")
+                }
+            }
+        }
+        
+        if (!success) {
+            throw RuntimeException("All $totalKeys API keys failed. Last error: $lastErrorDetail")
+        }
+    }.flowOn(Dispatchers.IO)
+
+    suspend fun generateStreamWithHistory(
+        history: List<Pair<String, String>>,
+        systemPrompt: String = "",
+        onRetry: (() -> Unit)? = null
+    ): Flow<String> = flow {
+        Log.d(TAG, "Generating with Gemini (Resilient Engine)...")
+
+        val chatHistory = mutableListOf<com.google.ai.client.generativeai.type.Content>()
+        for (msg in history) {
+            val content = msg.second.trim()
+            if (content.isBlank()) continue
+            val role = if (msg.first == "user") "user" else "model"
+            chatHistory.add(content(role = role) { text(content) })
+        }
+
+        val lastUserMsg = chatHistory.removeAt(chatHistory.size - 1)
+        val promptText = lastUserMsg.parts.filterIsInstance<com.google.ai.client.generativeai.type.TextPart>().joinToString(" ") { it.text }
+
+        var attempt = 0
+        val totalKeys = apiKeys.size
+        var success = false
+        var lastErrorDetail = ""
+
+        while (attempt < totalKeys && !success) {
+            val pair = getNextValidKey(forceRotate = true)
+            if (pair == null) { attempt++; continue }
+            val (apiKey, keyIdx) = pair
+            try {
+                if (attempt > 0) {
+                    onRetry?.invoke()
+                    kotlinx.coroutines.delay(1000L)
+                }
+
+                // Normalize model name: SDK accepts shortform e.g. \"gemini-2.0-flash\"
+                val trimmed = modelName.trim()
+                val effectiveModelName = when {
+                    trimmed.contains("/") -> trimmed
+                    trimmed.startsWith("gemini-") -> trimmed
+                    else -> "models/$trimmed"
+                }
+
+                val generativeModel = GenerativeModel(
+                    modelName = effectiveModelName,
+                    apiKey = apiKey,
+                    generationConfig = generationConfig {
+                        this.temperature = this@GeminiModelClient.temperature
+                        this.maxOutputTokens = this@GeminiModelClient.maxTokens
+                    },
+                    safetySettings = listOf(
+                        SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
+                        SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
+                    ),
+                    systemInstruction = content { text(systemPrompt) }
+                )
+
+                val chat = generativeModel.startChat(chatHistory)
+                val responseFlow = chat.sendMessageStream(promptText)
+                
+                responseFlow.collect { chunk ->
+                    if (coroutineContext.isActive && chunk.text != null) {
+                        emit(chunk.text!!)
+                    }
+                }
+                
+                success = true
+                onKeyUsed?.invoke(apiKey)
+                fileLog("Inference successful with Key #$keyIdx")
+
+            } catch (t: Throwable) {
+                val errorMsg = t.message ?: t.toString()
+                lastErrorDetail = errorMsg
+                val lowerError = errorMsg.lowercase()
+                
+                fileLog("Key #$keyIdx [${t.javaClass.simpleName}] Error: $errorMsg")
+
+                val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
+                    lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
+
+                if (isQuotaExhausted) {
+                    exhaustedKeys.add(keyIdx)
+                    onKeyUsed?.invoke(apiKey + "_EXHAUSTED")
+                    fileLog("Key #$keyIdx marked EXHAUSTED. Skipping permanently this session.")
+                }
+
+                val shouldRetry = isQuotaExhausted ||
+                    lowerError.contains("limit") ||
+                    lowerError.contains("overloaded") ||
+                    lowerError.contains("unavailable") ||
+                    lowerError.contains("deadline") ||
+                    lowerError.contains("safety") ||
+                    lowerError.contains("recitation") ||
+                    lowerError.contains("serialization") ||
+                    t is java.net.SocketTimeoutException ||
+                    t.javaClass.simpleName.contains("ServerException") ||
+                    t.javaClass.simpleName.contains("SerializationException")
+
+                if (shouldRetry) {
+                    attempt++
+                    Log.w(TAG, "Key #$keyIdx failed ($attempt/$totalKeys). Error: $errorMsg")
+                } else {
+                    throw RuntimeException("Gemini Error: $errorMsg")
+                }
+            }
+        }
+
+        if (!success) {
+            throw RuntimeException("All $totalKeys API keys failed. Last error: $lastErrorDetail")
+        }
+    }.flowOn(Dispatchers.IO)
+
+    fun stop() {}
+    fun release() { isLoaded = false }
+    fun close() { release() }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "synapse-ai",
+  "description": "High-performance AI orchestrator for Android device automation with manual local model loading and intelligent system management.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

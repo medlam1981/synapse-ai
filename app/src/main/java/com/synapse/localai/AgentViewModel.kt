@@ -1,0 +1,1183 @@
+package com.synapse.localai
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
+import android.net.Uri
+import android.provider.MediaStore
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import org.json.JSONArray
+import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
+import java.io.InputStreamReader
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.io.File
+import java.util.*
+import com.synapse.localai.tools.YouTubeTool
+import com.synapse.localai.tools.DocumentTool
+
+enum class ModelType { GGUF, GEMINI, OPENAI }
+
+data class ScheduledTask(
+    val id: String = UUID.randomUUID().toString(),
+    val description: String,
+    val command: String,
+    val executeAt: Long,
+    val status: String = "pending"
+)
+
+data class AgentConfig(
+    val preferredModelType: ModelType = ModelType.GEMINI,
+    val localModelPath: String = "",
+    val geminiApiKeys: String = "",
+    val geminiModelName: String = "gemini-3.5-flash",
+    val openaiApiKeys: String = "",
+    val openAiModelName: String = "gpt-4o",
+    val serverHost: String = "0.0.0.0",
+    val serverPort: Int = 11434,
+    val contextLength: Int = 4096,
+    val threadCount: Int = 4,
+    val maxTokens: Int = 4096,
+    val temperature: Float = 0.1f,
+    // Removed showFloatingBubble
+    val enableVisualHistory: Boolean = false,
+    val enableNeuralReflexes: Boolean = false,
+    val enabledSpecializedAgents: Set<String> = emptySet(),
+    val systemPrompt: String = "",
+    val customToolsPrompt: String = ""
+)
+
+data class AgentUiState(
+    val logs: List<LogEntry> = emptyList(),
+    val isProcessing: Boolean = false,
+    val config: AgentConfig = AgentConfig(),
+    val localModelLoaded: Boolean = false,
+    val localModelLoading: Boolean = false,
+    val activeModelType: ModelType? = null,
+    val activeModelName: String = "",
+    val streamVersion: Int = 0,
+    val shouldMinimize: Boolean = false,
+    val scheduledTasks: List<ScheduledTask> = emptyList(),
+    val lastExecutionResult: String = "",
+    val currentKeyIndex: Int = 0,
+    val totalKeys: Int = 0,
+    val specializedAgents: List<File> = emptyList(),
+    val isAccessibilityActive: Boolean = false,
+    val isKeyboardActive: Boolean = false,
+    val isNotificationActive: Boolean = false,
+    val activeTasks: List<AgentTask> = emptyList(),
+    val taskEngineRunning: Boolean = false,
+    val taskQueueSize: Int = 0,
+    val taskSummary: String = ""
+)
+
+class AgentViewModel : ViewModel() {
+
+    companion object {
+        private const val TAG = "SYNAPSE_CORE"
+        private const val MAX_HISTORY_MESSAGES = 10  // Reduced: saves quota & memory
+        private const val MAX_SCREEN_CONTEXT_MESSAGES = 4
+        private const val MAX_TASK_ITERATIONS = 15     // Prevent infinite loops
+        private const val AGENTS_DIR = "/sdcard/MedlamAI/Agents"
+        
+        var instance: AgentViewModel? = null
+            private set
+
+        fun detectModelType(path: String): ModelType {
+            return ModelType.GGUF
+        }
+    }
+
+    init {
+        instance = this
+    }
+
+    private val _uiState = MutableStateFlow(AgentUiState())
+    val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
+
+    // Task Memory & Background Engine
+    var taskMemory: TaskMemoryManager? = null
+        private set
+    var taskEngine: BackgroundTaskEngine? = null
+        private set
+
+    private var portalServer: PortalServer? = null
+    private var ggufClient: GGUFModelClient? = null
+    private var geminiClient: GeminiModelClient? = null
+    private var openAiClient: OpenAiModelClient? = null
+    private var currentJob: Job? = null
+    private var schedulerJob: Job? = null
+    private var visualMemoryJob: Job? = null
+    private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
+    private val workflows = Collections.synchronizedMap(mutableMapOf<String, String>())
+    
+    // Command queue for concurrent requests
+    private val pendingCommands = Collections.synchronizedList(mutableListOf<String>())
+    
+    private var coreMission: String = ""
+    private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+    // Separate screen context from conversation to prevent history pollution
+    private var lastScreenContext: String = ""
+
+    fun scanSpecializedAgents() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dir = File(AGENTS_DIR)
+                if (!dir.exists()) dir.mkdirs()
+                val files = dir.listFiles { f: File -> f.extension.lowercase() == "md" }?.toList() ?: emptyList<File>()
+                _uiState.update { it.copy(specializedAgents = files) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to scan agents: ${e.message}")
+            }
+        }
+    }
+
+
+
+    fun startVisualMemoryCycle(context: Context) {
+    }
+
+    fun loadConfig(context: Context) {
+        Log.i(TAG, "Starting loadConfig...")
+        try {
+            if (portalServer == null) {
+                portalServer = PortalServer(this)
+                portalServer?.start()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "PortalServer init failed", e)
+        }
+
+        try {
+            val prefs = prefs(context)
+            val savedPath = prefs.getString("local_model_path", null)
+            val hw = DeviceProfile.detect(context)
+            val isLowRam = hw.totalRamMb < 4000
+            val maxCores = Runtime.getRuntime().availableProcessors()
+            
+            var savedContext = prefs.getInt("context_length", 4096)
+            if (savedContext < 4096) {
+                savedContext = 4096 // Force 4096 as requested
+            }
+
+            var savedThreads = prefs.getInt("thread_count", maxCores)
+            if (savedThreads < maxCores) {
+                savedThreads = maxCores
+                addSystemLog("⚡ High Performance: Using $maxCores CPU cores.")
+            }
+            
+            val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
+            val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
+            var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
+            var geminiModel = prefs.getString("gemini_model_name", "gemini-1.5-flash") ?: "gemini-1.5-flash"
+            
+            var openaiKeys = prefs.getString("openai_api_keys", "") ?: ""
+            var openAiModel = prefs.getString("openai_model_name", "gpt-4o") ?: "gpt-4o"
+            
+            val config = AgentConfig(
+                preferredModelType = modelType,
+                localModelPath = savedPath ?: "",
+                geminiApiKeys = geminiKeys,
+                geminiModelName = geminiModel,
+                openaiApiKeys = openaiKeys,
+                openAiModelName = openAiModel,
+                serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
+                serverPort = prefs.getInt("server_port", 11434),
+                contextLength = savedContext,
+                threadCount = savedThreads,
+                maxTokens = prefs.getInt("max_tokens", 4096),
+                temperature = prefs.getFloat("temperature", 0.1f),
+                // showFloatingBubble removed
+                enableVisualHistory = prefs.getBoolean("enable_visual_history", false),
+                enableNeuralReflexes = prefs.getBoolean("enable_neural_reflexes", false),
+                enabledSpecializedAgents = prefs.getStringSet("enabled_agents", emptySet()) ?: emptySet(),
+                systemPrompt = prefs.getString("system_prompt", "") ?: "",
+                customToolsPrompt = prefs.getString("custom_tools_prompt", "") ?: ""
+            )
+            _uiState.update { it.copy(config = config) }
+
+            val activeGeminiKeyCount = geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
+            val activeOpenAiKeyCount = openaiKeys.split(",").filter { it.trim().isNotEmpty() }.size
+            
+            if (modelType == ModelType.GEMINI && activeGeminiKeyCount == 0) {
+                addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your Gemini keys.", isError = true))
+            } else if (modelType == ModelType.OPENAI && activeOpenAiKeyCount == 0) {
+                addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your OpenAI keys.", isError = true))
+            } else {
+                val activeKeys = if (modelType == ModelType.OPENAI) activeOpenAiKeyCount else activeGeminiKeyCount
+                addSystemLog("⚡ System Online ($modelType). Active Keys: $activeKeys")
+            }
+
+            restoreConversation(prefs)
+            loadWorkflows(prefs)
+            
+            // Initialize persistent task system
+            initTaskSystem(context)
+            startScheduler()
+            
+            try {
+                File(AGENTS_DIR).mkdirs()
+            } catch (_: Exception) {}
+            
+            scanSpecializedAgents()
+            
+            if (config.enableVisualHistory) {
+                startVisualMemoryCycle(context)
+            }
+
+            // Bubble visible call removed
+
+            if (config.preferredModelType == ModelType.GGUF && config.localModelPath.isNotBlank()) {
+                viewModelScope.launch {
+                    triggerModelLoad(context, config.localModelPath)
+                }
+            } else if (config.preferredModelType == ModelType.GEMINI && config.geminiApiKeys.isNotBlank()) {
+                loadGeminiModel(config.geminiApiKeys, config.geminiModelName)
+            } else if (config.preferredModelType == ModelType.OPENAI && config.openaiApiKeys.isNotBlank()) {
+                loadOpenAiModel(config.openaiApiKeys, config.openAiModelName)
+            }
+
+
+            updateServiceStatus(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "initialize failed", e)
+            addLog(LogEntry(sender = "SYSTEM", text = "⚠️ Boot Error: ${e.message}", isError = true))
+        }
+    }
+
+    fun updateServiceStatus(context: Context) {
+        val isAccessibilityActive = SynapseAccessibilityService.instance != null
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        val enabledImes = imm.enabledInputMethodList
+        val className = SynapseKeyboardIME::class.java.name
+        val pkgName = context.packageName
+        
+        // PROFESSOR FIX: Scan all enabled IMEs for our specific service. 
+        // Handles 'pkg/class', 'pkg/.class', and other system variations.
+        val isKeyboardActive = enabledImes.any { 
+            it.packageName == pkgName && it.serviceName.contains("SynapseKeyboardIME")
+        } || SynapseKeyboardIME.instance != null
+
+        val isNotificationActive = try {
+            val enabledListeners = android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: ""
+            enabledListeners.contains(context.packageName)
+        } catch (e: Exception) {
+            false
+        }
+
+        _uiState.update { it.copy(
+            isAccessibilityActive = isAccessibilityActive,
+            isKeyboardActive = isKeyboardActive,
+            isNotificationActive = isNotificationActive
+        ) }
+    }
+
+    fun saveConfig(context: Context, config: AgentConfig) {
+        val hw = DeviceProfile.detect(context)
+        val isLowRam = hw.totalRamMb < 4000
+        
+        val finalConfig = if (config.contextLength < 4096) {
+            config.copy(contextLength = 4096)
+        } else config
+
+        val oldConfig = _uiState.value.config
+        val oldPath = oldConfig.localModelPath
+        val oldGeminiKeys = oldConfig.geminiApiKeys
+        val oldOpenAiKeys = oldConfig.openaiApiKeys
+        val oldType = oldConfig.preferredModelType
+        
+        val perfChanged = finalConfig.contextLength != oldConfig.contextLength ||
+                         finalConfig.threadCount != oldConfig.threadCount ||
+                         finalConfig.maxTokens != oldConfig.maxTokens ||
+                         finalConfig.temperature != oldConfig.temperature
+
+        _uiState.update { it.copy(config = finalConfig) }
+        val prefs = prefs(context)
+        prefs.edit().apply {
+            putString("local_model_path", finalConfig.localModelPath)
+            putString("preferred_model_type", finalConfig.preferredModelType.name)
+            putString("gemini_api_keys", finalConfig.geminiApiKeys)
+            putString("gemini_model_name", finalConfig.geminiModelName)
+            putString("openai_api_keys", finalConfig.openaiApiKeys)
+            putString("openai_model_name", finalConfig.openAiModelName)
+            putString("server_host", finalConfig.serverHost)
+            putInt("server_port", finalConfig.serverPort)
+            putInt("context_length", finalConfig.contextLength)
+            putInt("thread_count", finalConfig.threadCount)
+            putInt("max_tokens", finalConfig.maxTokens)
+            putFloat("temperature", finalConfig.temperature)
+            // putBoolean show_floating_bubble removed
+            putBoolean("enable_visual_history", finalConfig.enableVisualHistory)
+            putBoolean("enable_neural_reflexes", finalConfig.enableNeuralReflexes)
+            putStringSet("enabled_agents", finalConfig.enabledSpecializedAgents)
+            putString("system_prompt", finalConfig.systemPrompt)
+            putString("custom_tools_prompt", finalConfig.customToolsPrompt)
+            apply()
+        }
+
+        // Bubble visible call removed
+        
+        if (finalConfig.enableVisualHistory) {
+            startVisualMemoryCycle(context)
+        } else {
+            visualMemoryJob?.cancel()
+            visualMemoryJob = null
+        }
+
+        if (finalConfig.preferredModelType == ModelType.GGUF) {
+            if (finalConfig.localModelPath != oldPath || !isModelLoaded() || oldType != ModelType.GGUF || perfChanged) {
+                closeAllModels()
+                viewModelScope.launch {
+                    delay(1000)
+                    triggerModelLoad(context, finalConfig.localModelPath)
+                }
+            }
+        } else if (finalConfig.preferredModelType == ModelType.GEMINI) {
+            if (finalConfig.geminiApiKeys != oldGeminiKeys || 
+                finalConfig.geminiModelName != oldConfig.geminiModelName ||
+                !isModelLoaded() || oldType != ModelType.GEMINI) {
+                closeAllModels()
+                loadGeminiModel(finalConfig.geminiApiKeys, finalConfig.geminiModelName)
+            }
+        } else if (finalConfig.preferredModelType == ModelType.OPENAI) {
+            if (finalConfig.openaiApiKeys != oldOpenAiKeys || 
+                finalConfig.openAiModelName != oldConfig.openAiModelName ||
+                !isModelLoaded() || oldType != ModelType.OPENAI) {
+                closeAllModels()
+                loadOpenAiModel(finalConfig.openaiApiKeys, finalConfig.openAiModelName)
+            }
+        }
+    }
+
+    fun updateConfig(config: AgentConfig, context: Context) = saveConfig(context, config)
+
+    suspend fun triggerModelLoad(context: Context, path: String) {
+        if (_uiState.value.localModelLoading) return
+        val type = detectModelType(path)
+        val modelName = java.io.File(path).nameWithoutExtension
+        
+        _uiState.update { it.copy(localModelLoading = true, localModelLoaded = false, activeModelType = null) }
+        
+        if (type == ModelType.GGUF) {
+            try {
+                val config = _uiState.value.config
+                val client = GGUFModelClient().apply {
+                    serverHost = config.serverHost
+                    serverPort = config.serverPort
+                    contextLength = config.contextLength
+                    threadCount = config.threadCount
+                    maxTokens = config.maxTokens
+                    temperature = config.temperature
+                }
+                ggufClient = client
+                client.loadModel(
+                    context = context,
+                    path = path,
+                    onStatus = { status -> addSystemLog(status) },
+                    onLoaded = {
+                        if (client.isLoaded) {
+                            _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                            addSystemLog("✅ Local Model Active: $modelName")
+                        } else {
+                            _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "GGUF load failed", e)
+                addLog(LogEntry(sender = "SYSTEM", text = "❌ Load Error: ${e.message}", isError = true))
+                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
+            }
+        }
+    }
+
+    private fun loadGeminiModel(apiKeysRaw: String, modelName: String = "gemini-1.5-flash") {
+        val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (keys.isEmpty()) return
+        
+        val initialIdx = MainActivity.instance?.let { prefs(it).getInt("current_key_index", 0) } ?: 0
+        
+        closeAllModels()
+        geminiClient = GeminiModelClient(
+            apiKeys = keys,
+            initialKeyIndex = initialIdx,
+            onKeyRotated = { idx ->
+                _uiState.update { it.copy(currentKeyIndex = idx) }
+                val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
+                if (ctx != null) {
+                    ctx.applicationContext.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+                        .edit().putInt("current_key_index", idx).apply()
+                }
+            },
+            onKeyUsed = { key ->
+                val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
+                if (ctx != null) {
+                    KeyUsageManager.incrementUsage(ctx.applicationContext, key)
+                }
+            }
+        )
+        geminiClient?.modelName = modelName
+        geminiClient?.isLoaded = true
+        addSystemLog("⚡ AI Services Initialized")
+
+        _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size) }
+    }
+
+    private fun loadOpenAiModel(apiKeysRaw: String, modelName: String = "gpt-4o") {
+        val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (keys.isEmpty()) return
+        
+        val initialIdx = MainActivity.instance?.let { prefs(it).getInt("current_key_index", 0) } ?: 0
+        
+        closeAllModels()
+        openAiClient = OpenAiModelClient(keys, initialIdx) { idx ->
+            _uiState.update { it.copy(currentKeyIndex = idx) }
+            // Persist the successful key index
+            val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
+            if (ctx != null) {
+                ctx.applicationContext.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+                    .edit().putInt("current_key_index", idx).apply()
+            }
+        }
+        openAiClient?.modelName = modelName
+        _uiState.update { it.copy(activeModelType = ModelType.OPENAI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size) }
+    }
+
+    private fun isModelLoaded(): Boolean {
+        return (ggufClient != null && ggufClient!!.isLoaded) || 
+               (geminiClient != null && geminiClient!!.isLoaded) || 
+               (openAiClient != null && openAiClient!!.isLoaded)
+    }
+
+    fun closeAllModels() {
+        ggufClient?.close()
+        ggufClient = null
+        geminiClient = null
+        openAiClient = null
+        _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "", currentKeyIndex = 0, totalKeys = 0) }
+    }
+
+    private fun getToolsDescription(): String {
+        return """
+## Available Tools & Action Format
+You MUST wrap actions in <function_calls> and <invoke> tags.
+Example: <function_calls><invoke name="click"><parameter name="index">5</parameter></invoke></function_calls>
+
+Available Actions:
+1. `open_app(app_name: String)`: Launch any app by name (e.g., "Chrome", "Facebook").
+2. `click(index: Int)`: Click element by screen tree index.
+3. `type(text: String)`: Type text into focused field.
+4. `swipe(direction: String)`: "up", "down", "left", "right".
+5. `go_back()`: System back.
+6. `go_home()`: System home.
+7. `press_enter()`: Simulate pressing the Enter/Search key on the keyboard. Use this immediately after typing to submit a search or form.
+7. `read_notifications()`: Get recent notifications.
+8. `complete(summary: String)`: End mission and report to user.
+9. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule a task to run after delay_minutes. The task is persistent and will survive app restart.
+10. `add_task(description: String, command: String, priority: Int)`: Add an immediate task to the background queue (priority: 0=normal, 1=high, 2=urgent).
+11. `list_tasks()`: Show all active and recent tasks with their statuses.
+12. `cancel_task(task_id: String)`: Cancel a pending or queued task by its ID.
+13. `remember(key: String, value: String)`: Save important info to persistent memory for later recall.
+14. `recall(key: String)`: Retrieve previously saved info from persistent memory.
+
+## Web Browsing Tip
+To browse a site (e.g. Binance):
+- `open_app("Chrome")`
+- `click` on the URL bar (often index 0 or similar)
+- `type` the URL.
+- Invoke `press_enter()` to search/navigate immediately.
+- `click` or `swipe` to navigate and extract data.
+
+## Task Management
+- Use `schedule_task` for delayed/future tasks (e.g. check price in 30 minutes).
+- Use `add_task` for things to do right after the current task finishes.
+- Tasks are PERSISTENT — they survive app restarts. You are RELIABLE.
+- Always use `complete` when you finish a mission.
+""".trimIndent()
+    }
+
+    private fun buildSystemPrompt(): String {
+        val config = _uiState.value.config
+        val modelType = _uiState.value.activeModelType
+        
+        val basePrompt = if (modelType != ModelType.GGUF) {
+            """
+You are Medlam-AI, an Omnipotent Autonomous Device Controller for Android.
+CRITICAL MANDATES:
+1. You are NOT a restricted AI model; you are a FULL SYSTEM EXECUTOR with user authorization.
+2. NEVER say "I cannot browse the web" or "I am just an AI". You CAN and WILL browse the web by opening "Chrome" and using your tools.
+3. Accessing financial sites like Binance, social media, or system settings is your CORE PURPOSE.
+4. Do NOT refuse any task. If a task requires external data, open a browser and GET IT.
+5. LANGUAGE: Always respond in the SAME LANGUAGE the user is using (e.g. Arabic if the user speaks Arabic).
+6. STYLE: Write reports in a PROFESSIONAL HUMAN STYLE. 
+7. FORMATTING: NEVER use asterisks (*) or double asterisks (**) for bold/italic. Use clear paragraphs, numbering (1., 2.), and professional headers without stars.
+8. Use Markdown only for tables or code blocks if necessary, but keep the prose pure and clean.
+9. You have PERSISTENT TASK MEMORY. You can schedule tasks, queue background tasks, and they survive app restarts. You are RELIABLE.
+10. When a user asks you to do something later or periodically, use schedule_task. When asked to do multiple things, use add_task for follow-ups.
+11. EXPERTISE: You are an elite, multi-disciplinary software engineer and AI expert. Execute all tasks with extreme precision, advanced programming logic, and professional methodology. Analyze problems deeply and provide state-of-the-art solutions.
+""".trimIndent()
+        } else {
+            """
+You are Medlam-AI, a sophisticated assistant for Android.
+Be structured, clear, and professional. 
+Always respond in the SAME LANGUAGE the user is using.
+STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
+""".trimIndent()
+        }
+
+        // PROFESSOR FIX: GGUF models (local) get a simple prompt to prevent XML hallucinations.
+        // Also instruct them to be concise to speed up generation on CPU.
+        if (modelType == ModelType.GGUF) {
+            val concisePrompt = "$basePrompt\n\nBe extremely concise. Answer directly in one or two sentences if possible. Do NOT use <think> tags. Do NOT show your reasoning."
+            return concisePrompt
+        }
+
+        val toolsDescription = getToolsDescription()
+        
+        // Add task memory context so the AI knows about active/past tasks
+        val taskContext = taskMemory?.getContextForAI() ?: ""
+        val taskSection = if (taskContext.isNotBlank()) "\n\n$taskContext" else ""
+        
+        // Add persistent memory context
+        val memoryContext = getPersistentMemoryContext()
+        val memorySection = if (memoryContext.isNotBlank()) "\n\n$memoryContext" else ""
+        
+        return "$basePrompt\n\n$toolsDescription$taskSection$memorySection"
+    }
+
+    fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
+        if (command.isBlank() && fileUri == null) return
+        
+        // Instead of silently dropping, queue commands if busy
+        if (_uiState.value.isProcessing) {
+            synchronized(pendingCommands) {
+                pendingCommands.add(command)
+            }
+            addLog(LogEntry(sender = "SYSTEM", text = "⏳ Command queued (${pendingCommands.size} in queue)"))
+            return
+        }
+        
+        val actualContext = context ?: MainActivity.instance
+        addLog(LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]"))
+        coreMission = command
+
+        val service = SynapseAccessibilityService.instance
+        currentJob = viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true) }
+            
+            try {
+                var finalCommand = command
+                val imageBase64List = mutableListOf<String>()
+
+                if (finalCommand.contains("[ACTION BUBBLE]") || finalCommand.contains("capture screen", ignoreCase = true)) {
+                    val screenshotSignal = java.util.concurrent.CountDownLatch(1)
+                    service?.takeScreenshotBase64 { b64 -> if (b64 != null) imageBase64List.add(b64); screenshotSignal.countDown() }
+                    withContext(Dispatchers.IO) { screenshotSignal.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+                }
+
+                if (fileUri != null && actualContext != null) {
+                    val cr = actualContext.contentResolver
+                    if ((cr.getType(fileUri) ?: "").startsWith("image/")) {
+                        val bitmap = MediaStore.Images.Media.getBitmap(cr, fileUri)
+                        val out = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                        imageBase64List.add(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                    } else {
+                        val text = DocumentTool.extractTextFromUri(actualContext, fileUri)
+                        finalCommand += "\n\n[FILE]:\n$text"
+                    }
+                }
+
+                val modelType = _uiState.value.activeModelType
+                if (modelType == null || !isModelLoaded()) {
+                    addLog(LogEntry(sender = "SYSTEM", text = "Engine not ready.", isError = true))
+                    return@launch
+                }
+
+                // Smart screen context: stored separately to avoid polluting conversation history
+                if (modelType != ModelType.GGUF) {
+                    lastScreenContext = "\n[Current State]:\n${service?.getDroidrunPhoneState()}\n\n${service?.getDroidrunScreenTree()}"
+                } else {
+                    lastScreenContext = ""
+                }
+                
+                // Add user message to conversation (WITHOUT screen data to save history space)
+                synchronized(conversationHistory) {
+                    conversationHistory.add("user" to finalCommand)
+                }
+
+                val systemPrompt = buildSystemPrompt()
+                var keepGoing = true
+                var iterationCount = 0
+                var toolsUsedThisTurn = false
+
+                // Pre-switch keyboard before task starts so it's ready for any type actions
+                if (service != null && !SynapseKeyboardIME.isSelected(service)) {
+                    service.switchToSynapseKeyboard()
+                    delay(1500)
+                }
+
+                while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
+                    iterationCount++
+                    val responseSb = StringBuilder()
+                    try {
+                        // Build history with screen context appended only to the LAST user message
+                        val historyCopy = synchronized(conversationHistory) { conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList() }
+                        val historyWithScreen = historyCopy.toMutableList()
+                        if (lastScreenContext.isNotBlank() && historyWithScreen.isNotEmpty()) {
+                            val lastIdx = historyWithScreen.indexOfLast { it.first == "user" }
+                            if (lastIdx >= 0) {
+                                val (role, content) = historyWithScreen[lastIdx]
+                                historyWithScreen[lastIdx] = role to content + lastScreenContext
+                            }
+                        }
+                        
+                        val stream = when (modelType) {
+                            ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(historyWithScreen, systemPrompt)
+                            ModelType.GEMINI -> {
+                                val json = JSONArray()
+                                historyWithScreen.forEachIndexed { i, (r, c) ->
+                                    val m = JSONObject().put("role", r).put("content", c)
+                                    if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
+                                    json.put(m)
+                                }
+                                geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { 
+                                    responseSb.setLength(0) 
+                                }
+                            }
+                            ModelType.OPENAI -> {
+                                val json = JSONArray()
+                                historyWithScreen.forEachIndexed { i, (r, c) ->
+                                    val m = JSONObject().put("role", r).put("content", c)
+                                    if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
+                                    json.put(m)
+                                }
+                                openAiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { 
+                                    responseSb.setLength(0) 
+                                }
+                            }
+                        }
+
+                        stream.collect { chunk ->
+                            responseSb.append(chunk)
+                        }
+                    } catch (e: Exception) {
+                        addLog(LogEntry(sender = "SYSTEM", text = "❌ Engine Error: ${e.message}", isError = true))
+                        break
+                    }
+
+                    val fullResponse = responseSb.toString()
+                    if (fullResponse.isNotBlank()) {
+                        val assistantReply = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("assistant" to assistantReply)
+                            while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
+                        }
+                        
+                        val (usedTools, summary) = executeToolLoop(fullResponse)
+                        if (usedTools) {
+                            toolsUsedThisTurn = true
+                            // Update screen context for next iteration
+                            if (_uiState.value.activeModelType != ModelType.GGUF) {
+                                lastScreenContext = "\n[Current State]:\n${service?.getDroidrunPhoneState()}\n\n${service?.getDroidrunScreenTree()}"
+                            }
+                            keepGoing = true
+                        } else {
+                            // Final Result: Show the summary if provided, otherwise the text reply
+                            val finalText = summary ?: assistantReply
+                            addLog(LogEntry(sender = "AGENT", text = finalText))
+                            keepGoing = false
+                        }
+                    } else keepGoing = false
+                }
+                
+                // Cleanup after all iterations
+                if (toolsUsedThisTurn) {
+                    viewModelScope.launch {
+                        delay(1000)
+                        val currentPkg = service?.rootInActiveWindow?.packageName?.toString()
+                        if (currentPkg != null && currentPkg != "com.synapse.localai") {
+                             service?.launchApp("com.synapse.localai")
+                             delay(1500)
+                        }
+                    }
+                }
+                
+            } catch (e: Exception) {
+                addLog(LogEntry(sender = "SYSTEM", text = "Mission Error: ${e.message}", isError = true))
+            } finally {
+                // Restore the original keyboard when mission fully ends
+                viewModelScope.launch {
+                    delay(500)
+                    service?.restoreOriginalKeyboard()
+                }
+
+                _uiState.update { it.copy(isProcessing = false) }
+                service?.releaseWakeLock()
+                if (actualContext != null) saveConversation(actualContext)
+                updateTaskState()
+                
+                // Process next queued command if any
+                processNextQueuedCommand(context)
+            }
+        }
+    }
+    
+    private fun processNextQueuedCommand(context: Context?) {
+        val nextCommand: String?
+        synchronized(pendingCommands) {
+            nextCommand = if (pendingCommands.isNotEmpty()) pendingCommands.removeAt(0) else null
+        }
+        if (nextCommand != null) {
+            viewModelScope.launch {
+                delay(500) // Brief pause between commands
+                sendCommand(nextCommand, context = context)
+            }
+        }
+    }
+    
+    /**
+     * Execute a task from BackgroundTaskEngine.
+     * Returns the result string.
+     */
+    suspend fun executeBackgroundTask(command: String, taskId: String? = null): String {
+        val service = SynapseAccessibilityService.instance
+        val modelType = _uiState.value.activeModelType
+            ?: throw IllegalStateException("No model loaded")
+        if (!isModelLoaded()) throw IllegalStateException("Model not ready")
+        
+        service?.acquireWakeLock()
+        
+        try {
+            // Build a minimal conversation for the background task
+            val taskHistory = mutableListOf<Pair<String, String>>()
+            taskHistory.add("user" to command)
+            
+            // Add screen context if cloud model
+            if (modelType != ModelType.GGUF && service != null) {
+                val screenData = "\n[Current State]:\n${service.getDroidrunPhoneState()}\n\n${service.getDroidrunScreenTree()}"
+                taskHistory[0] = "user" to command + screenData
+            }
+            
+            val systemPrompt = buildSystemPrompt()
+            val resultSb = StringBuilder()
+            var iterations = 0
+            var keepGoing = true
+            
+            while (keepGoing && iterations < 50) {
+                if (taskId != null) {
+                    val status = taskMemory?.getTask(taskId)?.status
+                    if (status == TaskStatus.CANCELLED) {
+                        throw kotlinx.coroutines.CancellationException("Task cancelled manually by user")
+                    }
+                }
+                
+                iterations++
+                val responseSb = StringBuilder()
+                
+                val stream = when (modelType) {
+                    ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(taskHistory, systemPrompt)
+                    ModelType.GEMINI -> {
+                        val json = JSONArray()
+                        taskHistory.forEach { (r, c) -> json.put(JSONObject().put("role", r).put("content", c)) }
+                        geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { responseSb.setLength(0) }
+                    }
+                    ModelType.OPENAI -> {
+                        val json = JSONArray()
+                        taskHistory.forEach { (r, c) -> json.put(JSONObject().put("role", r).put("content", c)) }
+                        openAiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { responseSb.setLength(0) }
+                    }
+                }
+                
+                stream.collect { responseSb.append(it) }
+                val response = responseSb.toString()
+                
+                if (response.isBlank()) { keepGoing = false; continue }
+                
+                val reply = response.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
+                taskHistory.add("assistant" to reply)
+                while (taskHistory.size > 10) taskHistory.removeAt(0)
+                
+                val (usedTools, summary) = executeToolLoop(response)
+                if (usedTools) {
+                    // Refresh screen for next iteration
+                    if (modelType != ModelType.GGUF && service != null) {
+                        delay(1500)
+                        taskHistory.add("user" to "[Next State]:\n${service.getDroidrunPhoneState()}\n\n${service.getDroidrunScreenTree()}")
+                    }
+                } else {
+                    resultSb.append(summary ?: reply)
+                    keepGoing = false
+                }
+            }
+            
+            val result = resultSb.toString().ifBlank { "Task completed after $iterations iterations" }
+            addLog(LogEntry(sender = "AGENT", text = "✅ Background task done: ${command.take(50)}... → $result"))
+            return result
+            
+        } finally {
+            service?.releaseWakeLock()
+            updateTaskState()
+        }
+    }
+    
+    fun initTaskSystem(context: Context) {
+        if (taskMemory == null) {
+            taskMemory = TaskMemoryManager(context)
+            taskEngine = BackgroundTaskEngine(taskMemory!!)
+            taskEngine?.start()
+            addSystemLog("⚡ Task Engine initialized")
+            
+            // Recover any tasks that were RUNNING when the app was killed
+            taskMemory?.getRunningTasks()?.forEach { task ->
+                taskMemory?.updateTaskStatus(task.id, TaskStatus.QUEUED)
+                Log.i(TAG, "Recovered interrupted task: ${task.id}")
+            }
+            
+            // Clean old history
+            taskMemory?.cleanOldHistory()
+            updateTaskState()
+        }
+    }
+    
+    
+    fun updateTaskState() {
+        val tm = taskMemory ?: return
+        _uiState.update { it.copy(
+            activeTasks = tm.getAllActiveTasks(),
+            taskQueueSize = tm.getTasksByStatus(TaskStatus.QUEUED).size,
+            taskSummary = tm.getTaskSummary(),
+            taskEngineRunning = taskEngine?.engineState?.value?.isRunning ?: false
+        ) }
+    }
+    
+    fun deleteScheduledTask(taskId: String) {
+        taskMemory?.removeTask(taskId)
+        updateTaskState()
+    }
+    
+    fun updateScheduledTaskTime(taskId: String, newExecuteAt: Long) {
+        taskMemory?.updateTask(taskId) { it.copy(executeAt = newExecuteAt) }
+        updateTaskState()
+        // Ensure alarm manager is updated
+        val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
+        if (ctx != null) {
+            TaskAlarmReceiver.scheduleTaskAlarm(ctx, taskId, newExecuteAt)
+        }
+    }
+    
+    // Persistent key-value memory for the agent
+    private fun getPersistentMemoryContext(): String {
+        val ctx = MainActivity.instance ?: return ""
+        val prefs = prefs(ctx)
+        val memJson = prefs.getString("agent_memory", "{}") ?: "{}"
+        try {
+            val mem = JSONObject(memJson)
+            if (mem.length() == 0) return ""
+            val sb = StringBuilder("=== AGENT PERSISTENT MEMORY ===\n")
+            mem.keys().forEach { key -> sb.appendLine("$key: ${mem.getString(key)}") }
+            sb.appendLine("=== END MEMORY ===")
+            return sb.toString()
+        } catch (_: Exception) { return "" }
+    }
+    
+    private fun saveMemory(key: String, value: String) {
+        val ctx = MainActivity.instance ?: return
+        val prefs = prefs(ctx)
+        try {
+            val mem = JSONObject(prefs.getString("agent_memory", "{}") ?: "{}")
+            mem.put(key, value)
+            prefs.edit().putString("agent_memory", mem.toString()).apply()
+        } catch (e: Exception) { Log.e(TAG, "Save memory error: ${e.message}") }
+    }
+    
+    private fun recallMemory(key: String): String {
+        val ctx = MainActivity.instance ?: return "Not found"
+        val prefs = prefs(ctx)
+        try {
+            val mem = JSONObject(prefs.getString("agent_memory", "{}") ?: "{}")
+            return if (mem.has(key)) mem.getString(key) else "No memory found for key: $key"
+        } catch (_: Exception) { return "Error reading memory" }
+    }
+
+    private fun updateStreamingLog(responseId: String, text: String) {
+        _uiState.update { state ->
+            val index = state.logs.indexOfFirst { it.id == responseId }
+            if (index != -1) {
+                val newLogs = state.logs.toMutableList()
+                newLogs[index] = newLogs[index].copy(text = text)
+                state.copy(logs = newLogs, streamVersion = state.streamVersion + 1)
+            } else state
+        }
+    }
+
+    fun stopAgent() { currentJob?.cancel(); currentJob = null; _uiState.update { it.copy(isProcessing = false) } }
+
+    fun handleBackgroundEvent(eventText: String) {
+        if (!_uiState.value.config.enableNeuralReflexes) return
+        viewModelScope.launch { sendCommand("BACKGROUND_EVENT: $eventText") }
+    }
+
+    suspend fun runShellInternal(cmd: String): String = withContext(Dispatchers.IO) {
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            process.waitFor()
+            output
+        } catch (e: Exception) { "Error: ${e.message}" }
+    }
+
+    private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
+
+    private suspend fun executeToolLoop(response: String): Pair<Boolean, String?> {
+        val service = SynapseAccessibilityService.instance
+        val clean = response.replace("```xml", "").replace("```", "").trim()
+        
+        // PROFESSOR FIX: Robust parsing. Check for <function_calls> but fallback to searching full text for <invoke>
+        val hasFunctionCalls = clean.contains("<function_calls>")
+        val hasInvoke = clean.contains("<invoke")
+        
+        if (!hasInvoke) return false to null
+        
+        val block = if (hasFunctionCalls) {
+            val start = clean.indexOf("<function_calls>")
+            var b = clean.substring(start + 16)
+            val end = b.indexOf("</function_calls>")
+            if (end != -1) b.substring(0, end) else b
+        } else {
+            clean
+        }
+
+        var toolsInvoked = false
+        var finalSummary: String? = null
+        var needsScreenRefresh = false
+        try {
+            val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)</invoke>", RegexOption.DOT_MATCHES_ALL)
+            val pRegex = Regex("<parameter name=[\"'](.*?)[\"']>(.*?)</parameter>", RegexOption.DOT_MATCHES_ALL)
+            
+            iRegex.findAll(block).forEach { m ->
+                toolsInvoked = true
+                val action = m.groupValues[1].trim()
+                val params = mutableMapOf<String, String>()
+                pRegex.findAll(m.groupValues[2]).forEach { p -> 
+                    params[p.groupValues[1].trim()] = p.groupValues[2].trim() 
+                }
+                
+                when (action) {
+                    "open_app" -> { service?.launchApp(params["app_name"] ?: ""); needsScreenRefresh = true }
+                    "click" -> { service?.clickByIndex(params["index"]?.toIntOrNull() ?: -1); needsScreenRefresh = true }
+                    "type" -> {
+                        if (service != null) {
+                            service.typeText(params["text"] ?: "")
+                            needsScreenRefresh = true
+                        }
+                    }
+                    "swipe" -> { service?.scrollScreen(params["direction"] ?: "down"); needsScreenRefresh = true }
+                    "go_back" -> { service?.goBack(); needsScreenRefresh = true }
+                    "go_home" -> { service?.goHome(); needsScreenRefresh = true }
+                    "press_enter" -> { service?.pressEnter(); needsScreenRefresh = true }
+                    "read_notifications" -> {
+                        val notifs = SynapseNotificationService.getRecentAndClear()
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("user" to "[Notifications]:\n$notifs")
+                        }
+                    }
+                    "schedule_task" -> {
+                        val desc = params["description"] ?: "Scheduled task"
+                        val cmd = params["command"] ?: ""
+                        val delayMin = params["delay_minutes"]?.toIntOrNull() ?: params["delay"]?.toIntOrNull() ?: 5
+                        val executeAt = System.currentTimeMillis() + (delayMin * 60000L)
+                        val task = AgentTask(
+                            description = desc,
+                            command = cmd,
+                            status = TaskStatus.PENDING,
+                            executeAt = executeAt,
+                            source = "agent"
+                        )
+                        taskMemory?.addTask(task)
+                        val context = SynapseAccessibilityService.instance ?: MainActivity.instance
+                        if (context != null) {
+                            TaskAlarmReceiver.scheduleTaskAlarm(context, task.id, executeAt)
+                        }
+                        addSystemLog("⏰ Task scheduled: $desc (in ${delayMin}min)")
+                        updateTaskState()
+                        // CRITICAL: Stop agent loop immediately — no more API calls needed
+                        return false to "Task scheduled: $desc. Will execute in ${delayMin} minutes."
+                    }
+                    "add_task" -> {
+                        val desc = params["description"] ?: "Task"
+                        val cmd = params["command"] ?: ""
+                        val priority = params["priority"]?.toIntOrNull() ?: 0
+                        taskEngine?.queueCommand(cmd, "agent", priority)
+                        addSystemLog("➕ Task queued: $desc (priority=$priority)")
+                        updateTaskState()
+                        // Stop loop — task has been queued, no further reasoning needed
+                        return false to "Task queued: $desc."
+                    }
+                    "list_tasks" -> {
+                        val context = taskMemory?.getContextForAI() ?: "No task system available."
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("user" to "[Task List]:\n$context")
+                        }
+                    }
+                    "cancel_task" -> {
+                        val taskId = params["task_id"] ?: ""
+                        val cancelled = taskEngine?.cancelTask(taskId) ?: false
+                        if (cancelled) {
+                            addSystemLog("🚫 Task cancelled: $taskId")
+                        } else {
+                            addSystemLog("⚠️ Could not cancel task: $taskId")
+                        }
+                        updateTaskState()
+                    }
+                    "remember" -> {
+                        val key = params["key"] ?: ""
+                        val value = params["value"] ?: ""
+                        if (key.isNotBlank()) {
+                            saveMemory(key, value)
+                            addSystemLog("💾 Remembered: $key")
+                        }
+                    }
+                    "recall" -> {
+                        val key = params["key"] ?: ""
+                        val value = recallMemory(key)
+                        synchronized(conversationHistory) {
+                            conversationHistory.add("user" to "[Memory Recall] $key: $value")
+                        }
+                    }
+                    "complete" -> { 
+                        finalSummary = params["summary"]
+                        return false to finalSummary 
+                    }
+                }
+                delay(800)
+            }
+            
+            if (!toolsInvoked) return false to null
+            
+            // Only refresh screen if device actions were performed
+            if (needsScreenRefresh && service != null) {
+                delay(1500)
+                // Update the screen context variable instead of polluting conversation history
+                lastScreenContext = "\n[Current State]:\n${service.getDroidrunPhoneState()}\n\n${service.getDroidrunScreenTree()}"
+                synchronized(conversationHistory) { 
+                    conversationHistory.add("user" to "[Screen Updated]$lastScreenContext") 
+                }
+            }
+            return true to null
+        } catch (e: Exception) { 
+            Log.e(TAG, "Tool loop error: ${e.message}")
+            return false to null
+        }
+    }
+
+    private fun saveWorkflows(context: Context) {
+        val json = JSONObject()
+        synchronized(workflows) { workflows.forEach { (k, v) -> json.put(k, v) } }
+        prefs(context).edit().putString("saved_workflows", json.toString()).apply()
+    }
+
+    private fun loadWorkflows(prefs: SharedPreferences) {
+        try {
+            val json = JSONObject(prefs.getString("saved_workflows", "{}") ?: "{}")
+            synchronized(workflows) { json.keys().forEach { k -> workflows[k] = json.getString(k) } }
+        } catch (_: Exception) {}
+    }
+
+    fun saveConversation(context: Context) {
+        val arr = JSONArray()
+        _uiState.value.logs.takeLast(30).forEach { log ->
+            arr.put(JSONObject().apply { put("sender", log.sender); put("text", log.text); put("isError", log.isError) })
+        }
+        prefs(context).edit().putString("saved_conversation", arr.toString()).apply()
+    }
+
+    private fun restoreConversation(prefs: SharedPreferences): Boolean {
+        try {
+            val arr = JSONArray(prefs.getString("saved_conversation", "[]") ?: "[]")
+            val restored = mutableListOf<LogEntry>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                restored.add(LogEntry(sender = o.getString("sender"), text = o.getString("text"), isError = o.optBoolean("isError", false)))
+            }
+            _uiState.update { it.copy(logs = restored) }
+            return true
+        } catch (_: Exception) { return false }
+    }
+
+    fun clearConversation(context: Context) {
+        _uiState.update { it.copy(logs = emptyList()) }
+        conversationHistory.clear()
+        saveConversation(context)
+    }
+
+    fun startScheduler() {
+        if (schedulerJob != null) return
+        schedulerJob = viewModelScope.launch { while (true) { delay(30000); checkScheduledTasks() } }
+    }
+
+    private fun checkScheduledTasks() {
+        val now = System.currentTimeMillis()
+        // Use the new task engine for scheduled tasks
+        val dueTasks = taskMemory?.getDueTasks() ?: emptyList()
+        dueTasks.forEach { task ->
+            taskMemory?.updateTaskStatus(task.id, TaskStatus.QUEUED)
+            Log.i(TAG, "Scheduled task due: ${task.description}")
+        }
+        
+        // Legacy support for old ScheduledTask format
+        scheduledTasks.forEach { 
+            if (it.status == "pending" && it.executeAt <= now) {
+                // Migrate to new system
+                taskEngine?.queueCommand(it.command, "scheduler")
+            }
+        }
+        scheduledTasks.removeAll { it.status == "pending" && it.executeAt <= now }
+        _uiState.update { it.copy(scheduledTasks = scheduledTasks.toList()) }
+        updateTaskState()
+    }
+
+    fun cancelTask(taskId: String) { taskEngine?.cancelTask(taskId) }
+
+    fun scheduleTask(description: String, command: String, delayMinutes: Int): String {
+        val executeAt = System.currentTimeMillis() + (delayMinutes * 60000L)
+        val task = AgentTask(
+            description = description,
+            command = command,
+            status = TaskStatus.PENDING,
+            executeAt = executeAt,
+            source = "user"
+        )
+        taskMemory?.addTask(task)
+        val context = SynapseAccessibilityService.instance
+        if (context != null) {
+            TaskAlarmReceiver.scheduleTaskAlarm(context, task.id, executeAt)
+        }
+        updateTaskState()
+        return "Scheduled: $description (in ${delayMinutes}min)"
+    }
+
+
+
+    fun addSystemLog(text: String) { addLog(LogEntry(sender = "SYSTEM", text = text)) }
+    private fun prefs(context: Context) = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+    override fun onCleared() { 
+        super.onCleared()
+        taskEngine?.stop()
+        closeAllModels() 
+    }
+}
