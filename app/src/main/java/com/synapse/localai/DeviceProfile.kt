@@ -21,8 +21,8 @@ object DeviceProfile {
     // ubatch is for generation speed.
     fun optimalUbatch(hw: HardwareProfile): Int = 128
     
-    // Smart Threading: Use all available cores for maximum performance
+    // Smart Threading: Use up to 4 big cores for max efficiency (avoids little core bottleneck)
     fun optimalThreads(hw: HardwareProfile): Int {
-        return hw.cores
+        return Math.min(4, hw.cores)
     }
 }

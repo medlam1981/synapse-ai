@@ -30,7 +30,7 @@ class GGUFModelClient {
         private const val DEFAULT_HOST = "127.0.0.1" // Prefer localhost
         private const val DEFAULT_PORT = 11434
         private const val SERVER_START_TIMEOUT_MS = 300_000L
-        private const val SERVER_POLL_INTERVAL_MS = 2_000L
+        private const val SERVER_POLL_INTERVAL_MS = 500L
 
         private fun fileLog(msg: String) {
             Log.d(TAG, msg)
@@ -181,6 +181,8 @@ class GGUFModelClient {
                 "-m", resolvedPath,
                 "-c", contextLength.toString(),
                 "-np", "1",
+                "-ngl", "99",
+                "--flash-attn",
                 "-b", batchSize.toString(),
                 "-ub", ubatchSize.toString(),
                 "-t", threads.toString(),
