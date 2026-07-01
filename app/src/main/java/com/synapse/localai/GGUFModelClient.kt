@@ -181,8 +181,6 @@ class GGUFModelClient {
                 "-m", resolvedPath,
                 "-c", contextLength.toString(),
                 "-np", "1",
-                "-ngl", "99",
-                "--flash-attn",
                 "-b", batchSize.toString(),
                 "-ub", ubatchSize.toString(),
                 "-t", threads.toString(),
