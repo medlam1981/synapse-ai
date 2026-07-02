@@ -1,0 +1,484 @@
+--------- beginning of main
+02-11 19:55:05.932   591   591 W linker  : Warning: failed to find generated linker configuration from "/linkerconfig/ld.config.txt"
+02-11 19:55:05.948   592   592 W linker  : Warning: failed to find generated linker configuration from "/linkerconfig/ld.config.txt"
+02-11 19:55:05.973   590   590 I lowmemorykiller: Wakeup counter is reset from 0 to 0
+02-11 19:55:05.974   590   590 I lowmemorykiller: Using psi monitors for memory pressure detection
+02-11 19:55:05.975   590   590 I lowmemorykiller: Process polling is supported
+02-11 19:55:05.977   590   590 I lowmemorykiller: Process reaping is not supported
+02-11 19:55:05.981   590   596 W libprocessgroup: A JoinCgroup action in the SystemMemoryProcess profile is used for controller memory in the cgroup v2 hierarchy and will be ignored
+02-11 19:55:06.009   592   592 E hwservicemanager: libvintf-usage-violation: Executable /system/system_ext/bin/hwservicemanager should not use libvintf. It should query VINTF metadata via servicemanager
+02-11 19:55:06.014   592   592 I hwservicemanager: getFrameworkHalManifest: Reading VINTF information.
+01-01 00:00:00.519   589   589 W auditd  : type=2000 audit(0.0:1): state=initialized audit_enabled=0 res=1
+02-11 19:55:04.099   589   589 I auditd  : type=1403 audit(0.0:2): policy loaded auid=4294967295 ses=4294967295
+02-11 19:55:04.099   589   589 W auditd  : type=1404 audit(0.0:3): enforcing=1 old_enforcing=0 auid=4294967295 ses=4294967295
+02-11 19:55:04.169     1     1 W /system/bin/init: type=1107 audit(0.0:4): uid=0 auid=4294967295 ses=4294967295 subj=u:r:init:s0 msg='avc:  denied  { set } for property=ro.apk_verity.mode pid=1 uid=0 gid=0 scontext=u:r:vendor_init:s0 tcontext=u:object_r:default_prop:s0 tclass=property_service permissive=0'
+02-11 19:55:06.043   592   592 I hwservicemanager: Loaded APEX Infos from /bootstrap-apex/apex-info-list.xml
+02-11 19:55:06.043   592   592 I hwservicemanager: getDeviceHalManifest: Reading VINTF information.
+02-11 19:55:06.046   592   592 I hwservicemanager: Loaded APEX Infos from /bootstrap-apex/apex-info-list.xml
+02-11 19:55:06.077   592   592 I hwservicemanager: Loaded APEX Infos from /bootstrap-apex/apex-info-list.xml
+02-11 19:55:06.077   592   592 I hwservicemanager: getDeviceHalManifest: Successfully processed VINTF information
+02-11 19:55:06.077   592   592 I hwservicemanager: getFrameworkHalManifest: Successfully processed VINTF information
+02-11 19:55:06.090   604   604 D QSEECOMD: : qseecom listener services process entry PPID = 1
+02-11 19:55:06.090   604   604 E QSEECOMD: : Listener: index = 0, hierarchy = 0
+02-11 19:55:06.093   592   592 I hwservicemanager: hwservicemanager is ready now.
+02-11 19:55:06.093   605   605 E cutils-trace: Error opening trace file: No such file or directory (2)
+02-11 19:55:06.094   592   592 E cutils-trace: Error opening trace file: No such file or directory (2)
+02-11 19:55:06.095   604   604 D QSEECOMD: : Init dlopen(librpmb.so, RTLD_NOW) succeeds
+02-11 19:55:06.095   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle rpmb_init_service) succeeds
+02-11 19:55:06.096   604   604 I rpmb_emmc: RPMB Mult (512-bytes sector) = 32768, Rel_sec_cnt = 32
+02-11 19:55:06.096   604   604 E DrmLibRpmb: rpmb_init succeeded! with ret = 0
+02-11 19:55:06.096   604   604 D QSEECOMD: : Init rpmb_init_service ret = 0
+02-11 19:55:06.096   604   604 D QSEECOMD: : RPMB system services: init (Listener ID = 8192)
+02-11 19:55:06.096   604   604 E QSEECOMD: : Listener: index = 1, hierarchy = 0
+02-11 19:55:06.097   604   604 D QSEECOMD: : Init dlopen(libssd.so, RTLD_NOW) succeeds
+02-11 19:55:06.097   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle ssd_init_service) succeeds
+02-11 19:55:06.097   604   604 E SSD     : ssd_init_service succeeded!
+02-11 19:55:06.097   604   604 D QSEECOMD: : Init ssd_init_service ret = 0
+02-11 19:55:06.097   604   604 D QSEECOMD: : SSD system services: init (Listener ID = 12288)
+02-11 19:55:06.097   604   604 D QSEECOMD: : qseecom listener service threads starting!!! 
+02-11 19:55:06.097   604   604 D QSEECOMD: : Total listener services to start = 10
+02-11 19:55:06.097   604   604 E QSEECOMD: : Listener: index = 0, hierarchy = 1
+02-11 19:55:06.098   604   604 D QSEECOMD: : Init dlopen(librpmb.so, RTLD_NOW) succeeds
+02-11 19:55:06.098   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle rpmb_start) succeeds
+02-11 19:55:06.098   604   604 D QSEECOMAPI: QSEECom_register_listener 8192 sb_length = 0x6400
+02-11 19:55:06.100   604   604 D QSEECOMD: : Init rpmb_start ret = 0
+02-11 19:55:06.100   604   604 D QSEECOMD: : RPMB system services: Started (Listener ID = 8192)
+02-11 19:55:06.100   604   604 E QSEECOMD: : Listener: index = 1, hierarchy = 1
+02-11 19:55:06.100   604   604 D QSEECOMD: : Init dlopen(libssd.so, RTLD_NOW) succeeds
+02-11 19:55:06.100   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle ssd_start) succeeds
+02-11 19:55:06.100   604   604 D QSEECOMAPI: QSEECom_register_listener 12288 sb_length = 0x5000
+02-11 19:55:06.101   604   604 D QSEECOMD: : Init ssd_start ret = 0
+02-11 19:55:06.101   604   604 D QSEECOMD: : SSD system services: Started (Listener ID = 12288)
+02-11 19:55:06.101   604   604 E QSEECOMD: : Listener: index = 2, hierarchy = 1
+02-11 19:55:06.120   605   605 I HidlServiceManagement: Registered vendor.qti.hardware.qseecom@1.0::IQSEECom/default
+02-11 19:55:06.120   605   605 I HidlServiceManagement: Removing namespace from process name vendor.qti.hardware.qseecom@1.0-service to qseecom@1.0-service.
+02-11 19:55:06.120   605   605 I QSEECOM_SERVICE: IQSEECom registerAsService is successful
+02-11 19:55:06.150   604   604 D QSEECOMD: : Init dlopen(libsecureui.so, RTLD_NOW) succeeds
+02-11 19:55:06.150   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle secure_ui_start) succeeds
+02-11 19:55:06.150   604   604 D QSEECOMAPI: QSEECom_register_listener 16384 sb_length = 0x10a8
+02-11 19:55:06.151   604   604 D QSEECOMD: : Init secure_ui_start ret = 0
+02-11 19:55:06.151   604   604 D QSEECOMD: : secure UI services: Started (Listener ID = 16384)
+02-11 19:55:06.151   604   604 E QSEECOMD: : Listener: index = 3, hierarchy = 1
+02-11 19:55:06.156   604   604 D QSEECOMD: : Init dlopen(libdrmtime.so, RTLD_NOW) succeeds
+02-11 19:55:06.156   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle atime_start) succeeds
+02-11 19:55:06.156   604   604 D DrmLibTime: QSEE Time Listener: atime_start
+02-11 19:55:06.156   604   604 D QSEECOMAPI: QSEECom_register_listener 11 sb_length = 0x5000
+02-11 19:55:06.156   604   604 D DrmLibTime: registering fs service to QSEECom is done!
+02-11 19:55:06.157   604   604 D DrmLibTime: begin to create a thread!
+02-11 19:55:06.157   604   604 D DrmLibTime: Creating a pthread in atime_start is done! return 0
+02-11 19:55:06.157   604   604 D QSEECOMD: : Init atime_start ret = 0
+02-11 19:55:06.157   604   604 D QSEECOMD: : time services: Started (Listener ID = 11)
+02-11 19:55:06.157   604   604 E QSEECOMD: : Listener: index = 4, hierarchy = 1
+02-11 19:55:06.157   604   620 D DrmLibTime: QSEE Time Listener: dispatch
+02-11 19:55:06.157   604   604 D QSEECOMD: : Init dlopen(libdrmfs.so, RTLD_NOW) succeeds
+02-11 19:55:06.157   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle fs_start) succeeds
+02-11 19:55:06.157   604   604 D QSEECOMAPI: QSEECom_register_listener 10 sb_length = 0x5000
+02-11 19:55:06.158   604   604 D QSEECOMD: : Init fs_start ret = 0
+02-11 19:55:06.158   604   604 D QSEECOMD: : file system services: Started (Listener ID = 10)
+02-11 19:55:06.158   604   604 E QSEECOMD: : Listener: index = 5, hierarchy = 1
+02-11 19:55:06.158   604   604 D QSEECOMD: : Init dlopen(libdrmfs.so, RTLD_NOW) succeeds
+02-11 19:55:06.158   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle gpfs_start) succeeds
+02-11 19:55:06.158   604   620 D DrmLibTime: before calling ioctl to read the next time_cmd
+02-11 19:55:06.176   604   604 D QSEECOMAPI: QSEECom_register_listener 28672 sb_length = 0x7e000
+02-11 19:55:06.177   604   604 D QSEECOMD: : Init gpfs_start ret = 0
+02-11 19:55:06.177   604   604 D QSEECOMD: : gpfile system services: Started (Listener ID = 28672)
+02-11 19:55:06.177   604   604 E QSEECOMD: : Listener: index = 6, hierarchy = 1
+02-11 19:55:06.180   604   604 D QSEECOMD: : Init dlopen(libqisl.so, RTLD_NOW) succeeds
+02-11 19:55:06.180   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle qisl_start) succeeds
+--------- beginning of system
+02-11 19:55:06.180   604   624 I QISL    : QSEE Interrupt Service Listener Thread is started
+02-11 19:55:06.180   604   624 D QSEECOMAPI: QSEECom_register_listener 36864 sb_length = 0x1f4
+02-11 19:55:06.181   604   624 I QISL    : QSEE Interrupt Service Listener was activated successfully
+02-11 19:55:06.181   604   604 D QSEECOMD: : Init qisl_start ret = 0
+02-11 19:55:06.181   604   604 D QSEECOMD: : interrupt services: Started (Listener ID = 36864)
+02-11 19:55:06.181   604   604 E QSEECOMD: : Listener: index = 7, hierarchy = 1
+02-11 19:55:06.181   604   604 E QSEECOMD: : Init dlopen(libspl.so, RLTD_NOW) is failed.... dlopen failed: library "libspl.so" not found
+02-11 19:55:06.181   604   604 E QSEECOMD: : Listener: index = 8, hierarchy = 1
+02-11 19:55:06.198   604   604 D QSEECOMD: : Init dlopen(libGPreqcancel.so, RTLD_NOW) succeeds
+02-11 19:55:06.198   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle gp_reqcancel_start) succeeds
+02-11 19:55:06.198   604   604 D QSEECOMAPI: QSEECom_register_listener 4352 sb_length = 0x5000
+02-11 19:55:06.198   604   604 D QSEECOMD: : Init gp_reqcancel_start ret = 0
+02-11 19:55:06.198   604   604 D QSEECOMD: : gp request cancellation services: Started (Listener ID = 4352)
+02-11 19:55:06.198   604   604 E QSEECOMD: : Listener: index = 9, hierarchy = 1
+02-11 19:55:06.206   611   611 I vold    : Vold 3.0 (the awakening) firing up
+02-11 19:55:06.207   611   611 D vold    : Detected support for: exfat ext4 f2fs ntfs vfat
+02-11 19:55:06.207   604   604 D QSEECOMD: : Init dlopen(libops.so, RTLD_NOW) succeeds
+02-11 19:55:06.207   604   604 D QSEECOMD: : Init::Init dlsym(g_FSHandle ops_start) succeeds
+02-11 19:55:06.207   604   604 D OPS_SERVICE: Entering ops_start!
+02-11 19:55:06.207   604   604 D QSEECOMAPI: QSEECom_register_listener 49152 sb_length = 0x6400
+02-11 19:55:06.208   604   604 D OPS_SERVICE: registering ops service to QSEECom is done!
+02-11 19:55:06.208   604   604 D OPS_SERVICE: begin to create a thread!
+02-11 19:55:06.209   604   604 D OPS_SERVICE: Creating a pthread in ops_start is done! return 0
+02-11 19:55:06.209   604   604 D QSEECOMD: : Init ops_start ret = 0
+02-11 19:55:06.209   604   604 D QSEECOMD: : output protection service listener: Started (Listener ID = 49152)
+02-11 19:55:06.210   604   604 D QSEECOMD: : QSEECOM DAEMON RUNNING 
+02-11 19:55:06.213   603   603 D QSEECOMAPI: QSEECom_get_handle sb_length = 0xa000
+02-11 19:55:06.213   604   626 D OPS_SERVICE: OPS_SERVICE Dispatch starts! 
+02-11 19:55:06.214   604   626 D OPS_SERVICE: before calling ioctl to read the next ops_cmd
+02-11 19:55:06.214   603   603 D QSEECOMAPI: App is already loaded QSEE and app id = 1
+02-11 19:55:06.214   611   611 I vold    : [libfstab] Using Android DT directory /proc/device-tree/firmware/android/
+02-11 19:55:06.216   611   611 W libbinder.BackendUnifiedServiceManager: Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: vold
+02-11 19:55:06.217   603   603 E KeymasterUtils: TA API Major Version: 4
+02-11 19:55:06.217   603   603 E KeymasterUtils: TA API Minor Version: 0
+02-11 19:55:06.217   603   603 E KeymasterUtils: TA Major Version: 4
+02-11 19:55:06.217   603   603 E KeymasterUtils: TA Minor Version: 529
+02-11 19:55:06.217   611   611 D vold    : VoldNativeService::start() completed OK
+02-11 19:55:06.225   611   611 D vold    : VendorVoldNativeService::try_start() completed OK
+02-11 19:55:06.227   609   609 E cutils-trace: Error opening trace file: No such file or directory (2)
+02-11 19:55:06.230   603   603 E cutils-trace: Error opening trace file: No such file or directory (2)
+02-11 19:55:06.232   609   609 I HidlServiceManagement: Registered vendor.qti.hardware.display.allocator@3.0::IQtiAllocator/default
+02-11 19:55:06.232   609   609 I HidlServiceManagement: Removing namespace from process name vendor.qti.hardware.display.allocator-service to allocator-service.
+02-11 19:55:06.232   603   603 I HidlServiceManagement: Registered android.hardware.keymaster@4.0::IKeymasterDevice/default
+02-11 19:55:06.232   609   609 I qdgralloc: Initialized qti-allocator 3
+02-11 19:55:06.233   603   603 I HidlServiceManagement: Removing namespace from process name android.hardware.keymaster@4.0-service-qti to keymaster@4.0-service-qti.
+02-11 19:55:06.233   609   609 I HidlServiceManagement: Registered vendor.qti.hardware.display.allocator@4.0::IQtiAllocator/default
+02-11 19:55:06.233   609   609 I HidlServiceManagement: Removing namespace from process name vendor.qti.hardware.display.allocator-service to allocator-service.
+02-11 19:55:06.233   609   609 I qdgralloc: Initialized qti-allocator 4
+02-11 19:55:06.239   622   622 W e2fsck  : type=1400 audit(0.0:5): avc:  denied  { kill } for  capability=5  scontext=u:r:fsck:s0 tcontext=u:r:fsck:s0 tclass=capability permissive=0
+02-11 19:55:06.329   608   608 E cutils-trace: Error opening trace file: No such file or directory (2)
+02-11 19:55:06.330   608   608 I SDM     : HWCSession::Register: Set uevent listener = 0xb400007a0339ea00
+02-11 19:55:06.330   608   608 I SDM     : HWCSession::Init: builtin_powermode_override: 0
+02-11 19:55:06.330   608   608 I SDM     : HWCSession::Init: override_doze_mode: 0
+02-11 19:55:06.363   608   608 I SDM     : HWInfoDRM::GetHWPlanesInfo: Adding VIG Pipe : Id 52, master_pipe_id : Id 0 block_sec_ui: 1 hw_block_mask: 0x3
+02-11 19:55:06.363   608   608 I SDM     : HWInfoDRM::GetHWPlanesInfo: Adding DMA Pipe : Id 72, master_pipe_id : Id 0 block_sec_ui: 0 hw_block_mask: 0x3
+02-11 19:55:06.363   608   608 I SDM     : HWInfoDRM::GetHWPlanesInfo: Adding DMA Pipe : Id 75, master_pipe_id : Id 0 block_sec_ui: 1 hw_block_mask: 0x3
+02-11 19:55:06.363   608   608 I SDM     : HWInfoDRM::GetHWPlanesInfo: Adding DMA Pipe : Id 78, master_pipe_id : Id 72 block_sec_ui: 0 hw_block_mask: 0x3
+02-11 19:55:06.363   608   608 I SDM     : HWInfoDRM::GetHWPlanesInfo: Adding DMA Pipe : Id 82, master_pipe_id : Id 75 block_sec_ui: 1 hw_block_mask: 0x3
+02-11 19:55:06.363   608   608 I SDM     : HWInfoDRM::GetHWPlanesInfo: Adding DMA Pipe : Id 85, master_pipe_id : Id 52 block_sec_ui: 1 hw_block_mask: 0x3
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max plane width = 2160
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max cursor width = 128
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max plane upscale = 20
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max plane downscale = 4
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Has Decimation = 1
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max Blending Stages = 6
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Has Source Split = 0
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Has QSEED3 = 1
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Has UBWC = 1
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Has Concurrent Writeback = 1
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Has Src Tonemap = 0
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max Low Bw = 4100000
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max High Bw = 4100000
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Max Pipe Bw = 4500000 KBps
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: MaxSDEClock = 400000000 Hz
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Clock Fudge Factor = 1.050000
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: Prefill factors:
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: 	Tiled_NV12 = 8
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: 	Tiled = 4
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: 	Linear = 1
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: 	Scale = 1
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: 	Fudge_factor = 2
+02-11 19:55:06.364   608   608 I SDM     : HWInfoDRM::GetHWResourceInfo: 	ib_fudge_factor = 6.000000
+02-11 19:55:06.359   641   641 W e2fsck  : type=1400 audit(0.0:6): avc:  denied  { kill } for  capability=5  scontext=u:r:fsck:s0 tcontext=u:r:fsck:s0 tclass=capability permissive=0
+02-11 19:55:06.366   608   608 I SDM     : HWInfoDRM::GetHWRotatorInfo: V4L2 Rotator: Count = 1, Downscale = 1, Min_downscale = 1.500000,Downscale_compression = 1, Max_line_width = 4096
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: Smart DMA: Enabled
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: Pipe Priority Order: Disabled
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: Prefer multirect Disabled
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type = 1 Real pipe_id = 52 priority = 0 tonemap = 0
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type = 3 Real pipe_id = 72 priority = 1 tonemap = 0
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type = 3 Real pipe_id = 75 priority = 2 tonemap = 0
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type = 3 Virtual pipe_id = 78 priority = 3 tonemap = 0
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type = 3 Virtual pipe_id = 82 priority = 4 tonemap = 0
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type = 3 Virtual pipe_id = 85 priority = 5 tonemap = 0
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: Registered  Total Pipes = 6 SDma/virtual_pipes = 3
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type=3 Real pipe_id =75
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type=3 Real pipe_id =72
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type=1 Real pipe_id =52
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type=3 Virtual pipe_id =78
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type=3 Virtual pipe_id =82
+02-11 19:55:06.366   608   608 I SDM     : PipeAllocDrm::Init: pipe->type=3 Virtual pipe_id =85
+02-11 19:55:06.367   606   606 E cutils-trace: Error opening trace file: No such file or directory (2)
+02-11 19:55:06.368   592   592 I hwservicemanager: getTransport: Cannot find entry android.hardware.configstore@1.0::ISurfaceFlingerConfigs/default in either framework or device VINTF manifest.
+02-11 19:55:06.375   608   608 D SDM     : ToneMapConfigFactory::Create: Creating ToneMapConfigDummy
+02-11 19:55:06.376   608   608 I SDM     : HWInfoDRM::GetDisplaysStatus: display:   28-0, connected: true, primary: true
+02-11 19:55:06.376   608   608 I SDM     : HWInfoDRM::GetDisplaysStatus: display:   44-2, connected: true, primary: false
+02-11 19:55:06.376   608   608 I SDM     : CoreInterface::CreateCore: Open interface handle = 0xb400007a0339c9d0
+02-11 19:55:06.377   608   608 I SDM     : HWInfoDRM::GetMaxDisplaysSupported: Max 2 concurrent displays.
+02-11 19:55:06.377   608   608 I SDM     : HWInfoDRM::GetMaxDisplaysSupported: Max 1 concurrent displays of type 0 (BuiltIn).
+02-11 19:55:06.377   608   608 I SDM     : HWInfoDRM::GetMaxDisplaysSupported: Max 0 concurrent displays of type 1 (Pluggable).
+02-11 19:55:06.377   608   608 I SDM     : HWInfoDRM::GetMaxDisplaysSupported: Max 1 concurrent displays of type 2 (Virtual).
+02-11 19:55:06.378   608   608 I SDM     : CPUHint::Init: Invalid CPU Hint Pre-enable Window -1
+02-11 19:55:06.379   608   608 I SDM     : HWDeviceDRM::InitializeConfigs: Updating current display mode 0 to preferred mode 0.
+02-11 19:55:06.379   608   608 I SDM     : HWDeviceDRM::PopulateDisplayAttributes: Display attributes[0]: WxH: 1080x2340, DPI: 409.432831x409.903442, FPS: 60, LM_SPLIT: 0, V_BACK_PORCH: 8, V_FRONT_PORCH: 10, V_PULSE_WIDTH: 3, V_TOTAL: 2361, H_TOTAL: 1292, CLK: 183024KHZ, TOPOLOGY: 1
+02-11 19:55:06.379   608   608 I SDM     : HWDeviceDRM::UpdateMixerAttributes: Mixer WxH 1080x2340 for Peripheral
+02-11 19:55:06.379   608   608 I SDM     : ColorManager::CreateColorManagerProxy: PAV2 version is versions = 11, version = 11 
+02-11 19:55:06.387   608   608 I SDM     : DisplayBase::InitializeColorModes: Number of Color Modes = 4
+02-11 19:55:06.388   608   608 W SDM     : DisplayBase::GetColorPrimariesFromAttribute: Native Gamut found, returning default: sRGB
+02-11 19:55:06.388   608   608 W SDM     : DisplayBase::GetColorPrimariesFromAttribute: Native Gamut found, returning default: sRGB
+02-11 19:55:06.389   608   608 W SDM     : DisplayBase::GetColorPrimariesFromAttribute: Native Gamut found, returning default: sRGB
+02-11 19:55:06.389   608   608 W SDM     : DisplayBase::GetColorPrimariesFromAttribute: Native Gamut found, returning default: sRGB
+02-11 19:55:06.390   608   608 W SDM     : ColorManager::CombineColorModes: Failed to get cached factory color modes
+02-11 19:55:06.390   608   608 I SDM     : StrategyImpl::SetIdleTimeoutMs: Idle timeout: active = 70, inactive = 520
+02-11 19:55:06.390   608   608 I SDM     : ResourceImpl::RegisterDisplay: Registering display 28-0 with hw_block 0-0
+02-11 19:55:06.390   608   608 I SDM     : StrategyImpl::SetColorModesInfo: Display = 28-0 Num color modes(blend spaces) = 1
+02-11 19:55:06.390   608   608 I SDM     : DisplayBase::Init: disable_hw_recovery_dump_ set to 1
+02-11 19:55:06.390   608   608 I SDM     : HWEventsDRM::Init: Setup event handler for display 28-0, CRTC 88, Connector 28
+02-11 19:55:06.391   608   608 I SDM     : HWEventsDRM::RegisterIdlePowerCollapse: idle power collapse is not supported event
+02-11 19:55:06.391   608   608 I SDM     : HWEventsDRM::Init: disable_hw_recovery_ set to 0
+02-11 19:55:06.391   608   608 I SDM     : HWCDisplay::UpdateConfigs: num_configs = 1 smart_panel_config_ = 0
+02-11 19:55:06.391   608   608 I SDM     : HWCDisplay::Init: Display created with id: 0
+02-11 19:55:06.391   608   608 I SDM     : DisplayBase::GetColorModes: ColorMode name = none1
+02-11 19:55:06.391   608   608 I SDM     : DisplayBase::GetColorModes: ColorMode name = none2
+02-11 19:55:06.391   608   608 I SDM     : DisplayBase::GetColorModes: ColorMode name = none3
+02-11 19:55:06.391   608   608 I SDM     : DisplayBase::GetColorModes: ColorMode name = sRGB
+02-11 19:55:06.391   608   608 I SDM     : HWCDisplayBuiltIn::Init: Drop redundant drawcycles 0
+02-11 19:55:06.391   608   608 W SDM     : HWCDisplayBuiltIn::Init: File '/sys/class/lcd_bias/secure_mode' could not be opened. errno = 13, desc = Permission denied
+02-11 19:55:06.391   608   608 I SDM     : StrategyImpl::SetIdleTimeoutMs: Idle timeout: active = 70, inactive = 520
+02-11 19:55:06.391   608   608 I SDM     : DisplayBase::SetFrameBufferConfig: New framebuffer resolution (1080x2340)
+02-11 19:55:06.394   606   606 I SurfaceFlinger: Using HWComposer service: default
+02-11 19:55:06.394   606   606 I SurfaceFlinger: SurfaceFlinger is starting
+02-11 19:55:06.395   606   606 I SurfaceFlinger: Disabling backpressure propagation
+02-11 19:55:06.395   606   606 I SurfaceFlinger: Enabling backpressure for GPU composition
+02-11 19:55:06.397   606   606 W libprocessgroup: A JoinCgroup action in the SystemMemoryProcess profile is used for controller memory in the cgroup v2 hierarchy and will be ignored
+02-11 19:55:06.398   606   606 I SurfaceFlinger: SurfaceFlinger's main thread ready to run. Initializing graphics H/W...
+02-11 19:55:06.399   608   608 I SDM     : HWCDisplay::SetFrameBufferResolution: New framebuffer resolution (1080x2340)
+02-11 19:55:06.399   608   608 I SDM     : HWCSession::CreatePrimaryDisplay: Create primary display type = 0, sdm id = 28, client id = 0
+02-11 19:55:06.399   608   608 I SDM     : HWCDisplay::GetHdrCapabilities: HDR is not supported
+02-11 19:55:06.401   606   606 D SurfaceFlinger: Threaded RenderEngine with SkiaGL Backend (Ganesh)
+02-11 19:55:06.403   608   608 I SDM     : HWCColorManager::CreateColorManager: Successfully loaded libsdm-disp-vndapis.so
+02-11 19:55:06.404   608   608 I HidlServiceManagement: Registered vendor.display.config@2.0::IDisplayConfig/default
+02-11 19:55:06.404   608   608 I SDM     : HWCSession::StartServices: IDisplayConfig service registration completed.
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 44 (SetLayerFloatColor)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 55 (SetLayerColorTransform)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 56 (GetDisplayedContentSamplingAttributes)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 57 (SetDisplayedContentSamplingEnabled)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 58 (GetDisplayedContentSample)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 68 (GetClientTargetProperty)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 69 (SetLayerGenericMetadata)
+02-11 19:55:06.405   608   608 D SDM     : HWCSession::GetFunction: Unknown/Unimplemented function descriptor: 70 (GetLayerGenericMetadataKey)
+02-11 19:55:06.406   608   608 I HidlServiceManagement: Registered android.hardware.graphics.composer@2.4::IComposer/default
+02-11 19:55:06.406   608   608 I HidlServiceManagement: Removing namespace from process name android.hardware.graphics.composer@2.4-service to composer@2.4-service.
+02-11 19:55:06.482   652   652 I aconfigd_system: main: Starting aconfigd_system command: PlatformInit
+02-11 19:55:06.488   652   652 D aconfigd_system: aconfigd_rust::storage_files: create vendor storage files object from pb entry
+02-11 19:55:06.489   652   652 D aconfigd_system: aconfigd_rust::storage_files: create product storage files object from pb entry
+02-11 19:55:06.490   652   652 D aconfigd_system: aconfigd_rust::storage_files: create system storage files object from pb entry
+02-11 19:55:06.492   652   652 D aconfigd_system: aconfigd_rust::storage_files: create system_ext storage files object from pb entry
+02-11 19:55:06.492   652   652 D aconfigd_system: aconfigd_rust::aconfigd: start initialize system flags
+02-11 19:55:06.500   652   652 D aconfigd_system: aconfigd_rust::storage_files_manager: no need to update system, computed digest matches with record
+02-11 19:55:06.500   652   652 D aconfigd_system: aconfigd_rust::aconfigd: start initialize system_ext flags
+02-11 19:55:06.504   652   652 D aconfigd_system: aconfigd_rust::storage_files_manager: no need to update system_ext, computed digest matches with record
+02-11 19:55:06.504   652   652 D aconfigd_system: aconfigd_rust::aconfigd: start initialize product flags
+02-11 19:55:06.507   652   652 D aconfigd_system: aconfigd_rust::storage_files_manager: no need to update product, computed digest matches with record
+02-11 19:55:06.507   652   652 D aconfigd_system: aconfigd_rust::aconfigd: start initialize vendor flags
+02-11 19:55:06.511   652   652 D aconfigd_system: aconfigd_rust::storage_files_manager: no need to update vendor, computed digest matches with record
+02-11 19:55:06.511   652   652 D aconfigd_system: aconfigd_rust::storage_files_manager: writing updated storage records /metadata/aconfig/platform_storage_records.pb
+02-11 19:55:06.516   652   652 D aconfigd_system: aconfigd_rust::storage_files_manager: no OTA flags staged, skip
+02-11 19:55:06.517   652   652 D aconfigd_system: aconfigd_rust::storage_files: reuse boot storage files for container system
+02-11 19:55:06.517   652   652 D aconfigd_system: aconfigd_rust::storage_files: reuse boot storage files for container system_ext
+02-11 19:55:06.517   652   652 D aconfigd_system: aconfigd_rust::storage_files: reuse boot storage files for container product
+02-11 19:55:06.518   652   652 D aconfigd_system: aconfigd_rust::storage_files: reuse boot storage files for container vendor
+02-11 19:55:06.553   653   653 I HidlServiceManagement: Registered android.system.suspend@1.0::ISystemSuspend/default
+02-11 19:55:06.553   653   653 I HidlServiceManagement: Removing namespace from process name android.system.suspend-service to suspend-service.
+02-11 19:55:06.556   655   655 D QSEECOMAPI: QSEECom_get_handle sb_length = 0xa000
+02-11 19:55:06.556   655   655 D QSEECOMAPI: App is already loaded QSEE and app id = 1
+02-11 19:55:06.560   655   655 E KeymasterUtils: TA API Major Version: 4
+02-11 19:55:06.560   655   655 E KeymasterUtils: TA API Minor Version: 0
+02-11 19:55:06.560   655   655 E KeymasterUtils: TA Major Version: 4
+02-11 19:55:06.560   655   655 E KeymasterUtils: TA Minor Version: 529
+02-11 19:55:06.549   656   656 W fsck.f2fs: type=1400 audit(0.0:7): avc:  denied  { getattr } for  path="/sys/devices/platform/soc/4744000.sdhci/mmc_host/mmc0/mmc0:0001/block/mmcblk0/mmcblk0p87/partition" dev="sysfs" ino=51316 scontext=u:r:fsck:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+02-11 19:55:06.563   655   655 I HidlServiceManagement: Registered android.hardware.gatekeeper@1.0::IGatekeeper/default
+02-11 19:55:06.563   655   655 I HidlServiceManagement: Removing namespace from process name android.hardware.gatekeeper@1.0-service-qti to gatekeeper@1.0-service-qti.
+02-11 19:55:06.564   655   655 I LegacySupport: Registration complete for android.hardware.gatekeeper@1.0::IGatekeeper/default.
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: QUALCOMM build                   : d4cfdf3, Ic907de5ed0
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Build Date                       : 09/25/20
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: OpenGL ES Shader Compiler Version: EV031.32.02.01
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Local Branch                     : mybrancheaff3d46-e51f-f136-8926-1458d0b52af0
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Remote Branch                    : quic/gfx-adreno.lnx.1.0.r116-rel
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Remote Branch                    : NONE
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Reconstruct Branch               : NOTHING
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Build Config                     : S P 10.0.7 AArch64
+02-11 19:55:06.595   606   649 I AdrenoGLES-0: Driver Path                      : /vendor/lib64/egl/libGLESv2_adreno.so
+02-11 19:55:06.684   654   654 I keystore2: system/security/keystore2/src/keystore2_main.rs:61 - Keystore2 is starting.
+02-11 19:55:06.684   654   654 I keystore2: system/security/keystore2/src/keystore2_main.rs:67 - Setting up sqlite logging for keystore2
+02-11 19:55:06.691   654   660 I keystore2: system/security/keystore2/src/maintenance.rs:277 - start monitoring 'apexd.status' property
+02-11 19:55:06.691   654   660 I keystore2: system/security/keystore2/src/maintenance.rs:282 - property 'apexd.status' is now 'Err(SystemPropertyAbsent)'
+02-11 19:55:06.691   654   660 I keystore2: system/security/keystore2/src/maintenance.rs:287 - await a change to 'apexd.status'...
+02-11 19:55:06.695   654   661 I keystore2: system/security/keystore2/src/globals.rs:466 - monitoring for sys.boot_completed=1
+02-11 19:55:06.696   654   654 I keystore2: system/security/keystore2/src/keystore2_main.rs:105 - Starting thread pool now.
+02-11 19:55:06.698   654   654 I keystore2: KeystoreCompatService::getKeyMintDevice(TRUSTED_ENVIRONMENT)
+02-11 19:55:06.698   654   654 I keystore2: createMintDevice(TRUSTED_ENVIRONMENT)
+02-11 19:55:06.700   654   654 I keystore2: found android.hardware.keymaster@4.0::IKeymasterDevice with interface name default and seclevel TRUSTED_ENVIRONMENT
+02-11 19:55:06.701   654   663 I keystore2: KeystoreCompatService::getSharedSecret(TRUSTED_ENVIRONMENT)
+02-11 19:55:06.702   654   654 I keystore2: system/security/keystore2/src/globals.rs:298 - Add emulation wrapper around Keymaster device for security level: r#TRUSTED_ENVIRONMENT
+02-11 19:55:06.702   654   654 I keystore2: KeystoreCompatService::getKeyMintDevice(SOFTWARE)
+02-11 19:55:06.702   654   654 I keystore2: createMintDevice(SOFTWARE)
+02-11 19:55:06.703   654   654 I keystore2: KeystoreCompatService::getKeyMintDevice(STRONGBOX)
+02-11 19:55:06.703   654   654 I keystore2: createMintDevice(STRONGBOX)
+02-11 19:55:06.703   654   654 I keystore2: failed to create compat KeyMint device for STRONGBOX
+02-11 19:55:06.706   654   654 I keystore2: system/security/keystore2/src/keystore2_main.rs:157 - Successfully registered Keystore 2.0 service.
+02-11 19:55:06.706   654   654 I keystore2: system/security/keystore2/src/keystore2_main.rs:159 - Joining thread pool now.
+02-11 19:55:06.710   654   663 I keystore2: system/security/keystore2/src/shared_secret_negotiation.rs:49 - Shared secret negotiation concluded successfully.
+02-11 19:55:06.711   654   663 I keystore2: KeystoreCompatService::getKeyMintDevice(STRONGBOX)
+02-11 19:55:06.711   654   663 I keystore2: createMintDevice(STRONGBOX)
+02-11 19:55:06.711   654   663 I keystore2: failed to create compat KeyMint device for STRONGBOX
+02-11 19:55:06.711   654   663 I keystore2: system/security/keystore2/src/shared_secret_negotiation.rs:287 - No StrongBox Keymint available, so no RoT transfer
+02-11 19:55:06.729   656   656 W fsck.f2fs: type=1400 audit(0.0:8): avc:  denied  { kill } for  capability=5  scontext=u:r:fsck:s0 tcontext=u:r:fsck:s0 tclass=capability permissive=0
+02-11 19:55:06.834     1     1 W libc    : Unable to set property "ro.crypto.state" to "unsupported": PROP_ERROR_READ_ONLY_PROPERTY (0xb)
+02-11 19:55:06.855   611   611 I Checkpoint: cp_prepareCheckpoint called
+02-11 19:55:06.874   670   670 I libperfmgr: Pixel Power HAL AIDL Service with Extension is starting with config: /vendor/etc/powerhint.json
+02-11 19:55:06.875   670   670 W libperfmgr: In nodeCPULittleClusterMaxFreq old node path format detected.
+02-11 19:55:06.875   670   670 E libperfmgr: Failed to read Node[0]'s Paths
+02-11 19:55:06.875   670   670 I libperfmgr: Failed to read Node[0]'s Truncate, set to 'true'
+02-11 19:55:06.875   670   670 I libperfmgr: Failed to read Node[0]'s HoldFd, set to 'false'
+02-11 19:55:06.875   670   670 I libperfmgr: Failed to read Node[0]'s WriteOnly, set to 'false'
+02-11 19:55:06.875   670   670 I libperfmgr: Failed to read Node[0]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPULittleClusterMinFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[1]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[1]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[1]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[1]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[1]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBigClusterMaxFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[2]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[2]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[2]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[2]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[2]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBigClusterMinFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[3]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[3]'s DefaultIndex, set to last index: 3
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[3]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[3]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[3]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[3]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBWHystTriggerCount old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[4]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[4]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[4]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[4]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[4]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[4]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBWHistMemory old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[5]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[5]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[5]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[5]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[5]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[5]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBWHystLength old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[6]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[6]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[6]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[6]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[6]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[6]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBWSampleMs old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[7]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[7]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[7]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[7]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[7]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[7]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeCPUBWMinFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[8]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[8]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[8]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[8]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[8]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[8]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeGPUMaxFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[9]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[9]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[9]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[9]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[9]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeGPUMinFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[10]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[10]'s DefaultIndex, set to last index: 0
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[10]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[10]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[10]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[10]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeGPUBusMinFreq old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[11]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[11]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[11]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[11]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[11]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[11]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeGPUForceRailOn old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[12]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[12]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[12]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[12]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[12]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[12]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeGPUForceClkOn old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[13]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[13]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[13]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[13]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[13]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[13]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodeGPUIdleTimer old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[14]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[14]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[14]'s Truncate, set to 'true'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[14]'s HoldFd, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[14]'s WriteOnly, set to 'false'
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[14]'s AllowFailure, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodePowerHALMainState old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[15]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[15]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[15]'s ResetOnInit, set to 'false'
+02-11 19:55:06.876   670   670 W libperfmgr: In nodePowerHALAudioState old node path format detected.
+02-11 19:55:06.876   670   670 E libperfmgr: Failed to read Node[16]'s Paths
+02-11 19:55:06.876   670   670 I libperfmgr: Failed to read Node[16]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.877   670   670 I libperfmgr: Failed to read Node[16]'s ResetOnInit, set to 'false'
+02-11 19:55:06.877   670   670 W libperfmgr: In nodePowerHALRenderingState old node path format detected.
+02-11 19:55:06.877   670   670 E libperfmgr: Failed to read Node[17]'s Paths
+02-11 19:55:06.877   670   670 I libperfmgr: Failed to read Node[17]'s DefaultIndex, set to last index: 1
+02-11 19:55:06.877   670   670 I libperfmgr: Failed to read Node[17]'s ResetOnInit, set to 'false'
+02-11 19:55:06.877   670   670 I libperfmgr: 18 Nodes parsed successfully
+02-11 19:55:06.877   670   670 I libperfmgr: 0 AdpfConfigs parsed successfully
+02-11 19:55:06.878   670   670 I libperfmgr: No AdpfConfig section in the /vendor/etc/powerhint.json
+02-11 19:55:06.878   670   670 I libperfmgr: 39 actions parsed successfully
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_CPU_70 has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_CPU_60 has 2 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_CPU_50 has 2 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_LITTLE_CLUSTER_80 has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint INTERACTION has 7 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_LITTLE_CLUSTER_70 has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_LITTLE_CLUSTER_60 has 2 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_LITTLE_CLUSTER_50 has 2 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_CPU_80 has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint AUDIO_STREAMING_LOW_LATENCY has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_LITTLE_CLUSTER_90 has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LAUNCH has 11 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint LOW_POWER_CPU_90 has 1 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint EXPENSIVE_RENDERING has 2 node actions, and 0 hint actions parsed
+02-11 19:55:06.878   670   670 I libperfmgr: PowerHint SUSTAINED_PERFORMANCE has 4 node actions, and 0 hint actions parsed
+02-11 19:55:06.879   670   670 I libperfmgr: Initialized HintManager from JSON config: /vendor/etc/powerhint.json
+02-11 19:55:06.882   670   670 W libprocessgroup: A JoinCgroup action in the SystemMemoryProcess profile is used for controller memory in the cgroup v2 hierarchy and will be ignored
+02-11 19:55:06.883   670   670 W libprocessgroup: Failed to find PreferIdleSet task profile
+02-11 19:55:06.883   670   670 W powerhal-libperfmgr: Device does not support 'PreferIdleSet' task profile.
+02-11 19:55:06.883   670   670 I powerhal-libperfmgr: Initialize PowerHAL
+02-11 19:55:06.884   670   670 I powerhal-libperfmgr: PowerHAL InterfaceVersion:6 isOK: 1
+02-11 19:55:06.885   670   670 W libbinder.BackendUnifiedServiceManager: Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: android.hardware.power.IPower/default
+02-11 19:55:06.885   670   670 I powerhal-libperfmgr: Lineage Power HAL AIDL Service with Extension is started.
+02-11 19:55:06.897   611   611 I incfs   : Initial API level of the device: 28
+02-11 19:55:06.897   611   611 I incfs   : ro.incremental.enable: 
+02-11 19:55:06.897   611   611 I incfs   : IncFs_Features: v1
+02-11 19:55:06.898   654   654 I keystore2: system/security/keystore2/src/maintenance.rs:621 - earlyBootEnded()
+02-11 19:55:06.899   654   654 I keystore2: system/security/keystore2/src/maintenance.rs:235 - In early_boot_ended.
+02-11 19:55:06.917   654   654 I keystore2: system/security/keystore2/src/globals.rs:82 - Touching Keystore 2.0 database for this first time since boot.
+02-11 19:55:06.917   654   654 I keystore2: system/security/keystore2/src/globals.rs:83 - Calling cleanup leftovers.
+02-11 19:55:06.917   654   654 I keystore2: system/security/keystore2/src/boot_level_keys.rs:62 - ro.keystore.boot_level_key.strategy not set, inferring from installed KM instances
+02-11 19:55:06.918   654   676 I keystore2: system/security/keystore2/src/gc.rs:148 - skip GC as boot not completed
+02-11 19:55:06.918   654   654 I keystore2: KeystoreCompatService::getKeyMintDevice(STRONGBOX)
+02-11 19:55:06.918   654   654 I keystore2: createMintDevice(STRONGBOX)
+02-11 19:55:06.918   654   654 I keystore2: failed to create compat KeyMint device for STRONGBOX
+02-11 19:55:06.918   654   654 I keystore2: system/security/keystore2/src/boot_level_keys.rs:120 - In get_level_zero_key: security_level=r#TRUSTED_ENVIRONMENT, deny_later_strategy=MaxUsesPerBoot
+02-11 19:55:06.939   672   672 I tombstoned: tombstoned successfully initialized
+02-11 19:55:06.945   654   654 I keystore2: system/security/keystore2/src/super_key.rs:318 - Starting boot level watcher.
+02-11 19:55:06.945   654   654 I keystore2: system/security/keystore2/src/maintenance.rs:214 - Call to earlyBootEnded succeeded for security level TRUSTED_ENVIRONMENT
+02-11 19:55:06.945   654   677 I keystore2: system/security/keystore2/src/super_key.rs:350 - Read keystore.boot_level value BootLevel(30)
+02-11 19:55:06.945   654   677 I keystore2: system/security/keystore2/src/super_key.rs:350 - Read keystore.boot_level value BootLevel(30)
+02-11 19:55:06.945   654   654 I keystore2: KeystoreCompatService::getKeyMintDevice(STRONGBOX)
+02-11 19:55:06.945   654   654 I keystore2: createMintDevice(STRONGBOX)
+02-11 19:55:06.945   654   654 I keystore2: failed to create compat KeyMint device for STRONGBOX
+02-11 19:55:06.945   654   654 I keystore2: system/security/keystore2/src/maintenance.rs:221 - Call to earlyBootEnded failed for StrongBox as it is not available
+07-01 17:32:41.442  3091  4205 I APM_AudioPolicyManager: setDeviceAbsoluteVolumeEnabled: deviceType 0x10, enabled 1, streamToDriveAbs 0
+07-01 17:32:41.443  3091  4205 I APM_AudioPolicyManager: setDeviceAbsoluteVolumeEnabled: deviceType 0x8000000, enabled 1, streamToDriveAbs 3
+07-01 17:32:41.443  3091  4205 I APM_AudioPolicyManager: setDeviceAbsoluteVolumeEnabled: deviceType 0x20000000, enabled 1, streamToDriveAbs 3
+07-01 17:32:41.444  3091  4205 I APM_AudioPolicyManager: setDeviceAbsoluteVolumeEnabled: deviceType 0x20000001, enabled 1, streamToDriveAbs 3
+07-01 17:32:41.444  3091  4205 I APM_AudioPolicyManager: setDeviceAbsoluteVolumeEnabled: deviceType 0x20000002, enabled 1, streamToDriveAbs 3

@@ -180,15 +180,8 @@ class GGUFModelClient {
             val args = arrayOf(
                 "-m", resolvedPath,
                 "-c", contextLength.toString(),
-                "-np", "1",
                 "-b", batchSize.toString(),
-                "-ub", ubatchSize.toString(),
                 "-t", threads.toString(),
-                "--no-warmup",
-                "--mmap",
-                "--cache-type-k", "q4_0",      
-                "--cache-type-v", "q4_0",
-                "--alias", "local",
                 "--host", "127.0.0.1",
                 "--port", internalPort.toString()
             )
