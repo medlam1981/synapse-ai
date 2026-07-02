@@ -178,6 +178,7 @@ class GGUFModelClient {
             val threads = if (hw != null) DeviceProfile.optimalThreads(hw) else 4
 
             val args = arrayOf(
+                "llama-server", // Dummy argv[0] required by C++ main()
                 "-m", resolvedPath,
                 "-c", contextLength.toString(),
                 "-b", batchSize.toString(),
