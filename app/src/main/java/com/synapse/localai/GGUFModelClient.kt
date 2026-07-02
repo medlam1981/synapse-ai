@@ -22,6 +22,8 @@ import java.net.URL
 import kotlin.coroutines.coroutineContext
 import android.database.Cursor
 import android.provider.OpenableColumns
+import android.system.Os
+import android.system.OsConstants
 
 class GGUFModelClient {
 
@@ -189,6 +191,14 @@ class GGUFModelClient {
 
             val newThread = Thread {
                 try {
+                    // Redirect native stdout and stderr
+                    val logDir = File("/sdcard/MedlamAI")
+                    if (!logDir.exists()) logDir.mkdirs()
+                    val logFile = File(logDir, "native_log.txt")
+                    val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
+                    Os.dup2(fd, OsConstants.STDOUT_FILENO)
+                    Os.dup2(fd, OsConstants.STDERR_FILENO)
+
                     fileLog("JNI server thread starting with args: ${args.joinToString(" ")}")
                     val result = LlamaServerJNI.start(args)
                     fileLog("JNI server thread finished (returned $result)")

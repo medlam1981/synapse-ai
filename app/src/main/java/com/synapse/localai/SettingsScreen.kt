@@ -173,9 +173,9 @@ fun SettingsScreenContent(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (hasChanges) {
-                        Button(
-                            onClick = {
+                    Button(
+                        onClick = {
+                            if (hasChanges) {
                                 val newConfig = config.copy(
                                     preferredModelType = preferredModelType,
                                     geminiApiKeys = apiKeysState,
@@ -191,13 +191,16 @@ fun SettingsScreenContent(
                                 )
                                 viewModel.saveConfig(context, newConfig)
                                 Toast.makeText(context, "Settings Applied ✓", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                        ) {
-                            Text("APPLY", fontWeight = FontWeight.Bold)
-                        }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (hasChanges) NeonCyan else Color.DarkGray,
+                            contentColor = if (hasChanges) Color.Black else Color.LightGray
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(if (hasChanges) "APPLY" else "APPLIED", fontWeight = FontWeight.Bold)
                     }
 
                     IconButton(
