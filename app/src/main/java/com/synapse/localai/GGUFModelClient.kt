@@ -152,16 +152,15 @@ class GGUFModelClient {
             var conn: HttpURLConnection? = null
             try {
                 val cleanBase = baseUrl.trimEnd('/')
+                // Try /health endpoint first
                 val url = URL("$cleanBase/health")
                 conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 300
-                conn.readTimeout = 300
+                conn.connectTimeout = 500
+                conn.readTimeout = 500
                 val code = conn.responseCode
                 if (code == 200) {
-                    val response = try { conn.inputStream.bufferedReader().use { it.readText() } } catch (_: Exception) { "" }
-                    if (!response.contains("loading model", ignoreCase = true)) {
-                        return@withContext true
-                    }
+                    // Server is up - accept both "ready" and "loading model" (KV cache warmup)
+                    return@withContext true
                 }
             } catch (_: Exception) {
             } finally {
@@ -247,8 +246,11 @@ class GGUFModelClient {
                 argsList.add("--no-mmap")
             }
 
-            // Speculative / Draft Model & MTP
-            val draftPath = draftModelPath?.takeIf { it.isNotBlank() }
+            // Speculative / Draft Model (Only valid standalone models, exclude auxiliary assistant layer blocks)
+            val draftPath = draftModelPath?.takeIf { path ->
+                val lower = path.lowercase()
+                !lower.contains("assistant") && !lower.contains("bf16") && !lower.contains("mtp-gemma-4")
+            }
             val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
                 argsList.add("--model-draft")
@@ -257,9 +259,7 @@ class GGUFModelClient {
                 argsList.add("4")
                 argsList.add("--draft-min")
                 argsList.add("2")
-                argsList.add("--override-kv")
-                argsList.add("general.architecture=str:gemma4")
-                fileLog("Auto-pairing MTP draft model: $resolvedDraft with KV override general.architecture=str:gemma4")
+                fileLog("Auto-pairing speculative draft model: $resolvedDraft")
             }
 
             val args = argsList.toTypedArray()
@@ -378,6 +378,16 @@ class GGUFModelClient {
 
                 // Under mmap, advance smoothly while loading tensors
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+
+                // If draft model caused an early exit, fallback immediately to standalone mode
+                if (draftModelPath != null && elapsedSec > 6f && !isServerRunning()) {
+                    fileLog("Draft model failed to initialize ($draftModelPath); retrying in standalone mode...")
+                    draftModelPath = null
+                    LlamaServerJNI.safeStop()
+                    delay(400)
+                    return@withContext startServer(resolvedPath, onStatus, onProgress)
+                }
+
                 if (useMmap && elapsedSec > 0.5f && lastCalculatedProgress < 0.95f) {
                     lastCalculatedProgress = (0.05f + (elapsedSec / 25f) * 0.90f).coerceIn(0.05f, 0.95f)
                 }
@@ -493,6 +503,8 @@ class GGUFModelClient {
             .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
+            .put("n_predict", -1)
+            .put("cache_prompt", true)
             .put("stop", stopArray)
 
         val bodyBytes = body.toString().toByteArray(Charsets.UTF_8)
@@ -502,7 +514,7 @@ class GGUFModelClient {
 
         var conn: HttpURLConnection? = null
         var responseCode = -1
-        val maxAttempts = 30
+        val maxAttempts = 60
         var attempt = 0
 
         while (coroutineContext.isActive && attempt < maxAttempts) {
@@ -511,7 +523,7 @@ class GGUFModelClient {
                 conn = URL(targetUrl).openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
-                conn.connectTimeout = 60000
+                conn.connectTimeout = 30000
                 conn.readTimeout = 300000 // 5 minutes
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("Accept", "text/event-stream")
@@ -521,30 +533,21 @@ class GGUFModelClient {
                 responseCode = conn.responseCode
 
                 if (responseCode == 503) {
-                    val retryMsg = "HTTP 503 (slot busy/allocating), retry attempt $attempt/$maxAttempts in 600ms..."
-                    fileLog(retryMsg)
-                    appendNativeLog("[GGUF RETRY] $retryMsg")
                     conn.disconnect()
                     conn = null
                     if (attempt < maxAttempts) {
-                        delay(600L)
+                        delay(200L)
                         continue
                     }
                 }
                 break
             } catch (e: Exception) {
-                val retryMsg = "Connection attempt failed to $targetUrl (${e.message}), attempt $attempt/$maxAttempts in 600ms..."
-                fileLog(retryMsg)
-                appendNativeLog("[GGUF RETRY] $retryMsg")
                 conn?.disconnect()
                 conn = null
                 if (attempt < maxAttempts) {
-                    delay(600L)
+                    delay(200L)
                     continue
                 }
-                val errMsg = "Stream connection error to $targetUrl: ${e.message}"
-                fileLog(errMsg)
-                appendNativeLog("[GGUF ERROR] $errMsg")
                 emit("[ERROR: ${e.message}]")
                 return@flow
             }

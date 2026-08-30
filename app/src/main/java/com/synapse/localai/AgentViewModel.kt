@@ -220,7 +220,7 @@ class AgentViewModel : ViewModel() {
             }
 
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
-            var draftPath = rawDraft
+            var draftPath = if (rawDraft.contains("assistant", ignoreCase = true) || rawDraft.contains("bf16", ignoreCase = true)) "" else rawDraft
             if (draftPath.isBlank() && localPath.isNotBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(localPath)
                 if (matched != null) {

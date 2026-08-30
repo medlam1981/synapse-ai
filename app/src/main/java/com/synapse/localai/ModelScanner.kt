@@ -81,13 +81,22 @@ object ModelScanner {
         val baseName = File(baseModelPath).nameWithoutExtension.lowercase()
         val baseTokens = baseName.split("-", "_", ".").filter { it.length > 2 }
 
+        // Filter out auxiliary assistant layer files that lack standalone context (require full draft models)
+        val candidateFiles = mtpFiles.filter { file ->
+            val name = file.name.lowercase()
+            !name.contains("assistant") && 
+            !name.contains("bf16") && 
+            !name.contains("mtp-gemma-4")
+        }
+        if (candidateFiles.isEmpty()) return null
+
         // Priority 1: Match tokens from base model name
-        val match = mtpFiles.firstOrNull { mtpFile ->
+        val match = candidateFiles.firstOrNull { mtpFile ->
             val mtpName = mtpFile.nameWithoutExtension.lowercase()
             val cleanMtp = mtpName.removePrefix("mtp-").removePrefix("mtp_")
             baseTokens.any { token -> cleanMtp.contains(token) }
         }
 
-        return match ?: mtpFiles.firstOrNull()
+        return match ?: candidateFiles.firstOrNull()
     }
 }
