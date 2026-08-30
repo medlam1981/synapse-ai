@@ -231,8 +231,9 @@ class GGUFModelClient {
             val argsList = mutableListOf(
                 "-m", resolvedPath,
                 "-c", contextLength.coerceAtLeast(8192).toString(),
-                "-b", batchSize.toString(),
-                "-ub", ubatchSize.toString(),
+                "-b", "512",
+                "-ub", "512",
+                "-fa",
                 "-t", threads.toString(),
                 "-ngl", gpuLayers.coerceIn(0, 33).toString(),
                 "--host", "127.0.0.1",
@@ -473,21 +474,29 @@ class GGUFModelClient {
         val activeBase = getActiveBaseUrl()
         val targetUrl = "$activeBase/v1/chat/completions"
 
-        // Build messages array (no complex system prompt pre-pended to allow immediate slot allocation)
+        // Strict Gemma Chat Turn Markers and Stop Tokens
         val messagesArray = JSONArray()
         for ((role, content) in history) {
             val roleName = if (role == "user") "user" else "assistant"
-            messagesArray.put(JSONObject().put("role", roleName).put("content", content))
+            messagesArray.put(JSONObject().put("role", roleName).put("content", content.trim()))
         }
         if (messagesArray.length() == 0) {
             messagesArray.put(JSONObject().put("role", "user").put("content", "Hello"))
         }
+
+        val stopArray = JSONArray()
+            .put("<end_of_turn>")
+            .put("<eos>")
+            .put("<|im_end|>")
+            .put("User:")
+            .put("<start_of_turn>user")
 
         val body = JSONObject()
             .put("model", "default")
             .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
+            .put("stop", stopArray)
 
         val bodyBytes = body.toString().toByteArray(Charsets.UTF_8)
         val streamMsg = "Streaming to: $targetUrl | messages_count=${messagesArray.length()}"
@@ -578,39 +587,40 @@ class GGUFModelClient {
                     val firstChoice = choices?.optJSONObject(0)
                     if (firstChoice != null) {
                         val delta = firstChoice.optJSONObject("delta")
-                        val content = delta?.optString("content", "") ?: ""
-                        val reasoning = delta?.optString("reasoning_content", "") ?: ""
-                        val text = when {
-                            content.isNotEmpty() -> content
-                            reasoning.isNotEmpty() -> reasoning
-                            else -> firstChoice.optString("text", "")
+                        val deltaContent = delta?.let { if (!it.isNull("content")) it.opt("content")?.toString() else null }
+                        val deltaReasoning = delta?.let { if (!it.isNull("reasoning_content")) it.opt("reasoning_content")?.toString() else null }
+                        val directText = if (!firstChoice.isNull("text")) firstChoice.opt("text")?.toString() else null
+
+                        val chunkText = (deltaContent ?: deltaReasoning ?: directText)?.takeIf {
+                            it.isNotEmpty() && it != "null"
                         }
 
-                        if (!text.isNullOrEmpty()) {
+                        if (chunkText != null) {
                             tokenCount++
                             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                            if (elapsedSec > 0.5f) {
+                            if (elapsedSec > 0.2f) {
                                 onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                             }
                             if (firstChunk) {
-                                fileLog("First token received: ${text.take(30)}")
+                                fileLog("First token received: ${chunkText.take(30)}")
                                 firstChunk = false
                             }
-                            emit(text)
+                            emit(chunkText)
                         }
                     } else {
-                        val content = json.optString("content", "")
-                        if (content.isNotEmpty()) {
+                        val content = if (!json.isNull("content")) json.opt("content")?.toString() else null
+                        val chunkText = content?.takeIf { it.isNotEmpty() && it != "null" }
+                        if (chunkText != null) {
                             tokenCount++
                             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                            if (elapsedSec > 0.5f) {
+                            if (elapsedSec > 0.2f) {
                                 onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                             }
                             if (firstChunk) {
-                                fileLog("First token received: ${content.take(30)}")
+                                fileLog("First token received: ${chunkText.take(30)}")
                                 firstChunk = false
                             }
-                            emit(content)
+                            emit(chunkText)
                         }
                     }
                 } catch (_: Exception) {}
