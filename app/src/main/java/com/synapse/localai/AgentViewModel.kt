@@ -209,7 +209,8 @@ class AgentViewModel : ViewModel() {
             val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
             var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
             var geminiModel = prefs.getString("gemini_model_name", "gemini-1.5-flash") ?: "gemini-1.5-flash"
-            val draftPath = prefs.getString("draft_model_path", "") ?: ""
+            val rawDraft = prefs.getString("draft_model_path", "") ?: ""
+            val draftPath = if (rawDraft.contains("mtp", ignoreCase = true)) "" else rawDraft
             val gpuLayers = prefs.getInt("gpu_layers", 0)
             val useMmap = prefs.getBoolean("use_mmap", true)
             

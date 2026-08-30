@@ -253,7 +253,7 @@ class GGUFModelClient {
 
             // Speculative / Draft Model & MTP
             val draftPath = draftModelPath
-            val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
+            val resolvedDraft = if (!draftPath.isNullOrBlank() && !draftPath.contains("mtp", ignoreCase = true) && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
                 argsList.add("--model-draft")
                 argsList.add(resolvedDraft)
@@ -495,7 +495,7 @@ class GGUFModelClient {
 
         var conn: HttpURLConnection? = null
         var responseCode = -1
-        val maxAttempts = 5
+        val maxAttempts = 30
         var attempt = 0
 
         while (coroutineContext.isActive && attempt < maxAttempts) {
