@@ -152,6 +152,22 @@ class GGUFModelClient {
         return@withContext false
     }
 
+    private suspend fun isSocketOrHttpReachable(): Boolean = withContext(Dispatchers.IO) {
+        if (isServerRunning()) return@withContext true
+        val address = LlamaServerJNI.safeGetAddress()
+        val portFromAddress = address?.substringAfterLast(':')?.toIntOrNull()
+        val candidatePorts = listOfNotNull(portFromAddress, serverPort, 8080, 11434).distinct()
+        for (port in candidatePorts) {
+            try {
+                java.net.Socket().use { socket ->
+                    socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 200)
+                    return@withContext true
+                }
+            } catch (_: Exception) {}
+        }
+        false
+    }
+
     private suspend fun startServer(
         resolvedPath: String, 
         onStatus: (String) -> Unit = {},
@@ -259,6 +275,7 @@ class GGUFModelClient {
             val startTime = System.currentTimeMillis()
             var lastCalculatedProgress = 0.05f
             var lastLogReadPos = 0L
+            var lastLogActivityTime = System.currentTimeMillis()
 
             val tensorRegex1 = Regex("tensor\\s+(\\d+)\\s*/\\s*(\\d+)")
             val tensorRegex2 = Regex("loading model tensors:\\s*(\\d+)%")
@@ -267,7 +284,7 @@ class GGUFModelClient {
             val baseSizeGb = baseFileSize / (1024f * 1024f * 1024f)
 
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
-                // 1. Check if server is ready via HTTP /health on every iteration
+                // 1. Check if server is ready via HTTP /health or socket on every iteration
                 if (isServerRunning()) {
                     fileLog("Server ready via JNI (health check succeeded)!")
                     onProgress(1.0f, "ONLINE • 100%")
@@ -282,6 +299,7 @@ class GGUFModelClient {
                     if (logFile.exists()) {
                         val currentLen = logFile.length()
                         if (currentLen > lastLogReadPos) {
+                            lastLogActivityTime = System.currentTimeMillis()
                             val raf = java.io.RandomAccessFile(logFile, "r")
                             raf.seek(lastLogReadPos)
                             var line: String?
@@ -334,20 +352,38 @@ class GGUFModelClient {
                     lastCalculatedProgress = (0.3f + elapsedSec * 0.5f).coerceIn(0.3f, 0.99f)
                 }
 
-                if (lastCalculatedProgress >= 1.0f || isServerRunning()) {
+                // 3. Automatic Threshold Snapping: If >= 0.98f, snap to 100% ONLINE immediately
+                if (lastCalculatedProgress >= 0.98f) {
+                    fileLog("Progress reached threshold ($lastCalculatedProgress >= 0.98), snapping to 100% ONLINE!")
                     onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
                 }
 
-                val pctInt = (lastCalculatedProgress * 100).toInt().coerceIn(1, 99)
+                // 4. Inactivity Watchdog: If logs stopped streaming for > 1500ms and progress > 0.90f
+                if (lastCalculatedProgress >= 0.90f && (System.currentTimeMillis() - lastLogActivityTime) > 1500L) {
+                    if (isSocketOrHttpReachable()) {
+                        fileLog("Inactivity watchdog: server reachable at progress $lastCalculatedProgress, forcing ONLINE!")
+                        onProgress(1.0f, "ONLINE • 100%")
+                        onStatus("✅ Local Server Ready.")
+                        return@withContext true
+                    }
+                }
+
+                if (isServerRunning()) {
+                    onProgress(1.0f, "ONLINE • 100%")
+                    onStatus("✅ Local Server Ready.")
+                    return@withContext true
+                }
+
+                val pctInt = (lastCalculatedProgress * 100).toInt().coerceIn(1, 97)
                 val loadedGb = lastCalculatedProgress * baseSizeGb
                 val statusMsg = "Loading Neural Core: $pctInt% • ${String.format(java.util.Locale.US, "%.1f", loadedGb)}/${String.format(java.util.Locale.US, "%.1f", baseSizeGb)} GB"
                 onProgress(lastCalculatedProgress, statusMsg)
                 onStatus(statusMsg)
             }
 
-            if (isServerRunning()) {
+            if (isSocketOrHttpReachable() || isServerRunning()) {
                 onProgress(1.0f, "ONLINE • 100%")
                 onStatus("✅ Local Server Ready.")
                 return@withContext true

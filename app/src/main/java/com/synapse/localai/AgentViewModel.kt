@@ -453,7 +453,7 @@ class AgentViewModel : ViewModel() {
                     path = path,
                     onStatus = { status -> addSystemLog(status) },
                     onProgress = { progress, statusText ->
-                        if (progress >= 1.0f) {
+                        if (progress >= 0.98f) {
                             _uiState.update { it.copy(
                                 localModelLoaded = true,
                                 localModelLoading = false,

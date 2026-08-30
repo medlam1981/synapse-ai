@@ -327,7 +327,7 @@ fun SettingsScreenContent(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     // Real-Time 0-100% Model Loading Progress Bar
-                    if (uiState.localModelLoading) {
+                    if (uiState.localModelLoading && !uiState.localModelLoaded) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()

@@ -616,9 +616,9 @@ fun ChatApp(viewModel: AgentViewModel) {
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
 
-            val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys, uiState.localModelLoading, uiState.loadingProgress) {
-                if (uiState.localModelLoading) {
-                    val pct = ((uiState.loadingProgress ?: 0.05f) * 100).toInt().coerceIn(1, 99)
+            val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys, uiState.localModelLoading, uiState.localModelLoaded, uiState.loadingProgress) {
+                if (uiState.localModelLoading && !uiState.localModelLoaded) {
+                    val pct = ((uiState.loadingProgress ?: 0.05f) * 100).toInt().coerceIn(1, 98)
                     "$pct% LOADING • ${uiState.activeModelName.ifBlank { "Gemma 12B" }}"
                 } else when (uiState.activeModelType) {
                     ModelType.GGUF -> {
