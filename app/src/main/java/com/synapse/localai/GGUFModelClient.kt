@@ -231,9 +231,8 @@ class GGUFModelClient {
             val argsList = mutableListOf(
                 "-m", resolvedPath,
                 "-c", contextLength.coerceAtLeast(8192).toString(),
-                "-b", "512",
-                "-ub", "512",
-                "-fa",
+                "-b", "256",
+                "-ub", "256",
                 "-t", threads.toString(),
                 "-ngl", gpuLayers.coerceIn(0, 33).toString(),
                 "--host", "127.0.0.1",
