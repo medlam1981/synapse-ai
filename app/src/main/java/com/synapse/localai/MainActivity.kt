@@ -618,7 +618,7 @@ fun ChatApp(viewModel: AgentViewModel) {
 
             val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys, uiState.localModelLoading, uiState.loadingProgress) {
                 if (uiState.localModelLoading) {
-                    val pct = ((uiState.loadingProgress ?: 0f) * 100).toInt()
+                    val pct = ((uiState.loadingProgress ?: 0.05f) * 100).toInt().coerceIn(1, 99)
                     "$pct% LOADING • ${uiState.activeModelName.ifBlank { "Gemma 12B" }}"
                 } else when (uiState.activeModelType) {
                     ModelType.GGUF -> {
@@ -628,16 +628,16 @@ fun ChatApp(viewModel: AgentViewModel) {
                         } else "Gemma 12B"
                         val hasMtp = uiState.config.draftModelPath.isNotBlank()
                         val tpsStr = if (uiState.tokensPerSecond > 0f) " • ${uiState.tokensPerSecond.toInt()} T/s" else ""
-                        "$name • ${if (hasMtp) "MTP ON" else "LOCAL"}$tpsStr"
+                        "ONLINE • $name${if (hasMtp) " + MTP" else ""}$tpsStr"
                     }
                     ModelType.GEMINI -> {
                         val modelShort = uiState.config.geminiModelName.removePrefix("models/").removePrefix("gemini-").replace("-flash", " Flash").replace("-pro", " Pro")
-                        "Gemini $modelShort • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
+                        "ONLINE • Gemini $modelShort • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
                     }
                     ModelType.OPENAI -> {
-                        "${uiState.config.openAiModelName} • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
+                        "ONLINE • ${uiState.config.openAiModelName} • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
                     }
-                    else -> "AUTONOMOUS ON-DEVICE NEURAL AGENT"
+                    else -> "ONLINE • NEURAL INTERFACE ACTIVE"
                 }
             }
 
@@ -758,6 +758,18 @@ fun ChatApp(viewModel: AgentViewModel) {
                         }
                     }
                 }
+            }
+
+            // Micro progress indicator flush directly beneath TopBar during loading phase only
+            if (uiState.localModelLoading) {
+                LinearProgressIndicator(
+                    progress = (uiState.loadingProgress ?: 0.05f).coerceIn(0f, 1f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                    color = Color(0xFF0284C7),
+                    trackColor = Color(0xFF0284C7).copy(alpha = 0.2f)
+                )
             }
 
             SystemDashboard(context, dynamicTelemetry, uiState)
@@ -1211,11 +1223,11 @@ fun SidebarContent(
                         modifier = Modifier.size(36.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = "✦",
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Black
+                            Icon(
+                                imageVector = Icons.Outlined.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -1242,7 +1254,7 @@ fun SidebarContent(
                 }
                 IconButton(onClick = onCloseDrawer) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = Icons.Outlined.Close,
                         contentDescription = "Close Sidebar",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
@@ -1252,7 +1264,7 @@ fun SidebarContent(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // + New Session Prominent Full-Width Button
+            // + New Session Prominent Full-Width Button with Sparkle / Plus
             Button(
                 onClick = {
                     viewModel.startNewSession()
@@ -1275,10 +1287,10 @@ fun SidebarContent(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Add,
+                        imageVector = Icons.Outlined.AddCircleOutline,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -1363,7 +1375,7 @@ fun SidebarContent(
                                         imageVector = Icons.Outlined.ChatBubbleOutline,
                                         contentDescription = null,
                                         tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(14.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
                                     Column {
                                         Text(
@@ -1392,10 +1404,10 @@ fun SidebarContent(
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Outlined.Delete,
+                                        imageVector = Icons.Outlined.DeleteOutline,
                                         contentDescription = "Delete",
-                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(13.dp)
+                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.55f),
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                             }
@@ -1408,7 +1420,7 @@ fun SidebarContent(
             Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Footer info
+            // Footer info: System Settings & Root Folder
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1436,15 +1448,28 @@ fun SidebarContent(
                 )
             }
 
-            Text(
-                text = "📁 Root: /sdcard/Medlam-Ai/",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 8.5.sp,
-                    fontFamily = FontFamily.Monospace
-                ),
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Folder,
+                    contentDescription = "Root Workspace",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "Root: /sdcard/Medlam-Ai/",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 8.5.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+            }
         }
     }
 }
@@ -1585,92 +1610,32 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
+        tonalElevation = 1.dp
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    if (uiState?.localModelLoading == true) "NEURAL CORE INITIALIZING • LOADING MODEL"
-                    else if (dynamicTelemetry.isNotBlank()) "$dynamicTelemetry • ONLINE" 
-                    else "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
-                    color = if (uiState?.localModelLoading == true) Color(0xFF0284C7) else MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Black,
-                    fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.sp
-                )
+            val weight = 1f
+            Box(Modifier.weight(weight)) { 
+                StatBadge(
+                    icon = { Icon(if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull, null, tint = if (stats.isCharging) Color(0xFF3FB950) else Color(0xFF0284C7), modifier = Modifier.size(12.dp)) }, 
+                    label = "PWR", 
+                    value = "${stats.battery}%"
+                ) 
             }
-
-            if (uiState?.localModelLoading == true) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                        .border(BorderStroke(0.5.dp, Color(0xFF0284C7).copy(alpha = 0.5f)), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
-                            color = Color(0xFF0284C7),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
-                            color = Color(0xFF00D4FF),
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                    LinearProgressIndicator(
-                        progress = (uiState?.loadingProgress ?: 0.05f).coerceIn(0f, 1f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = Color(0xFF0284C7),
-                        trackColor = MaterialTheme.colorScheme.outlineVariant
-                    )
-                }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Memory, null, tint = Color(0xFF0070F3), modifier = Modifier.size(12.dp)) }, label = "RAM", value = stats.ramFree) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.DeveloperBoard, null, tint = Color(0xFF00D4FF), modifier = Modifier.size(12.dp)) }, label = "SYS CPU", value = stats.cpuUsage) }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.VpnKey, null, tint = Color(0xFF0284C7), modifier = Modifier.size(12.dp)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
+            val tempColor = when {
+                stats.cpuTempInt <= 0 -> MaterialTheme.colorScheme.primary
+                stats.cpuTempInt < 45 -> Color(0xFF00D4FF) 
+                stats.cpuTempInt < 65 -> Color(0xFFFF9F43) 
+                else -> MaterialTheme.colorScheme.error
             }
-
-            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val weight = 1f
-                Box(Modifier.weight(weight)) { 
-                    StatBadge(
-                        icon = { Icon(if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull, null, tint = if (stats.isCharging) Color(0xFF3FB950) else Color(0xFF0284C7), modifier = Modifier.size(12.dp)) }, 
-                        label = "PWR", 
-                        value = "${stats.battery}%"
-                    ) 
-                }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Memory, null, tint = Color(0xFF0070F3), modifier = Modifier.size(12.dp)) }, label = "RAM", value = stats.ramFree) }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.DeveloperBoard, null, tint = Color(0xFF00D4FF), modifier = Modifier.size(12.dp)) }, label = "SYS CPU", value = stats.cpuUsage) }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.VpnKey, null, tint = Color(0xFF0284C7), modifier = Modifier.size(12.dp)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
-                val tempColor = when {
-                    stats.cpuTempInt <= 0 -> MaterialTheme.colorScheme.primary
-                    stats.cpuTempInt < 45 -> Color(0xFF00D4FF) 
-                    stats.cpuTempInt < 65 -> Color(0xFFFF9F43) 
-                    else -> MaterialTheme.colorScheme.error
-                }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Thermostat, null, tint = tempColor, modifier = Modifier.size(12.dp)) }, label = "TMP", value = stats.cpuTemp) }
-            }
+            Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Thermostat, null, tint = tempColor, modifier = Modifier.size(12.dp)) }, label = "TMP", value = stats.cpuTemp) }
         }
     }
 }

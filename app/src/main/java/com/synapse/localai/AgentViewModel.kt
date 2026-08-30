@@ -453,7 +453,18 @@ class AgentViewModel : ViewModel() {
                     path = path,
                     onStatus = { status -> addSystemLog(status) },
                     onProgress = { progress, statusText ->
-                        _uiState.update { it.copy(loadingProgress = progress, loadingStatusText = statusText) }
+                        if (progress >= 1.0f) {
+                            _uiState.update { it.copy(
+                                localModelLoaded = true,
+                                localModelLoading = false,
+                                activeModelType = ModelType.GGUF,
+                                activeModelName = modelName,
+                                loadingProgress = null,
+                                loadingStatusText = ""
+                            ) }
+                        } else {
+                            _uiState.update { it.copy(loadingProgress = progress, loadingStatusText = statusText) }
+                        }
                     },
                     onLoaded = {
                         if (client.isLoaded) {

@@ -255,7 +255,7 @@ class GGUFModelClient {
             globalLoadedPath = resolvedPath
 
             val maxWaitMs = 300_000L // 5 minutes timeout for large GGUF models
-            val pollIntervalMs = 300L
+            val pollIntervalMs = 150L
             val startTime = System.currentTimeMillis()
             var lastCalculatedProgress = 0.05f
             var lastLogReadPos = 0L
@@ -267,15 +267,15 @@ class GGUFModelClient {
             val baseSizeGb = baseFileSize / (1024f * 1024f * 1024f)
 
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
-                delay(pollIntervalMs)
-
-                // 1. Check if server is ready via HTTP /health
+                // 1. Check if server is ready via HTTP /health on every iteration
                 if (isServerRunning()) {
                     fileLog("Server ready via JNI!")
-                    onProgress(1.0f, "Neural Core Online (100%)")
+                    onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
                 }
+
+                delay(pollIntervalMs)
 
                 // 2. Parse log progress from native_log.txt
                 try {
@@ -322,14 +322,14 @@ class GGUFModelClient {
                     }
                 } catch (_: Exception) {}
 
-                // Under mmap or swift startup, smoothly advance if server is loading
+                // Under mmap or swift startup, advance smoothly
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                if (useMmap && elapsedSec > 0.5f && lastCalculatedProgress < 0.95f) {
-                    lastCalculatedProgress = (0.25f + elapsedSec * 0.35f).coerceIn(0.25f, 0.95f)
+                if (useMmap && elapsedSec > 0.3f && lastCalculatedProgress < 0.95f) {
+                    lastCalculatedProgress = (0.25f + elapsedSec * 0.4f).coerceIn(0.25f, 0.95f)
                 }
 
                 if (lastCalculatedProgress >= 1.0f || isServerRunning()) {
-                    onProgress(1.0f, "Neural Core Online (100%)")
+                    onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
                 }
@@ -342,7 +342,7 @@ class GGUFModelClient {
             }
 
             if (isServerRunning()) {
-                onProgress(1.0f, "Neural Core Online (100%)")
+                onProgress(1.0f, "ONLINE • 100%")
                 onStatus("✅ Local Server Ready.")
                 return@withContext true
             }
