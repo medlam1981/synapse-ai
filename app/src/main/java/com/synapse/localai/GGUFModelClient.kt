@@ -30,7 +30,7 @@ class GGUFModelClient {
     companion object {
         private const val TAG = "GGUFModel"
         private const val DEFAULT_HOST = "127.0.0.1" // Prefer localhost
-        private const val DEFAULT_PORT = 11434
+        private const val DEFAULT_PORT = 8080
         private const val SERVER_START_TIMEOUT_MS = 300_000L
         private const val SERVER_POLL_INTERVAL_MS = 500L
 
@@ -121,7 +121,6 @@ class GGUFModelClient {
     }
 
     fun getBaseUrl(): String {
-        val port = if (serverPort > 0) serverPort else 8080
         val jniAddress = LlamaServerJNI.safeGetAddress()?.trim()
         if (!jniAddress.isNullOrBlank()) {
             var raw = jniAddress.replace("0.0.0.0", "127.0.0.1").trimEnd('/')
@@ -130,22 +129,18 @@ class GGUFModelClient {
                 raw.startsWith("http://") || raw.startsWith("https://") -> raw
                 else -> "http://$raw"
             }
-            if (!formatted.contains("://:") && formatted.length > 7) {
+            if (!formatted.contains("://:") && formatted.length > 7 && !formatted.contains("11434")) {
                 return formatted
             }
         }
-        val host = if (serverHost.isBlank() || serverHost == "0.0.0.0") "127.0.0.1" else serverHost
-        val base = if (host.startsWith("http://") || host.startsWith("https://")) host else "http://$host"
-        return "${base.trimEnd('/')}:$port"
+        return "http://127.0.0.1:8080"
     }
 
     private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
         val primaryUrl = getBaseUrl()
         val candidateUrls = listOf(
             primaryUrl,
-            "http://127.0.0.1:$serverPort",
-            "http://127.0.0.1:8080",
-            "http://127.0.0.1:11434"
+            "http://127.0.0.1:8080"
         ).distinct()
 
         for (baseUrl in candidateUrls) {
@@ -174,8 +169,8 @@ class GGUFModelClient {
     private suspend fun isSocketOrHttpReachable(): Boolean = withContext(Dispatchers.IO) {
         if (isServerRunning()) return@withContext true
         val address = LlamaServerJNI.safeGetAddress()
-        val portFromAddress = address?.substringAfterLast(':')?.toIntOrNull()
-        val candidatePorts = listOfNotNull(portFromAddress, serverPort, 8080, 11434).distinct()
+        val portFromAddress = address?.substringAfterLast(':')?.toIntOrNull()?.takeIf { it != 11434 }
+        val candidatePorts = listOfNotNull(portFromAddress, 8080).distinct()
         for (port in candidatePorts) {
             try {
                 java.net.Socket().use { socket ->
@@ -456,9 +451,8 @@ class GGUFModelClient {
         systemPrompt: String = "",
         onSpeedUpdate: ((Float) -> Unit)? = null
     ): Flow<String> = flow {
-        // Construct target URL using official OpenAI-compatible endpoint
-        val baseUrl = getBaseUrl()
-        val targetUrl = "$baseUrl/v1/chat/completions"
+        // Authoritative local OpenAI-compatible endpoint on port 8080
+        val targetUrl = "http://127.0.0.1:8080/v1/chat/completions"
 
         // Build messages array
         val messagesArray = JSONArray()
@@ -471,36 +465,68 @@ class GGUFModelClient {
         }
 
         val body = JSONObject()
-            .put("model", "local-model")
             .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
             .put("max_tokens", -1)
 
+        val bodyBytes = body.toString().toByteArray(Charsets.UTF_8)
         fileLog("Streaming to: $targetUrl | messages_count=${messagesArray.length()}")
 
-        val url = URL(targetUrl)
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.connectTimeout = 60000
-        conn.readTimeout = 300000 // 5 minutes
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Accept", "text/event-stream")
+        var conn: HttpURLConnection? = null
+        var responseCode = -1
+        val retryStartTime = System.currentTimeMillis()
+        val retryTimeoutMs = 3000L
+
+        while (coroutineContext.isActive) {
+            try {
+                conn = URL(targetUrl).openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 5000
+                conn.readTimeout = 300000 // 5 minutes
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Accept", "text/event-stream")
+
+                conn.outputStream.use { it.write(bodyBytes) }
+                responseCode = conn.responseCode
+
+                if (responseCode == 503 && (System.currentTimeMillis() - retryStartTime < retryTimeoutMs)) {
+                    fileLog("HTTP 503 (server warmup), retrying in 500ms...")
+                    conn.disconnect()
+                    conn = null
+                    delay(500L)
+                    continue
+                }
+                break
+            } catch (e: Exception) {
+                if (System.currentTimeMillis() - retryStartTime < retryTimeoutMs) {
+                    fileLog("Connection attempt failed (${e.message}), retrying in 500ms...")
+                    conn?.disconnect()
+                    conn = null
+                    delay(500L)
+                    continue
+                }
+                fileLog("Stream connection error: ${e.message}")
+                emit("[ERROR: ${e.message}]")
+                return@flow
+            }
+        }
+
+        if (conn == null) return@flow
+
+        if (responseCode != 200) {
+            val err = conn.errorStream?.bufferedReader()?.use { it.readText() }
+            fileLog("HTTP Error $responseCode: $err")
+            emit("[ERROR: Server returned $responseCode]")
+            conn.disconnect()
+            return@flow
+        }
 
         var tokenCount = 0
         val startTime = System.currentTimeMillis()
 
         try {
-            conn.outputStream.use { it.write(body.toString().toByteArray()) }
-            val responseCode = conn.responseCode
-            if (responseCode != 200) {
-                val err = conn.errorStream?.bufferedReader()?.use { it.readText() }
-                fileLog("HTTP Error $responseCode: $err")
-                emit("[ERROR: Server returned $responseCode]")
-                return@flow
-            }
-
             val reader = BufferedReader(InputStreamReader(conn.inputStream))
             var line: String? = null
             var firstChunk = true
@@ -516,7 +542,7 @@ class GGUFModelClient {
                     if (firstChoice != null) {
                         val finishReason = firstChoice.optString("finish_reason", "")
                         if (finishReason == "stop" || finishReason == "length") {
-                            // finished
+                            // completed
                         }
                         val delta = firstChoice.optJSONObject("delta")
                         val content = delta?.optString("content", "") 
