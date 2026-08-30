@@ -1059,7 +1059,7 @@ fun AgentMessageBubble(log: LogEntry) {
                     else -> "MEDLAM AI"
                 },
                 style = MaterialTheme.typography.labelMedium,
-                color = if (isUser) NeonCyan else if (isSystem) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+                color = if (isUser) NeonCyan else if (isSystem) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f) else MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1086,13 +1086,13 @@ fun AgentMessageBubble(log: LogEntry) {
                     )
                     .background(
                         if (isUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                        else if (isSystem) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                        else if (isSystem) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                         else MaterialTheme.colorScheme.surfaceVariant
                     )
                     .border(
                         width = 1.dp,
                         color = if (isUser) NeonCyan.copy(alpha = 0.3f)
-                                else if (isSystem) MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                else if (isSystem) MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                                 else MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
                         shape = RoundedCornerShape(
                             topStart = 16.dp,

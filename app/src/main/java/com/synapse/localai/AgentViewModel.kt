@@ -781,7 +781,7 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                                 }
                                 else -> {
                                     if (!inThinkBlock) {
-                                        _uiState.update { it.copy(currentPhase = AgentActionPhase.PLANNING) }
+                                        _uiState.update { it.copy(currentPhase = AgentActionPhase.IDLE) }
                                     }
                                 }
                             }

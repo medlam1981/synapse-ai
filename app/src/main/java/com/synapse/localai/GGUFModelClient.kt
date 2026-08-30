@@ -492,7 +492,6 @@ class GGUFModelClient {
             .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
-            .put("n_predict", -1)
 
         val bodyBytes = body.toString().toByteArray(Charsets.UTF_8)
         val streamMsg = "Streaming to: $targetUrl | messages_count=${messagesArray.length()}"
