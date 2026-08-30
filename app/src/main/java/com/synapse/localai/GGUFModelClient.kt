@@ -239,6 +239,8 @@ class GGUFModelClient {
                 "--port", serverPort.toString(),
                 "--cache-type-k", "q8_0",
                 "--cache-type-v", "q8_0",
+                "--parallel", "1",
+                "--cont-batching",
                 "--no-warmup"
             )
 
@@ -475,22 +477,22 @@ class GGUFModelClient {
         val activeBase = getActiveBaseUrl()
         val targetUrl = "$activeBase/v1/chat/completions"
 
-        // Build messages array
+        // Build messages array (no complex system prompt pre-pended to allow immediate slot allocation)
         val messagesArray = JSONArray()
-        val sysContent = if (systemPrompt.isNotBlank()) systemPrompt else "You are MEDLAM AI, an autonomous local neural agent."
-        messagesArray.put(JSONObject().put("role", "system").put("content", sysContent))
-
         for ((role, content) in history) {
             val roleName = if (role == "user") "user" else "assistant"
             messagesArray.put(JSONObject().put("role", roleName).put("content", content))
         }
+        if (messagesArray.length() == 0) {
+            messagesArray.put(JSONObject().put("role", "user").put("content", "Hello"))
+        }
 
-        // For Gemma models, do not pass invalid max_tokens (-1). Pass 4096 or custom positive tokens.
         val body = JSONObject()
+            .put("model", "default")
             .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
-            .put("max_tokens", if (maxTokens > 0) maxTokens else 4096)
+            .put("n_predict", -1)
 
         val bodyBytes = body.toString().toByteArray(Charsets.UTF_8)
         val streamMsg = "Streaming to: $targetUrl | messages_count=${messagesArray.length()}"
@@ -499,10 +501,11 @@ class GGUFModelClient {
 
         var conn: HttpURLConnection? = null
         var responseCode = -1
-        val retryStartTime = System.currentTimeMillis()
-        val retryTimeoutMs = 3000L
+        val maxAttempts = 5
+        var attempt = 0
 
-        while (coroutineContext.isActive) {
+        while (coroutineContext.isActive && attempt < maxAttempts) {
+            attempt++
             try {
                 conn = URL(targetUrl).openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
@@ -511,28 +514,31 @@ class GGUFModelClient {
                 conn.readTimeout = 300000 // 5 minutes
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("Accept", "text/event-stream")
+                conn.setRequestProperty("Connection", "keep-alive")
 
                 conn.outputStream.use { it.write(bodyBytes) }
                 responseCode = conn.responseCode
 
-                if (responseCode == 503 && (System.currentTimeMillis() - retryStartTime < retryTimeoutMs)) {
-                    val retryMsg = "HTTP 503 (server warmup), retrying in 500ms..."
+                if (responseCode == 503) {
+                    val retryMsg = "HTTP 503 (slot busy/allocating), retry attempt $attempt/$maxAttempts in 600ms..."
                     fileLog(retryMsg)
                     appendNativeLog("[GGUF RETRY] $retryMsg")
                     conn.disconnect()
                     conn = null
-                    delay(500L)
-                    continue
+                    if (attempt < maxAttempts) {
+                        delay(600L)
+                        continue
+                    }
                 }
                 break
             } catch (e: Exception) {
-                if (System.currentTimeMillis() - retryStartTime < retryTimeoutMs) {
-                    val retryMsg = "Connection attempt failed to $targetUrl (${e.message}), retrying in 500ms..."
-                    fileLog(retryMsg)
-                    appendNativeLog("[GGUF RETRY] $retryMsg")
-                    conn?.disconnect()
-                    conn = null
-                    delay(500L)
+                val retryMsg = "Connection attempt failed to $targetUrl (${e.message}), attempt $attempt/$maxAttempts in 600ms..."
+                fileLog(retryMsg)
+                appendNativeLog("[GGUF RETRY] $retryMsg")
+                conn?.disconnect()
+                conn = null
+                if (attempt < maxAttempts) {
+                    delay(600L)
                     continue
                 }
                 val errMsg = "Stream connection error to $targetUrl: ${e.message}"
