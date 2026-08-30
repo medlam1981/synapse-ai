@@ -194,9 +194,9 @@ class AgentViewModel : ViewModel() {
             val isLowRam = hw.totalRamMb < 4000
             val maxCores = Runtime.getRuntime().availableProcessors()
             
-            var savedContext = prefs.getInt("context_length", 8192)
-            if (savedContext < 8192) {
-                savedContext = 8192 // Force 8192 as requested
+            var savedContext = prefs.getInt("context_length", 4096)
+            if (savedContext > 4096 || savedContext < 2048) {
+                savedContext = 4096 // Default to 4096 to prevent Android LMK memory pressure
             }
 
             var savedThreads = prefs.getInt("thread_count", maxCores)

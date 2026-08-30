@@ -63,7 +63,7 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 8192
+    var contextLength: Int = 4096
     var threadCount: Int = 4
     var maxTokens: Int = -1
     var temperature: Float = 0.1f
@@ -230,11 +230,11 @@ class GGUFModelClient {
 
             val argsList = mutableListOf(
                 "-m", resolvedPath,
-                "-c", contextLength.coerceAtLeast(8192).toString(),
+                "-c", (if (contextLength > 0) contextLength else 4096).coerceIn(2048, 4096).toString(),
                 "-b", "256",
                 "-ub", "256",
                 "-t", threads.toString(),
-                "-ngl", gpuLayers.coerceIn(0, 33).toString(),
+                "-ngl", "0",
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString(),
                 "--cache-type-k", "q8_0",
@@ -257,7 +257,7 @@ class GGUFModelClient {
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
                 argsList.add("--model-draft")
                 argsList.add(resolvedDraft)
-                argsList.add("--draft-max")
+                argsList.add("--draft")
                 argsList.add("4")
                 argsList.add("--draft-min")
                 argsList.add("2")
@@ -513,7 +513,7 @@ class GGUFModelClient {
                 conn = URL(targetUrl).openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
-                conn.connectTimeout = 5000
+                conn.connectTimeout = 60000
                 conn.readTimeout = 300000 // 5 minutes
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.setRequestProperty("Accept", "text/event-stream")
