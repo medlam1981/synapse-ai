@@ -86,7 +86,6 @@ fun SettingsScreenContent(
     
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
-    var openAiKeysVisible by remember { mutableStateOf(false) }
     var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
@@ -191,7 +190,6 @@ fun SettingsScreenContent(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val isGemini = config.preferredModelType == ModelType.GEMINI
-                        val isOpenAi = config.preferredModelType == ModelType.OPENAI
                         val isGguf = config.preferredModelType == ModelType.GGUF
 
                         Button(
@@ -207,20 +205,6 @@ fun SettingsScreenContent(
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
                             Text("Gemini", color = if (isGemini) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Button(
-                            onClick = {
-                                val newConfig = config.copy(preferredModelType = ModelType.OPENAI)
-                                viewModel.saveConfig(context, newConfig)
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isOpenAi) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 10.dp)
-                        ) {
-                            Text("OpenAI", color = if (isOpenAi) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         Button(
                             onClick = {
@@ -267,39 +251,6 @@ fun SettingsScreenContent(
                                 },
                                 label = { Text("Gemini Model Name") },
                                 placeholder = { Text("gemini-1.5-flash") },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = settingsFieldColors(),
-                                textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            )
-                        }
-                    } else if (config.preferredModelType == ModelType.OPENAI) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedTextField(
-                                value = config.openaiApiKeys,
-                                onValueChange = {
-                                    val newConfig = config.copy(openaiApiKeys = it)
-                                    viewModel.saveConfig(context, newConfig)
-                                },
-                                label = { Text("OpenAI API Keys (comma-separated)") },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = settingsFieldColors(),
-                                textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
-                                visualTransformation = if (openAiKeysVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                trailingIcon = {
-                                    IconButton(onClick = { openAiKeysVisible = !openAiKeysVisible }) {
-                                        Icon(if (openAiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
-                                    }
-                                }
-                            )
-
-                            OutlinedTextField(
-                                value = config.openAiModelName,
-                                onValueChange = {
-                                    val newConfig = config.copy(openAiModelName = it)
-                                    viewModel.saveConfig(context, newConfig)
-                                },
-                                label = { Text("OpenAI Model Name") },
-                                placeholder = { Text("gpt-4o") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = settingsFieldColors(),
                                 textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp)

@@ -30,7 +30,7 @@ import java.util.*
 import com.synapse.localai.tools.YouTubeTool
 import com.synapse.localai.tools.DocumentTool
 
-enum class ModelType { GGUF, GEMINI, OPENAI }
+enum class ModelType { GGUF, GEMINI }
 
 /** Dynamic phase tracking for in-stream status indicators */
 enum class AgentActionPhase {
@@ -59,8 +59,6 @@ data class AgentConfig(
     val useMmap: Boolean = true,
     val geminiApiKeys: String = "",
     val geminiModelName: String = "gemini-1.5-flash",
-    val openaiApiKeys: String = "",
-    val openAiModelName: String = "gpt-4o",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
     val contextLength: Int = 8192,
@@ -146,7 +144,6 @@ class AgentViewModel : ViewModel() {
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
     private var geminiClient: GeminiModelClient? = null
-    private var openAiClient: OpenAiModelClient? = null
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
     private var visualMemoryJob: Job? = null
@@ -212,9 +209,6 @@ class AgentViewModel : ViewModel() {
             val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
             var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
             var geminiModel = prefs.getString("gemini_model_name", "gemini-1.5-flash") ?: "gemini-1.5-flash"
-            
-            var openaiKeys = prefs.getString("openai_api_keys", "") ?: ""
-            var openAiModel = prefs.getString("openai_model_name", "gpt-4o") ?: "gpt-4o"
             val draftPath = prefs.getString("draft_model_path", "") ?: ""
             val gpuLayers = prefs.getInt("gpu_layers", 0)
             val useMmap = prefs.getBoolean("use_mmap", true)
@@ -227,8 +221,6 @@ class AgentViewModel : ViewModel() {
                 useMmap = useMmap,
                 geminiApiKeys = geminiKeys,
                 geminiModelName = geminiModel,
-                openaiApiKeys = openaiKeys,
-                openAiModelName = openAiModel,
                 serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
                 serverPort = prefs.getInt("server_port", 11434),
                 contextLength = savedContext,
@@ -245,15 +237,11 @@ class AgentViewModel : ViewModel() {
             _uiState.update { it.copy(config = config) }
 
             val activeGeminiKeyCount = geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
-            val activeOpenAiKeyCount = openaiKeys.split(",").filter { it.trim().isNotEmpty() }.size
             
             if (modelType == ModelType.GEMINI && activeGeminiKeyCount == 0) {
                 addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your Gemini keys.", isError = true))
-            } else if (modelType == ModelType.OPENAI && activeOpenAiKeyCount == 0) {
-                addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your OpenAI keys.", isError = true))
             } else {
-                val activeKeys = if (modelType == ModelType.OPENAI) activeOpenAiKeyCount else activeGeminiKeyCount
-                addSystemLog("⚡ System Online ($modelType). Active Keys: $activeKeys")
+                addSystemLog("⚡ System Online ($modelType). Active Keys: $activeGeminiKeyCount")
             }
 
             // Consolidate legacy directories to single /sdcard/Medlam-Ai/ standard
@@ -296,8 +284,6 @@ class AgentViewModel : ViewModel() {
                 }
             } else if (config.preferredModelType == ModelType.GEMINI && config.geminiApiKeys.isNotBlank()) {
                 loadGeminiModel(config.geminiApiKeys, config.geminiModelName)
-            } else if (config.preferredModelType == ModelType.OPENAI && config.openaiApiKeys.isNotBlank()) {
-                loadOpenAiModel(config.openaiApiKeys, config.openAiModelName)
             }
 
 
@@ -346,7 +332,6 @@ class AgentViewModel : ViewModel() {
         val oldConfig = _uiState.value.config
         val oldPath = oldConfig.localModelPath
         val oldGeminiKeys = oldConfig.geminiApiKeys
-        val oldOpenAiKeys = oldConfig.openaiApiKeys
         val oldType = oldConfig.preferredModelType
         
         val perfChanged = finalConfig.contextLength != oldConfig.contextLength ||
@@ -367,8 +352,6 @@ class AgentViewModel : ViewModel() {
             putString("preferred_model_type", finalConfig.preferredModelType.name)
             putString("gemini_api_keys", finalConfig.geminiApiKeys)
             putString("gemini_model_name", finalConfig.geminiModelName)
-            putString("openai_api_keys", finalConfig.openaiApiKeys)
-            putString("openai_model_name", finalConfig.openAiModelName)
             putString("server_host", finalConfig.serverHost)
             putInt("server_port", finalConfig.serverPort)
             putInt("context_length", finalConfig.contextLength)
@@ -407,13 +390,6 @@ class AgentViewModel : ViewModel() {
                 !isModelLoaded() || oldType != ModelType.GEMINI) {
                 closeAllModels()
                 loadGeminiModel(finalConfig.geminiApiKeys, finalConfig.geminiModelName)
-            }
-        } else if (finalConfig.preferredModelType == ModelType.OPENAI) {
-            if (finalConfig.openaiApiKeys != oldOpenAiKeys || 
-                finalConfig.openAiModelName != oldConfig.openAiModelName ||
-                !isModelLoaded() || oldType != ModelType.OPENAI) {
-                closeAllModels()
-                loadOpenAiModel(finalConfig.openaiApiKeys, finalConfig.openAiModelName)
             }
         }
     }
@@ -532,37 +508,15 @@ class AgentViewModel : ViewModel() {
         _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size) }
     }
 
-    private fun loadOpenAiModel(apiKeysRaw: String, modelName: String = "gpt-4o") {
-        val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        if (keys.isEmpty()) return
-        
-        val initialIdx = MainActivity.instance?.let { prefs(it).getInt("current_key_index", 0) } ?: 0
-        
-        closeAllModels()
-        openAiClient = OpenAiModelClient(keys, initialIdx) { idx ->
-            _uiState.update { it.copy(currentKeyIndex = idx) }
-            // Persist the successful key index
-            val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
-            if (ctx != null) {
-                ctx.applicationContext.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
-                    .edit().putInt("current_key_index", idx).apply()
-            }
-        }
-        openAiClient?.modelName = modelName
-        _uiState.update { it.copy(activeModelType = ModelType.OPENAI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size) }
-    }
-
     private fun isModelLoaded(): Boolean {
         return (ggufClient != null && ggufClient!!.isLoaded) || 
-               (geminiClient != null && geminiClient!!.isLoaded) || 
-               (openAiClient != null && openAiClient!!.isLoaded)
+               (geminiClient != null && geminiClient!!.isLoaded)
     }
 
     fun closeAllModels() {
         ggufClient?.close()
         ggufClient = null
         geminiClient = null
-        openAiClient = null
         _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "", currentKeyIndex = 0, totalKeys = 0) }
     }
 
@@ -801,17 +755,6 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                                     // onRetry: do NOT wipe responseSb — retain partial output
                                 }
                             }
-                            ModelType.OPENAI -> {
-                                val json = JSONArray()
-                                historyWithScreen.forEachIndexed { i, (r, c) ->
-                                    val m = JSONObject().put("role", r).put("content", c)
-                                    if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
-                                    json.put(m)
-                                }
-                                openAiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
-                                    // onRetry: do NOT wipe responseSb — retain partial output
-                                }
-                            }
                         }
 
                         stream.collect { chunk ->
@@ -1017,11 +960,6 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                         val json = JSONArray()
                         taskHistory.forEach { (r, c) -> json.put(JSONObject().put("role", r).put("content", c)) }
                         geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { responseSb.setLength(0) }
-                    }
-                    ModelType.OPENAI -> {
-                        val json = JSONArray()
-                        taskHistory.forEach { (r, c) -> json.put(JSONObject().put("role", r).put("content", c)) }
-                        openAiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { responseSb.setLength(0) }
                     }
                 }
                 

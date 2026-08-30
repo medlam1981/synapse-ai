@@ -634,9 +634,6 @@ fun ChatApp(viewModel: AgentViewModel) {
                         val modelShort = uiState.config.geminiModelName.removePrefix("models/").removePrefix("gemini-").replace("-flash", " Flash").replace("-pro", " Pro")
                         "ONLINE • Gemini $modelShort • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
                     }
-                    ModelType.OPENAI -> {
-                        "ONLINE • ${uiState.config.openAiModelName} • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
-                    }
                     else -> "ONLINE • NEURAL INTERFACE ACTIVE"
                 }
             }
@@ -2072,11 +2069,7 @@ fun getSystemStats(context: android.content.Context): SystemStats {
 
     val prefs = context.getSharedPreferences("synapse_config", android.content.Context.MODE_PRIVATE)
     val geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
-    val openaiKeys = prefs.getString("openai_api_keys", "") ?: ""
-    val preferredType = prefs.getString("preferred_model_type", "GEMINI")
-    
-    val keyList = if (preferredType == "OPENAI") openaiKeys else geminiKeys
-    val totalKeys = if (keyList.isBlank()) 0 else keyList.split(",").size
+    val totalKeys = if (geminiKeys.isBlank()) 0 else geminiKeys.split(",").size
     val currentKeyIndex = if (totalKeys > 0) (prefs.getInt("current_key_index", 0) + 1) else 0
     var maxTemp = 0
     try {

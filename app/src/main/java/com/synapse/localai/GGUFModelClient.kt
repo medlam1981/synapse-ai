@@ -456,45 +456,30 @@ class GGUFModelClient {
         systemPrompt: String = "",
         onSpeedUpdate: ((Float) -> Unit)? = null
     ): Flow<String> = flow {
-        // Construct full absolute URL with protocol, host, and active port
+        // Construct target URL using official OpenAI-compatible endpoint
         val baseUrl = getBaseUrl()
-        val fullUrl = "$baseUrl/completion"
+        val targetUrl = "$baseUrl/v1/chat/completions"
 
-        // Build prompt using ChatML format (compatible with modern llama.cpp models)
-        val promptBuilder = StringBuilder()
-        if (systemPrompt.isNotBlank()) {
-            promptBuilder.append("<|im_start|>system\n$systemPrompt<|im_end|>\n")
-        }
+        // Build messages array
+        val messagesArray = JSONArray()
+        val sysContent = if (systemPrompt.isNotBlank()) systemPrompt else "You are MEDLAM AI, an autonomous local neural agent."
+        messagesArray.put(JSONObject().put("role", "system").put("content", sysContent))
+
         for ((role, content) in history) {
             val roleName = if (role == "user") "user" else "assistant"
-            promptBuilder.append("<|im_start|>$roleName\n$content<|im_end|>\n")
+            messagesArray.put(JSONObject().put("role", roleName).put("content", content))
         }
-        promptBuilder.append("<|im_start|>assistant\n")
-        val finalPrompt = promptBuilder.toString()
 
         val body = JSONObject()
-            .put("prompt", finalPrompt)
-            .put("n_predict", -1)
+            .put("model", "local-model")
+            .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
-            .put("cache_prompt", true)
-            .put("stop", JSONArray()
-                .put("<|im_end|>")
-                .put("<|endoftext|>")
-                .put("<|im_start|>")
-                .put("### Human:")
-                .put("### Assistant:")
-                .put("[INST]")
-                .put("[/INST]")
-                .put("<|eot_id|>")
-                .put("<turn|>")
-                .put("<start_of_turn>")
-                .put("<end_of_turn>")
-            )
+            .put("max_tokens", -1)
 
-        fileLog("Streaming to: $fullUrl | prompt_len=${finalPrompt.length}")
+        fileLog("Streaming to: $targetUrl | messages_count=${messagesArray.length()}")
 
-        val url = URL(fullUrl)
+        val url = URL(targetUrl)
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
@@ -526,19 +511,43 @@ class GGUFModelClient {
                 if (data == "[DONE]") break
                 try {
                     val json = JSONObject(data)
-                    if (json.optBoolean("stop", false)) break
-                    val content = json.optString("content", "")
-                    if (content.isNotEmpty()) {
-                        tokenCount++
-                        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                        if (elapsedSec > 0.5f) {
-                            onSpeedUpdate?.invoke(tokenCount / elapsedSec)
+                    val choices = json.optJSONArray("choices")
+                    val firstChoice = choices?.optJSONObject(0)
+                    if (firstChoice != null) {
+                        val finishReason = firstChoice.optString("finish_reason", "")
+                        if (finishReason == "stop" || finishReason == "length") {
+                            // finished
                         }
-                        if (firstChunk) {
-                            fileLog("First chunk received: ${content.take(50)}")
-                            firstChunk = false
+                        val delta = firstChoice.optJSONObject("delta")
+                        val content = delta?.optString("content", "") 
+                            ?: firstChoice.optString("text", "")
+                        
+                        if (!content.isNullOrEmpty()) {
+                            tokenCount++
+                            val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+                            if (elapsedSec > 0.5f) {
+                                onSpeedUpdate?.invoke(tokenCount / elapsedSec)
+                            }
+                            if (firstChunk) {
+                                fileLog("First chunk received: ${content.take(50)}")
+                                firstChunk = false
+                            }
+                            emit(content)
                         }
-                        emit(content)
+                    } else {
+                        val content = json.optString("content", "")
+                        if (content.isNotEmpty()) {
+                            tokenCount++
+                            val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+                            if (elapsedSec > 0.5f) {
+                                onSpeedUpdate?.invoke(tokenCount / elapsedSec)
+                            }
+                            if (firstChunk) {
+                                fileLog("First chunk received: ${content.take(50)}")
+                                firstChunk = false
+                            }
+                            emit(content)
+                        }
                     }
                 } catch (_: Exception) {}
             }
