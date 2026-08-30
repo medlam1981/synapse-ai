@@ -28,15 +28,18 @@ val LightError = Color(0xFFCF222E)
 val LightOutline = Color(0xFFD0D7DE)
 val LightOutlineVariant = Color(0xFFE1E4E8)
 
-// Neon Accents (keeping some for the "Neural" feel)
+// Modern Accents (Clean Slate, Electric Cyan, Deep Indigo)
 val NeonCyan = Color(0xFF00D4FF)
-val NeonPurple = Color(0xFFBB44FF)
-val NeonMagenta = Color(0xFFFF44DD)
+val NeonPurple = Color(0xFF0070F3) // Electric Blue
+val NeonMagenta = Color(0xFF0284C7) // Deep Indigo / Slate Accent
+val ElectricCyan = Color(0xFF00D4FF)
+val DeepIndigo = Color(0xFF0284C7)
+val ElectricBlue = Color(0xFF0070F3)
 
 // Syntax Highlighting Colors
 val CodeKeyword = Color(0xFFFF7B72)
 val CodeVariable = Color(0xFF79C0FF)
-val CodeFunction = Color(0xFFD2A8FF)
+val CodeFunction = Color(0xFF79C0FF)
 val CodeString = Color(0xFFA5D6FF)
 val CodeComment = Color(0xFF8B949E)
 val CodeBackgroundDark = Color(0xFF0D1117)

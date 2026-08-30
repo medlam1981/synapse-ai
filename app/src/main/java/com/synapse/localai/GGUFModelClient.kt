@@ -122,26 +122,34 @@ class GGUFModelClient {
 
     private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
         val address = LlamaServerJNI.safeGetAddress()
-        val urlToTry = address?.takeIf { it.isNotBlank() }?.replace("0.0.0.0", "127.0.0.1") ?: fallbackUrl
-        
-        var conn: HttpURLConnection? = null
-        return@withContext try {
-            val url = URL("$urlToTry/health")
-            conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 1000
-            conn.readTimeout = 1000
-            val code = conn.responseCode
-            if (code == 200) {
-                val response = conn.inputStream.bufferedReader().use { it.readText() }
-                response.contains("ok") || response.contains("status")
-            } else {
-                false
+        val primaryUrl = address?.takeIf { it.isNotBlank() }?.replace("0.0.0.0", "127.0.0.1") ?: "http://127.0.0.1:$serverPort"
+        val candidateUrls = listOf(
+            primaryUrl,
+            "http://127.0.0.1:$serverPort",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:11434"
+        ).distinct()
+
+        for (baseUrl in candidateUrls) {
+            var conn: HttpURLConnection? = null
+            try {
+                val url = URL("$baseUrl/health")
+                conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 800
+                conn.readTimeout = 800
+                val code = conn.responseCode
+                if (code == 200) {
+                    val response = conn.inputStream.bufferedReader().use { it.readText() }
+                    if (!response.contains("loading model")) {
+                        return@withContext true
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                conn?.disconnect()
             }
-        } catch (e: Exception) {
-            false
-        } finally {
-            conn?.disconnect()
         }
+        return@withContext false
     }
 
     private suspend fun startServer(
@@ -297,8 +305,15 @@ class GGUFModelClient {
                                     val pct = match3.groupValues[1].toFloatOrNull() ?: 0f
                                     lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.98f)
                                 }
-                                if (currentLine.contains("load_all_tensors: loaded") || currentLine.contains("HTTP server listening")) {
-                                    lastCalculatedProgress = 0.99f
+                                if (currentLine.contains("load_all_tensors") ||
+                                    currentLine.contains("HTTP server listening") ||
+                                    currentLine.contains("server is listening") ||
+                                    currentLine.contains("main: model loaded") ||
+                                    currentLine.contains("all tensors loaded") ||
+                                    currentLine.contains("llama_init_from_gpt_params") ||
+                                    currentLine.contains("model loaded successfully")
+                                ) {
+                                    lastCalculatedProgress = 1.0f
                                 }
                             }
                             lastLogReadPos = raf.filePointer
@@ -306,6 +321,18 @@ class GGUFModelClient {
                         }
                     }
                 } catch (_: Exception) {}
+
+                // Under mmap or swift startup, smoothly advance if server is loading
+                val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+                if (useMmap && elapsedSec > 0.5f && lastCalculatedProgress < 0.95f) {
+                    lastCalculatedProgress = (0.25f + elapsedSec * 0.35f).coerceIn(0.25f, 0.95f)
+                }
+
+                if (lastCalculatedProgress >= 1.0f || isServerRunning()) {
+                    onProgress(1.0f, "Neural Core Online (100%)")
+                    onStatus("✅ Local Server Ready.")
+                    return@withContext true
+                }
 
                 val pctInt = (lastCalculatedProgress * 100).toInt().coerceIn(1, 99)
                 val loadedGb = lastCalculatedProgress * baseSizeGb

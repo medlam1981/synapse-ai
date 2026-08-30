@@ -314,7 +314,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "2. LOCAL NEURAL CORE",
-                titleColor = NeonMagenta,
+                titleColor = Color(0xFF0284C7),
                 statusDot = when {
                     uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> Color.Green
                     uiState.localModelLoading -> Color.Yellow
@@ -333,7 +333,7 @@ fun SettingsScreenContent(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .border(BorderStroke(0.5.dp, NeonMagenta.copy(alpha = 0.6f)), RoundedCornerShape(10.dp))
+                                .border(BorderStroke(0.5.dp, Color(0xFF0284C7).copy(alpha = 0.6f)), RoundedCornerShape(10.dp))
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -344,14 +344,14 @@ fun SettingsScreenContent(
                             ) {
                                 Text(
                                     text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
-                                    color = NeonMagenta,
+                                    color = Color(0xFF0284C7),
                                     fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
                                     text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
-                                    color = NeonCyan,
+                                    color = Color(0xFF00D4FF),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace
@@ -363,14 +363,14 @@ fun SettingsScreenContent(
                                     .fillMaxWidth()
                                     .height(8.dp)
                                     .clip(RoundedCornerShape(4.dp)),
-                                color = NeonMagenta,
+                                color = Color(0xFF0284C7),
                                 trackColor = MaterialTheme.colorScheme.outlineVariant
                             )
                         }
                     }
 
                     if (isScanning) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = NeonMagenta)
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color(0xFF0284C7))
                     }
 
                     if (models.isEmpty() && !isScanning) {
@@ -559,7 +559,7 @@ fun SettingsScreenContent(
                                     },
                                     valueRange = 0f..33f,
                                     steps = 32,
-                                    colors = SliderDefaults.colors(thumbColor = NeonMagenta, activeTrackColor = NeonMagenta)
+                                    colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary)
                                 )
                             }
 
@@ -602,7 +602,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "3. INFERENCE PARAMETERS",
-                titleColor = NeonPurple
+                titleColor = Color(0xFF0070F3)
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -653,7 +653,7 @@ fun SettingsScreenContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Temperature", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = NeonCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                         Slider(
                             value = temperatureState,
@@ -663,7 +663,7 @@ fun SettingsScreenContent(
                                 viewModel.saveConfig(context, newConfig)
                             },
                             valueRange = 0f..1.5f,
-                            colors = SliderDefaults.colors(thumbColor = NeonCyan, activeTrackColor = NeonCyan)
+                            colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary)
                         )
                     }
                 }

@@ -204,7 +204,7 @@ fun CollapsibleCodeBlock(language: String, code: String, filePath: String? = nul
                 ) {
                     Text(
                         text = if (expanded) "▲ Collapse" else "▼ View Code",
-                        color = if (expanded) NeonCyan else NeonPurple,
+                        color = if (expanded) NeonCyan else MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold,
@@ -220,32 +220,30 @@ fun CollapsibleCodeBlock(language: String, code: String, filePath: String? = nul
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(CodeBackground)
+                        .background(Color(0xFF0D1117))
+                        .padding(12.dp)
                 ) {
                     Text(
                         text = highlightCode(code),
+                        color = Color(0xFFE6EDF3),
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
+                            fontSize = 11.5.sp,
                             lineHeight = 16.sp
-                        ),
-                        color = Color(0xFFC9D1D9),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp)
+                        )
                     )
 
-                    // Floating Quick [Copy Code] button in top-end corner
+                    // Floating Copy Button
                     Surface(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(code))
+                            copied = true
+                        },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .clickable {
-                                clipboardManager.setText(AnnotatedString(code))
-                                copied = true
-                            },
-                        color = if (copied) Color(0xFF238636) else Color(0xFF21262D),
+                            .padding(4.dp),
                         shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFF21262D).copy(alpha = 0.85f),
                         border = BorderStroke(0.5.dp, if (copied) Color(0xFF3FB950) else Color(0xFF30363D))
                     ) {
                         Row(
@@ -254,19 +252,17 @@ fun CollapsibleCodeBlock(language: String, code: String, filePath: String? = nul
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
-                                imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                imageVector = if (copied) Icons.Default.Check else Icons.Outlined.ContentCopy,
                                 contentDescription = "Copy Code",
-                                tint = if (copied) Color.White else NeonCyan,
-                                modifier = Modifier.size(11.dp)
+                                tint = if (copied) Color(0xFF3FB950) else Color(0xFF79C0FF),
+                                modifier = Modifier.size(12.dp)
                             )
                             Text(
-                                text = if (copied) "Copied!" else "Copy Code",
-                                color = if (copied) Color.White else NeonCyan,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontSize = 8.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
+                                text = if (copied) "Copied!" else "Copy",
+                                color = if (copied) Color(0xFF3FB950) else Color(0xFF79C0FF),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
                             )
                         }
                     }
@@ -277,26 +273,24 @@ fun CollapsibleCodeBlock(language: String, code: String, filePath: String? = nul
 }
 
 /**
- * In-stream Thought Process card — renders <think>...</think> blocks as a
- * collapsible "Thought Process" card above the final response.
+ * ThoughtProcessCard — Collapsible card for model thinking/chain-of-thought.
  */
 @Composable
 fun ThoughtProcessCard(thinkContent: String) {
-    if (thinkContent.isBlank()) return
     var expanded by remember { mutableStateOf(false) }
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        color = Color(0xFF1A1D2B),
-        shape = RoundedCornerShape(10.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { expanded = !expanded },
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -305,10 +299,10 @@ fun ThoughtProcessCard(thinkContent: String) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("✦", color = NeonPurple, fontSize = 12.sp)
+                    Text("✦", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                     Text(
                         text = "Thought Process",
-                        color = NeonPurple.copy(alpha = 0.9f),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = FontWeight.SemiBold,
                             fontFamily = FontFamily.Monospace
@@ -322,15 +316,16 @@ fun ThoughtProcessCard(thinkContent: String) {
                 )
             }
             if (expanded) {
-                Divider(color = NeonPurple.copy(alpha = 0.15f), thickness = 0.5.dp)
+                Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
                 Text(
                     text = thinkContent.trim(),
                     modifier = Modifier.padding(12.dp),
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontStyle = FontStyle.Italic,
-                        fontSize = 11.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp
+                    )
                 )
             }
         }
@@ -382,7 +377,7 @@ fun PhaseStatusIndicator(phase: AgentActionPhase) {
                 width = 0.8.dp,
                 brush = Brush.horizontalGradient(
                     colors = listOf(
-                        NeonPurple.copy(alpha = 0.5f),
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
                         NeonCyan.copy(alpha = 0.5f)
                     )
                 ),
@@ -410,7 +405,7 @@ fun PhaseStatusIndicator(phase: AgentActionPhase) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("✦", color = NeonPurple, fontSize = 11.sp)
+            Text("✦", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
             Text(
                 text = phaseLabel,
                 color = Color.White.copy(alpha = 0.9f),
@@ -669,7 +664,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
@@ -683,7 +678,7 @@ fun ChatApp(viewModel: AgentViewModel) {
 
                         Column(
                             verticalArrangement = Arrangement.Center,
-                            modifier = Modifier.padding(start = 2.dp)
+                            modifier = Modifier.padding(start = 4.dp)
                         ) {
                             Text(
                                 text = "MEDLAM AI",
@@ -706,35 +701,24 @@ fun ChatApp(viewModel: AgentViewModel) {
                         }
                     }
                     
-                    // Right side: New Session frosted glass action button + Settings + Clear Chat
+                    // Right side: [ + ] New Chat, [ Settings ], [ Trash ] all 40x40dp symmetric
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Surface(
                             onClick = { viewModel.startNewSession() },
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.size(40.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
+                            Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Filled.Add,
-                                    contentDescription = "New Session",
+                                    contentDescription = "New Chat",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Text(
-                                    text = "NEW CHAT",
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 0.5.sp
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -744,14 +728,14 @@ fun ChatApp(viewModel: AgentViewModel) {
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Outlined.Settings,
                                     contentDescription = "Settings",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -761,14 +745,14 @@ fun ChatApp(viewModel: AgentViewModel) {
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Outlined.DeleteOutline,
                                     contentDescription = "Clear Chat",
-                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                                    modifier = Modifier.size(18.dp)
+                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -1067,7 +1051,7 @@ fun AgentMessageBubble(log: LogEntry) {
                 Icon(
                     imageVector = Icons.Default.Psychology,
                     contentDescription = null,
-                    tint = NeonPurple,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -1078,7 +1062,7 @@ fun AgentMessageBubble(log: LogEntry) {
                     else -> "MEDLAM AI"
                 },
                 style = MaterialTheme.typography.labelMedium,
-                color = if (isUser) NeonCyan else if (isSystem) MaterialTheme.colorScheme.outline else NeonPurple,
+                color = if (isUser) NeonCyan else if (isSystem) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1112,7 +1096,7 @@ fun AgentMessageBubble(log: LogEntry) {
                         width = 1.dp,
                         color = if (isUser) NeonCyan.copy(alpha = 0.3f)
                                 else if (isSystem) MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
-                                else NeonPurple.copy(alpha = 0.2f),
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
                         shape = RoundedCornerShape(
                             topStart = 16.dp,
                             topEnd = 16.dp,
@@ -1218,15 +1202,24 @@ fun SidebarContent(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "✦",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Column {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "✦",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                    Column(verticalArrangement = Arrangement.Center) {
                         Text(
                             text = "MEDLAM AI",
                             color = MaterialTheme.colorScheme.onSurface,
@@ -1238,9 +1231,10 @@ fun SidebarContent(
                         )
                         Text(
                             text = "NEURAL SESSION HUB",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                         )
@@ -1258,7 +1252,7 @@ fun SidebarContent(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // + New Chat Prominent Button
+            // + New Session Prominent Full-Width Button
             Button(
                 onClick = {
                     viewModel.startNewSession()
@@ -1272,23 +1266,27 @@ fun SidebarContent(
                     contentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 shape = RoundedCornerShape(8.dp),
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
             ) {
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.AddComment,
+                        imageVector = Icons.Filled.Add,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(18.dp)
                     )
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "+ New Session",
+                        text = "New Session",
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     )
                 }
@@ -1598,7 +1596,7 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
                     if (uiState?.localModelLoading == true) "NEURAL CORE INITIALIZING • LOADING MODEL"
                     else if (dynamicTelemetry.isNotBlank()) "$dynamicTelemetry • ONLINE" 
                     else "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
-                    color = if (uiState?.localModelLoading == true) NeonMagenta else MaterialTheme.colorScheme.primary,
+                    color = if (uiState?.localModelLoading == true) Color(0xFF0284C7) else MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
@@ -1612,7 +1610,7 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-                        .border(BorderStroke(0.5.dp, NeonMagenta.copy(alpha = 0.5f)), RoundedCornerShape(8.dp))
+                        .border(BorderStroke(0.5.dp, Color(0xFF0284C7).copy(alpha = 0.5f)), RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -1623,14 +1621,14 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
                     ) {
                         Text(
                             text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
-                            color = NeonMagenta,
+                            color = Color(0xFF0284C7),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
                             text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
-                            color = NeonCyan,
+                            color = Color(0xFF00D4FF),
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Black,
                             fontFamily = FontFamily.Monospace
@@ -1642,7 +1640,7 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
                             .fillMaxWidth()
                             .height(6.dp)
                             .clip(RoundedCornerShape(3.dp)),
-                        color = NeonMagenta,
+                        color = Color(0xFF0284C7),
                         trackColor = MaterialTheme.colorScheme.outlineVariant
                     )
                 }
@@ -1657,17 +1655,17 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
                 val weight = 1f
                 Box(Modifier.weight(weight)) { 
                     StatBadge(
-                        icon = { Icon(if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull, null, tint = if (stats.isCharging) NeonMagenta else NeonCyan, modifier = Modifier.size(12.dp)) }, 
+                        icon = { Icon(if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull, null, tint = if (stats.isCharging) Color(0xFF3FB950) else Color(0xFF0284C7), modifier = Modifier.size(12.dp)) }, 
                         label = "PWR", 
                         value = "${stats.battery}%"
                     ) 
                 }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Memory, null, tint = NeonPurple, modifier = Modifier.size(12.dp)) }, label = "RAM", value = stats.ramFree) }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.DeveloperBoard, null, tint = NeonCyan, modifier = Modifier.size(12.dp)) }, label = "SYS CPU", value = stats.cpuUsage) }
-                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.VpnKey, null, tint = NeonMagenta, modifier = Modifier.size(12.dp)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.Memory, null, tint = Color(0xFF0070F3), modifier = Modifier.size(12.dp)) }, label = "RAM", value = stats.ramFree) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.DeveloperBoard, null, tint = Color(0xFF00D4FF), modifier = Modifier.size(12.dp)) }, label = "SYS CPU", value = stats.cpuUsage) }
+                Box(Modifier.weight(weight)) { StatBadge(icon = { Icon(Icons.Filled.VpnKey, null, tint = Color(0xFF0284C7), modifier = Modifier.size(12.dp)) }, label = "KEY", value = "${stats.currentKeyIndex}/${stats.totalKeys}") }
                 val tempColor = when {
                     stats.cpuTempInt <= 0 -> MaterialTheme.colorScheme.primary
-                    stats.cpuTempInt < 45 -> NeonCyan 
+                    stats.cpuTempInt < 45 -> Color(0xFF00D4FF) 
                     stats.cpuTempInt < 65 -> Color(0xFFFF9F43) 
                     else -> MaterialTheme.colorScheme.error
                 }
@@ -1871,120 +1869,222 @@ fun ScheduledTasksTicker(tasks: List<ScheduledTask>) {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ActiveTasksBar(tasks: List<AgentTask>, summary: String, viewModel: AgentViewModel, context: android.content.Context) {
-    if (tasks.isEmpty() && summary.isBlank()) return
-    
+    val pendingCount = tasks.count { it.status == TaskStatus.PENDING }
+    val queuedCount = tasks.count { it.status == TaskStatus.QUEUED }
+    val runningCount = tasks.count { it.status == TaskStatus.RUNNING }
+    val completedCount = tasks.count { it.status == TaskStatus.COMPLETED }
+    val failedCount = tasks.count { it.status == TaskStatus.FAILED }
+
     var expanded by remember { mutableStateOf(false) }
     val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
     val scheduled = tasks.filter { it.status == TaskStatus.PENDING && it.executeAt > System.currentTimeMillis() }
-    
-    Column(
+    val runningTasks = tasks.filter { it.status == TaskStatus.RUNNING }
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xFF0D1B2A).copy(alpha = 0.9f),
-                        Color(0xFF1B2838).copy(alpha = 0.9f)
-                    )
-                )
-            )
-            .border(0.5.dp, Color(0xFF00D4FF).copy(alpha = 0.3f), RectangleShape)
-            .clickable { expanded = !expanded }
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clickable { expanded = !expanded },
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        // Summary line
-        if (summary.isNotBlank()) {
-            Text(
-                text = "\u26a1 Tasks: $summary",
-                color = Color(0xFF00D4FF),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp
-            )
-        }
-        
-        // Running tasks
-        val running = tasks.filter { it.status == TaskStatus.RUNNING }
-        running.forEach { task ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "\u25b6 Running: ${task.command.take(60)}",
-                    color = Color(0xFF4CAF50),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { viewModel.cancelTask(task.id) }, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Filled.Close, "Stop Task", tint = Color.Red, modifier = Modifier.size(18.dp))
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            // Structured Table / Grid Layout
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Header Column
+                Column(
+                    modifier = Modifier.weight(1.3f),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Text(
+                        text = "TASKS ENGINE",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 8.5.sp,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        text = if (runningCount > 0) "ACTIVE" else "READY",
+                        color = if (runningCount > 0) Color(0xFF3FB950) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp
+                    )
                 }
+
+                Box(modifier = Modifier.height(24.dp).width(0.5.dp).background(MaterialTheme.colorScheme.outlineVariant))
+
+                // PENDING
+                TaskMetricCell(
+                    label = "PENDING",
+                    value = pendingCount.toString(),
+                    modifier = Modifier.weight(1f),
+                    valueColor = MaterialTheme.colorScheme.onSurface
+                )
+
+                Box(modifier = Modifier.height(24.dp).width(0.5.dp).background(MaterialTheme.colorScheme.outlineVariant))
+
+                // QUEUED
+                TaskMetricCell(
+                    label = "QUEUED",
+                    value = queuedCount.toString(),
+                    modifier = Modifier.weight(1f),
+                    valueColor = MaterialTheme.colorScheme.onSurface
+                )
+
+                Box(modifier = Modifier.height(24.dp).width(0.5.dp).background(MaterialTheme.colorScheme.outlineVariant))
+
+                // RUNNING
+                TaskMetricCell(
+                    label = "RUNNING",
+                    value = runningCount.toString(),
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (runningCount > 0) Color(0xFF0070F3) else MaterialTheme.colorScheme.onSurface
+                )
+
+                Box(modifier = Modifier.height(24.dp).width(0.5.dp).background(MaterialTheme.colorScheme.outlineVariant))
+
+                // COMPLETED
+                TaskMetricCell(
+                    label = "COMPLETED",
+                    value = completedCount.toString(),
+                    modifier = Modifier.weight(1.1f),
+                    valueColor = if (completedCount > 0) Color(0xFF3FB950) else MaterialTheme.colorScheme.onSurface
+                )
+
+                Box(modifier = Modifier.height(24.dp).width(0.5.dp).background(MaterialTheme.colorScheme.outlineVariant))
+
+                // FAILED
+                TaskMetricCell(
+                    label = "FAILED",
+                    value = failedCount.toString(),
+                    modifier = Modifier.weight(0.9f),
+                    valueColor = if (failedCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                )
             }
-        }
-        
-        if (scheduled.isNotEmpty()) {
-            if (expanded) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("SCHEDULED TASKS", color = NeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Divider(color = NeonCyan.copy(alpha=0.3f), modifier = Modifier.padding(vertical = 4.dp))
-                
-                scheduled.forEach { task ->
+
+            // Running tasks inline row
+            if (runningTasks.isNotEmpty()) {
+                runningTasks.forEach { task ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("\u23f0 ${fmt.format(Date(task.executeAt))}", color = Color(0xFFFFAB00), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            Text(task.description, color = MaterialTheme.colorScheme.onSurface, fontSize = 9.sp, maxLines = 2)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            IconButton(onClick = { 
-                                val cal = java.util.Calendar.getInstance()
-                                cal.timeInMillis = task.executeAt
-                                android.app.TimePickerDialog(
-                                    context,
-                                    { _, h, m ->
-                                        val newCal = java.util.Calendar.getInstance()
-                                        newCal.set(java.util.Calendar.HOUR_OF_DAY, h)
-                                        newCal.set(java.util.Calendar.MINUTE, m)
-                                        if (newCal.timeInMillis < System.currentTimeMillis()) {
-                                            newCal.add(java.util.Calendar.DAY_OF_YEAR, 1)
-                                        }
-                                        viewModel.updateScheduledTaskTime(task.id, newCal.timeInMillis)
-                                    },
-                                    cal.get(java.util.Calendar.HOUR_OF_DAY),
-                                    cal.get(java.util.Calendar.MINUTE),
-                                    true
-                                ).show()
-                            }, modifier = Modifier.size(24.dp)) {
-                                Icon(Icons.Filled.Edit, "Edit", tint = NeonCyan, modifier = Modifier.size(16.dp))
-                            }
-                            IconButton(onClick = { viewModel.deleteScheduledTask(task.id) }, modifier = Modifier.size(24.dp)) {
-                                Icon(Icons.Filled.Delete, "Delete", tint = Color.Red, modifier = Modifier.size(16.dp))
-                            }
+                        Text(
+                            text = "▶ Running: ${task.command.take(60)}",
+                            color = Color(0xFF3FB950),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { viewModel.cancelTask(task.id) }, modifier = Modifier.size(22.dp)) {
+                            Icon(Icons.Filled.Close, "Stop Task", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                         }
                     }
                 }
-            } else {
-                val tickerText = scheduled.joinToString("   \u2022   ") { 
-                    "\u23f0 ${fmt.format(Date(it.executeAt))} - ${it.description.take(30)}" 
-                }
-                Text(
-                    text = tickerText,
-                    color = Color(0xFFFFAB00),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    modifier = Modifier.basicMarquee(
-                        iterations = Int.MAX_VALUE,
-                        velocity = 30.dp
+            }
+
+            // Expandable Scheduled Tasks List
+            if (scheduled.isNotEmpty()) {
+                if (expanded) {
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(vertical = 4.dp), thickness = 0.5.dp)
+                    Text("SCHEDULED TASKS", color = MaterialTheme.colorScheme.primary, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    
+                    scheduled.forEach { task ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(fmt.format(Date(task.executeAt)), color = Color(0xFFFF9F43), fontSize = 9.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Text(task.description, color = MaterialTheme.colorScheme.onSurface, fontSize = 9.sp, maxLines = 2)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                IconButton(onClick = { 
+                                    val cal = java.util.Calendar.getInstance()
+                                    cal.timeInMillis = task.executeAt
+                                    android.app.TimePickerDialog(
+                                        context,
+                                        { _, h, m ->
+                                            val newCal = java.util.Calendar.getInstance()
+                                            newCal.set(java.util.Calendar.HOUR_OF_DAY, h)
+                                            newCal.set(java.util.Calendar.MINUTE, m)
+                                            if (newCal.timeInMillis < System.currentTimeMillis()) {
+                                                newCal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                                            }
+                                            viewModel.updateScheduledTaskTime(task.id, newCal.timeInMillis)
+                                        },
+                                        cal.get(java.util.Calendar.HOUR_OF_DAY),
+                                        cal.get(java.util.Calendar.MINUTE),
+                                        true
+                                    ).show()
+                                }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Outlined.Edit, "Reschedule", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                }
+                                IconButton(onClick = { viewModel.cancelTask(task.id) }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Filled.Close, "Cancel", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    val tickerText = scheduled.joinToString("   •   ") { 
+                        "${fmt.format(Date(it.executeAt))} - ${it.description.take(30)}" 
+                    }
+                    Text(
+                        text = tickerText,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 8.5.sp,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, velocity = 30.dp)
                     )
-                )
+                }
             }
         }
+    }
+}
+
+@Composable
+fun TaskMetricCell(
+    label: String, 
+    value: String, 
+    modifier: Modifier = Modifier, 
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 7.5.sp,
+            letterSpacing = 0.3.sp
+        )
+        Text(
+            text = value,
+            color = valueColor,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Black,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.5.sp
+        )
     }
 }
 
