@@ -296,7 +296,6 @@ class GGUFModelClient {
             val startTime = System.currentTimeMillis()
             var lastCalculatedProgress = 0.05f
             var lastLogReadPos = 0L
-            var lastLogActivityTime = System.currentTimeMillis()
 
             val tensorRegex1 = Regex("tensor\\s+(\\d+)\\s*/\\s*(\\d+)")
             val tensorRegex2 = Regex("loading model tensors:\\s*(\\d+)%")
@@ -305,9 +304,22 @@ class GGUFModelClient {
             val baseSizeGb = baseFileSize / (1024f * 1024f * 1024f)
 
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
+                // Check if server thread died
+                if (!newThread.isAlive && !isServerRunning()) {
+                    fileLog("Server thread died during startup.")
+                    if (draftModelPath != null) {
+                        fileLog("Draft model incompatible; retrying cleanly without draft model...")
+                        draftModelPath = null
+                        return@withContext startServer(resolvedPath, onStatus, onProgress)
+                    }
+                    onProgress(0f, "Server crash")
+                    onStatus("❌ Error: Server process terminated.")
+                    return@withContext false
+                }
+
                 // 1. Check if server is ready via HTTP /health or socket on every iteration
-                if (isServerRunning()) {
-                    fileLog("Server ready via JNI (health check succeeded)!")
+                if (isServerRunning() || isSocketOrHttpReachable()) {
+                    fileLog("Server ready via JNI (health check verified)!")
                     onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
@@ -320,7 +332,6 @@ class GGUFModelClient {
                     if (logFile.exists()) {
                         val currentLen = logFile.length()
                         if (currentLen > lastLogReadPos) {
-                            lastLogActivityTime = System.currentTimeMillis()
                             val raf = java.io.RandomAccessFile(logFile, "r")
                             raf.seek(lastLogReadPos)
                             var line: String?
@@ -355,10 +366,12 @@ class GGUFModelClient {
                                     currentLine.contains("llama_server: listening", ignoreCase = true) ||
                                     currentLine.contains("system_info:", ignoreCase = true)
                                 ) {
-                                    fileLog("Initialization match in logs: $currentLine")
-                                    onProgress(1.0f, "ONLINE • 100%")
-                                    onStatus("✅ Local Server Ready.")
-                                    return@withContext true
+                                    if (isServerRunning() || isSocketOrHttpReachable()) {
+                                        fileLog("Initialization match in logs: $currentLine")
+                                        onProgress(1.0f, "ONLINE • 100%")
+                                        onStatus("✅ Local Server Ready.")
+                                        return@withContext true
+                                    }
                                 }
                             }
                             lastLogReadPos = raf.filePointer
@@ -369,29 +382,11 @@ class GGUFModelClient {
 
                 // Under mmap or swift startup, advance smoothly
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                if (useMmap && elapsedSec > 0.2f && lastCalculatedProgress < 0.99f) {
-                    lastCalculatedProgress = (0.3f + elapsedSec * 0.5f).coerceIn(0.3f, 0.99f)
+                if (useMmap && elapsedSec > 0.2f && lastCalculatedProgress < 0.95f) {
+                    lastCalculatedProgress = (0.3f + elapsedSec * 0.5f).coerceIn(0.3f, 0.95f)
                 }
 
-                // 3. Automatic Threshold Snapping: If >= 0.98f, snap to 100% ONLINE immediately
-                if (lastCalculatedProgress >= 0.98f) {
-                    fileLog("Progress reached threshold ($lastCalculatedProgress >= 0.98), snapping to 100% ONLINE!")
-                    onProgress(1.0f, "ONLINE • 100%")
-                    onStatus("✅ Local Server Ready.")
-                    return@withContext true
-                }
-
-                // 4. Inactivity Watchdog: If logs stopped streaming for > 1500ms and progress > 0.90f
-                if (lastCalculatedProgress >= 0.90f && (System.currentTimeMillis() - lastLogActivityTime) > 1500L) {
-                    if (isSocketOrHttpReachable()) {
-                        fileLog("Inactivity watchdog: server reachable at progress $lastCalculatedProgress, forcing ONLINE!")
-                        onProgress(1.0f, "ONLINE • 100%")
-                        onStatus("✅ Local Server Ready.")
-                        return@withContext true
-                    }
-                }
-
-                if (isServerRunning()) {
+                if (isServerRunning() || isSocketOrHttpReachable()) {
                     onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true

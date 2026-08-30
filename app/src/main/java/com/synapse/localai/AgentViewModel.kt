@@ -716,6 +716,8 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                 while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
                     iterationCount++
                     val responseSb = StringBuilder()
+                    val liveLogId = UUID.randomUUID().toString()
+                    var liveBubbleAdded = false
                     // Track thinking vs content separately
                     var inThinkBlock = false
                     var streamInterrupted = false
@@ -759,8 +761,22 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
 
                         stream.collect { chunk ->
                             responseSb.append(chunk)
-                            // Detect and update phase based on content tokens
                             val currentText = responseSb.toString()
+
+                            if (!liveBubbleAdded && currentText.isNotBlank()) {
+                                liveBubbleAdded = true
+                                val entry = LogEntry(id = liveLogId, sender = "AGENT", text = currentText)
+                                _uiState.update { it.copy(logs = it.logs + entry) }
+                            } else if (liveBubbleAdded) {
+                                _uiState.update { state ->
+                                    val updated = state.logs.map { log ->
+                                        if (log.id == liveLogId) log.copy(text = currentText) else log
+                                    }
+                                    state.copy(logs = updated)
+                                }
+                            }
+
+                            // Detect and update phase based on content tokens
                             when {
                                 currentText.contains("<think>") && !currentText.contains("</think>") -> {
                                     inThinkBlock = true
@@ -812,18 +828,22 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                         }
 
                         if (streamInterrupted) {
-                            // Show whatever partial content we have, with interrupt notice, then stop loop
-                            val agentLog = LogEntry(sender = "AGENT", text = assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" })
-                            addLog(agentLog)
+                            val displayText = assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
+                            _uiState.update { state ->
+                                val updated = state.logs.map { log ->
+                                    if (log.id == liveLogId) log.copy(text = displayText) else log
+                                }
+                                state.copy(logs = updated)
+                            }
                             val sid = currentSessionId.value
                             viewModelScope.launch(Dispatchers.IO) {
                                 chatDb?.insertMessage(
                                     ChatMessageEntity(
-                                        id = agentLog.id,
+                                        id = liveLogId,
                                         sessionId = sid,
                                         sender = "AGENT",
-                                        text = agentLog.text,
-                                        timestamp = agentLog.timestamp
+                                        text = displayText,
+                                        timestamp = System.currentTimeMillis()
                                     )
                                 )
                                 refreshSessions()
@@ -843,17 +863,21 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                                 // Final Result: Show the summary if provided, otherwise the text reply
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
                                 val finalText = summary ?: assistantReply
-                                val agentLog = LogEntry(sender = "AGENT", text = finalText)
-                                addLog(agentLog)
+                                _uiState.update { state ->
+                                    val updated = state.logs.map { log ->
+                                        if (log.id == liveLogId) log.copy(text = finalText) else log
+                                    }
+                                    state.copy(logs = updated)
+                                }
                                 val sid = currentSessionId.value
                                 viewModelScope.launch(Dispatchers.IO) {
                                     chatDb?.insertMessage(
                                         ChatMessageEntity(
-                                            id = agentLog.id,
+                                            id = liveLogId,
                                             sessionId = sid,
                                             sender = "AGENT",
                                             text = finalText,
-                                            timestamp = agentLog.timestamp
+                                            timestamp = System.currentTimeMillis()
                                         )
                                     )
                                     refreshSessions()
