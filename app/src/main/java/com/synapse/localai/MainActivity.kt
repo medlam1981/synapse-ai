@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,11 +37,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.synapse.localai.ui.theme.*
@@ -81,6 +84,354 @@ fun parseMarkdownWithCodeBlocks(text: String): List<AnnotatedString> {
     return if (result.isEmpty() && text.isNotEmpty()) listOf(AnnotatedString(text)) else result
 }
 
+/**
+ * Extracts the language specifier from a fenced code block header line.
+ * e.g. "```kotlin" -> "kotlin", "```html" -> "html"
+ */
+fun extractCodeBlocks(text: String): List<Triple<String, String, String>> {
+    // Returns list of Triple(language, code, rawMatch)
+    val result = mutableListOf<Triple<String, String, String>>()
+    val regex = Regex("```([a-zA-Z0-9]*)\\n?(.*?)```", RegexOption.DOT_MATCHES_ALL)
+    regex.findAll(text).forEach { match ->
+        val lang = match.groupValues[1].ifBlank { "text" }
+        val code = match.groupValues[2]
+        result.add(Triple(lang, code, match.value))
+    }
+    return result
+}
+
+/**
+ * Interactive Collapsible Code Block component with Language Badge, Line Count, Target Path,
+ * Syntax Highlighting, and floating Quick Copy button.
+ */
+@Composable
+fun CollapsibleCodeBlock(language: String, code: String, filePath: String? = null) {
+    var expanded by remember { mutableStateOf(false) }
+    val lineCount = code.lines().size
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2000)
+            copied = false
+        }
+    }
+
+    val langColor = when (language.lowercase().trim()) {
+        "kotlin", "kt", "java" -> Color(0xFF7BC8F6)
+        "html", "htm", "xml" -> Color(0xFFE06C75)
+        "css" -> Color(0xFF61AFEF)
+        "js", "javascript", "ts", "typescript", "jsx", "tsx" -> Color(0xFFE5C07B)
+        "python", "py" -> Color(0xFF98C379)
+        "bash", "sh" -> Color(0xFF56B6C2)
+        "json" -> Color(0xFFD19A66)
+        else -> Color(0xFFABB2BF)
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        color = CodeBackground,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(0.5.dp, Color(0xFF30363D))
+    ) {
+        Column {
+            // Interactive Collapsed Header: Displays Language Tag, Line Count, Target Path, and toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF161B22))
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Language badge
+                    Surface(
+                        color = langColor.copy(alpha = 0.18f),
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(0.5.dp, langColor.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = language.uppercase().take(8),
+                            color = langColor,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.5.sp
+                            ),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    // Line count
+                    Text(
+                        text = "$lineCount lines",
+                        color = Color(0xFF8B949E),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+
+                    // Target Path
+                    if (!filePath.isNullOrBlank()) {
+                        Text(
+                            text = filePath,
+                            color = Color(0xFF58A6FF),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                // Interactive Expand / View Code toggle
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = if (expanded) "▲ Collapse" else "▼ View Code",
+                        color = if (expanded) NeonCyan else NeonPurple,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+
+            // Rich syntax-highlighted code content with Quick [Copy Code] floating button
+            if (expanded) {
+                Divider(color = Color(0xFF30363D), thickness = 0.5.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CodeBackground)
+                ) {
+                    Text(
+                        text = highlightCode(code),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        ),
+                        color = Color(0xFFC9D1D9),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                    )
+
+                    // Floating Quick [Copy Code] button in top-end corner
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .clickable {
+                                clipboardManager.setText(AnnotatedString(code))
+                                copied = true
+                            },
+                        color = if (copied) Color(0xFF238636) else Color(0xFF21262D),
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(0.5.dp, if (copied) Color(0xFF3FB950) else Color(0xFF30363D))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = "Copy Code",
+                                tint = if (copied) Color.White else NeonCyan,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = if (copied) "Copied!" else "Copy Code",
+                                color = if (copied) Color.White else NeonCyan,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 8.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * In-stream Thought Process card — renders <think>...</think> blocks as a
+ * collapsible "Thought Process" card above the final response.
+ */
+@Composable
+fun ThoughtProcessCard(thinkContent: String) {
+    if (thinkContent.isBlank()) return
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        color = Color(0xFF1A1D2B),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("✦", color = NeonPurple, fontSize = 12.sp)
+                    Text(
+                        text = "Thought Process",
+                        color = NeonPurple.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+                Text(
+                    text = if (expanded) "▲ Collapse" else "▼ Expand",
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp)
+                )
+            }
+            if (expanded) {
+                Divider(color = NeonPurple.copy(alpha = 0.15f), thickness = 0.5.dp)
+                Text(
+                    text = thinkContent.trim(),
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontStyle = FontStyle.Italic,
+                        fontSize = 11.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Single static sparkle status indicator for the active generation phase.
+ * Shows a Frosted Glass shimmer sweep with phase label.
+ */
+@Composable
+fun PhaseStatusIndicator(phase: AgentActionPhase) {
+    if (phase == AgentActionPhase.IDLE) return
+
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerOffset by infiniteTransition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerOffset"
+    )
+
+    val phaseLabel = when (phase) {
+        AgentActionPhase.THINKING -> "Thinking..."
+        AgentActionPhase.PLANNING -> "Planning..."
+        AgentActionPhase.GENERATING_CODE -> "Generating code..."
+        AgentActionPhase.WRITING_FILE -> "Writing file..."
+        AgentActionPhase.EXECUTING_TOOL -> "Executing..."
+        AgentActionPhase.COMPLETING -> "Completing..."
+        AgentActionPhase.IDLE -> ""
+    }
+
+    Box(
+        modifier = Modifier
+            .wrapContentSize()
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFF1A1F2B).copy(alpha = 0.90f),
+                        Color(0xFF252A3B).copy(alpha = 0.90f)
+                    )
+                )
+            )
+            .border(
+                width = 0.8.dp,
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        NeonPurple.copy(alpha = 0.5f),
+                        NeonCyan.copy(alpha = 0.5f)
+                    )
+                ),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Shimmer sweep overlay
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val sweep = Brush.horizontalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.0f),
+                    Color.White.copy(alpha = 0.25f),
+                    Color.White.copy(alpha = 0.90f),
+                    Color.White.copy(alpha = 0.25f),
+                    Color.White.copy(alpha = 0.0f)
+                ),
+                startX = size.width * shimmerOffset,
+                endX = size.width * (shimmerOffset + 0.4f)
+            )
+            drawRect(brush = sweep)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("✦", color = NeonPurple, fontSize = 11.sp)
+            Text(
+                text = phaseLabel,
+                color = Color.White.copy(alpha = 0.9f),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp
+                )
+            )
+        }
+    }
+}
+
+data class LogEntry(
+    val id: String = UUID.randomUUID().toString(),
+    val sender: String,
+    val text: String,
+    val isError: Boolean = false,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+
 fun highlightCode(code: String): AnnotatedString {
     val builder = AnnotatedString.Builder(code)
     
@@ -107,12 +458,6 @@ fun highlightCode(code: String): AnnotatedString {
     return builder.toAnnotatedString()
 }
 
-data class LogEntry(
-    val id: String = UUID.randomUUID().toString(),
-    val sender: String,
-    val text: String,
-    val isError: Boolean = false
-)
 
 class MainActivity : ComponentActivity() {
     private val viewModel = AgentViewModel()
@@ -171,7 +516,7 @@ class MainActivity : ComponentActivity() {
 
     private fun logToCrashFile(message: String) {
         try {
-            val dir = File("/sdcard/MedlamAI")
+            val dir = File("/sdcard/Medlam-Ai")
             if (!dir.exists()) dir.mkdirs()
             val file = File(dir, "crash_report.txt")
             val fos = FileOutputStream(file, true)
@@ -255,108 +600,165 @@ fun ChatApp(viewModel: AgentViewModel) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        Spacer(modifier = Modifier.statusBarsPadding())
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
 
-        Box(
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            SidebarContent(
+                viewModel = viewModel,
+                onCloseDrawer = { coroutineScope.launch { drawerState.close() } },
+                onOpenSettings = { showSettings = true }
+            )
+        }
+    ) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), Color.Transparent)
-                    )
-                )
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
-                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Spacer(modifier = Modifier.statusBarsPadding())
+
+            // Modern Monochromatic Top Bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+                    .border(0.5.dp, Color(0xFF30363D))
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AnimatedCdDisc(isSpinning = uiState.isProcessing)
-                    Column {
-                        Text(
-                            text = "MEDLAM-AI HYBRID HUB",
-                            style = TextStyle(
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 19.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace,
-                                letterSpacing = 2.sp
-                            ),
-                            modifier = Modifier.graphicsLayer(alpha = 0.9f)
-                        )
-                        Text(
-                            text = "LOCAL NEURAL ENGINE • CLOUD NEURAL AGENT",
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-                            fontSize = 7.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 0.5.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Menu,
+                                contentDescription = "Sidebar Menu",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "MEDLAM AI",
+                                style = TextStyle(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 1.5.sp
+                                )
+                            )
+                            Text(
+                                text = "AUTONOMOUS ON-DEVICE NEURAL AGENT",
+                                color = NeonCyan.copy(alpha = 0.8f),
+                                fontSize = 7.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                    
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        IconButton(onClick = { viewModel.startNewSession() }) {
+                            Icon(
+                                imageVector = Icons.Outlined.AddComment,
+                                contentDescription = "New Session",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Settings,
+                                contentDescription = "Settings",
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        IconButton(onClick = { viewModel.clearConversation(context) }) {
+                            Icon(
+                                imageVector = Icons.Outlined.DeleteOutline,
+                                contentDescription = "Clear Chat",
+                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            SystemDashboard(context)
+
+            ScheduledTasksTicker(uiState.scheduledTasks)
+            
+            // Active Tasks Bar from new task engine
+            ActiveTasksBar(uiState.activeTasks, uiState.taskSummary, viewModel, context)
+
+            LaunchedEffect(uiState.logs.size, uiState.currentPhase, uiState.isProcessing) {
+                val totalCount = uiState.logs.size + if (uiState.isProcessing && uiState.currentPhase != AgentActionPhase.IDLE) 1 else 0
+                if (totalCount > 0) {
+                    listState.animateScrollToItem(totalCount - 1)
+                }
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
+                if (uiState.logs.isEmpty() && !uiState.isProcessing) {
+                    WelcomeHub(onSelectPrompt = { prompt ->
+                        viewModel.sendCommand(prompt, context = context)
+                    })
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(uiState.logs, key = { it.id }) { log ->
+                            AgentMessageBubble(log)
+                        }
+
+                        // In-stream Frosted Glass status badge placed directly inside the LazyColumn at the bottom
+                        // with its own top padding (8.dp) so it NEVER overlaps any preceding message bubble!
+                        if (uiState.isProcessing && uiState.currentPhase != AgentActionPhase.IDLE) {
+                            item(key = "active_stream_phase_status") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp, start = 4.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    PhaseStatusIndicator(phase = uiState.currentPhase)
+                                }
+                            }
+                        }
                     }
                 }
                 
-                Box {
-                    IconButton(onClick = { expandedMenu = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "Menu", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                    }
-                    DropdownMenu(
-                        expanded = expandedMenu, 
-                        onDismissRequest = { expandedMenu = false },
-                        modifier = Modifier.background(MaterialTheme.colorScheme.surface).border(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("⚙ System Settings", color = MaterialTheme.colorScheme.onSurface) },
-                            onClick = { expandedMenu = false; showSettings = true }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("🗑 Wipe Console", color = MaterialTheme.colorScheme.error) },
-                            onClick = { expandedMenu = false; viewModel.clearConversation(context) }
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val height = size.height
+                    val scanlineSpacing = 4.dp.toPx()
+                    for (y in 0..height.toInt() step scanlineSpacing.toInt()) {
+                        drawLine(
+                            color = Color.White.copy(alpha = 0.015f),
+                            start = androidx.compose.ui.geometry.Offset(0f, y.toFloat()),
+                            end = androidx.compose.ui.geometry.Offset(size.width, y.toFloat()),
+                            strokeWidth = 1f
                         )
                     }
                 }
             }
-        }
-
-        SystemDashboard(context)
-
-        ScheduledTasksTicker(uiState.scheduledTasks)
-        
-        // Active Tasks Bar from new task engine
-        ActiveTasksBar(uiState.activeTasks, uiState.taskSummary, viewModel, context)
-
-        Box(modifier = Modifier.weight(1f)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(uiState.logs, key = { it.id }) { log ->
-                    AgentMessageBubble(log)
-                }
-            }
-            
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val height = size.height
-                val scanlineSpacing = 4.dp.toPx()
-                for (y in 0..height.toInt() step scanlineSpacing.toInt()) {
-                    drawLine(
-                        color = Color.White.copy(alpha = 0.015f),
-                        start = androidx.compose.ui.geometry.Offset(0f, y.toFloat()),
-                        end = androidx.compose.ui.geometry.Offset(size.width, y.toFloat()),
-                        strokeWidth = 1f
-                    )
-                }
-            }
-        }
 
         ChatInputBar(
             isProcessing = uiState.isProcessing,
@@ -384,6 +786,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                 }
             }
         )
+        }
     }
 
     if (showSettings) {
@@ -418,6 +821,108 @@ fun ChatApp(viewModel: AgentViewModel) {
     }
 }
 
+/**
+ * Detects if a text string contains Arabic script characters.
+ */
+fun isArabic(text: String): Boolean {
+    return text.any { ch ->
+        ch in '\u0600'..'\u06FF' || ch in '\u0750'..'\u077F' || ch in '\u08A0'..'\u08FF' || ch in '\uFB50'..'\uFDFF' || ch in '\uFE70'..'\uFEFF'
+    }
+}
+
+/**
+ * FormattedTextParagraph — Clean styled markdown paragraph with native Arabic RTL support,
+ * high-contrast title typography, and right-aligned numbered lists.
+ */
+@Composable
+fun FormattedTextParagraph(
+    text: String,
+    isError: Boolean = false,
+    isThinking: Boolean = false
+) {
+    val lines = text.lines()
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        lines.forEach { rawLine ->
+            val trimmed = rawLine.trim()
+            if (trimmed.isEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                return@forEach
+            }
+
+            val isArabicLine = isArabic(trimmed)
+            val layoutDir = if (isArabicLine) LayoutDirection.Rtl else LayoutDirection.Ltr
+            val textAlign = if (isArabicLine) TextAlign.End else TextAlign.Start
+
+            // Check if this line is a header (###, ##, #, or starts with Title marker)
+            val isHeader = trimmed.startsWith("#") || trimmed.startsWith("===") || (trimmed.endsWith(":") && trimmed.length < 60 && !trimmed.contains("http"))
+            val cleanLine = trimmed.replace(Regex("^#+\\s*"), "")
+                .replace("**", "")
+                .replace("*", "")
+                .replace("`", "")
+
+            val isListItem = cleanLine.matches(Regex("^[0-9]+[.)]\\s+.*")) || cleanLine.startsWith("- ") || cleanLine.startsWith("• ")
+
+            CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+                if (isHeader) {
+                    Text(
+                        text = cleanLine,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = if (isArabicLine) FontFamily.Default else FontFamily.Monospace,
+                            fontSize = 13.5.sp,
+                            letterSpacing = if (isArabicLine) 0.sp else 0.5.sp
+                        ),
+                        color = NeonCyan,
+                        textAlign = textAlign,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp, bottom = 2.dp)
+                    )
+                } else if (isListItem) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 1.dp),
+                        horizontalArrangement = if (isArabicLine) Arrangement.End else Arrangement.Start,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text(
+                            text = cleanLine,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                                fontWeight = FontWeight.Normal,
+                                fontFamily = if (isArabicLine) FontFamily.Default else FontFamily.Monospace
+                            ),
+                            color = if (isError) MaterialTheme.colorScheme.error else Color(0xFFE6EDF3),
+                            textAlign = textAlign,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                } else {
+                    Text(
+                        text = cleanLine,
+                        style = if (isThinking)
+                            MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic, fontSize = 12.5.sp, lineHeight = 18.sp)
+                        else
+                            MaterialTheme.typography.bodyMedium.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+                        color = when {
+                            isError -> MaterialTheme.colorScheme.error
+                            isThinking -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            else -> Color(0xFFE6EDF3)
+                        },
+                        textAlign = textAlign,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun AgentMessageBubble(log: LogEntry) {
     val isUser = log.sender == "USER"
@@ -426,42 +931,50 @@ fun AgentMessageBubble(log: LogEntry) {
     
     if (isSystem) {
         val isVisibleMarker = log.isError || log.text.startsWith("✅") || log.text.startsWith("📎")
+            || log.text.startsWith("⚠️") || log.text.startsWith("⏰") || log.text.startsWith("⚡")
         if (!isVisibleMarker) return
     }
 
+    // ---- Extract thinking blocks before processing ----
+    val thinkRegex = Regex("<think>(.*?)</think>", RegexOption.DOT_MATCHES_ALL)
+    val thinkContent = if (log.sender == "AGENT") {
+        thinkRegex.findAll(log.text).joinToString("\n\n") { it.groupValues[1] }
+    } else ""
+
+    // Build display text with thinking stripped
     var displayOutput = log.text
     var isCurrentlyThinking = false
-    
+
     if (log.sender == "AGENT") {
         if (displayOutput.contains("<think>") && !displayOutput.contains("</think>")) {
             isCurrentlyThinking = true
         }
 
-        // 1. Remove complete thinking blocks
-        displayOutput = displayOutput.replace(Regex("<think>.*?</think>", RegexOption.DOT_MATCHES_ALL), "")
-        
+        // 1. Remove complete thinking blocks (shown in ThoughtProcessCard instead)
+        displayOutput = displayOutput.replace(thinkRegex, "")
+
         // 2. Hide ongoing thinking process during streaming
         if (displayOutput.contains("<think>")) {
              displayOutput = displayOutput.substringBefore("<think>")
         }
 
-        // PROFESSOR FIX: Hide ALL XML tags (function calls, invokes, parameters) for a clean UI
+        // Hide ALL XML tags (function calls, invokes, parameters) for a clean UI
         displayOutput = displayOutput.replace(Regex("<.*?>", RegexOption.DOT_MATCHES_ALL), "")
-        
-        // Remove ALL asterisks (markdown bold/italic markers) as requested
+
+        // Remove ALL asterisks (markdown bold/italic markers)
         displayOutput = displayOutput.replace("*", "")
-        
-        // Hide technical code blocks
+
+        // Hide technical xml/bash code blocks (they're tool calls, not user-facing code)
         displayOutput = displayOutput.replace(Regex("```xml.*?```", RegexOption.DOT_MATCHES_ALL), "")
                                      .replace(Regex("```bash.*?```", RegexOption.DOT_MATCHES_ALL), "")
                                      .trim()
-        
+
         if (displayOutput.isBlank() && isCurrentlyThinking) {
-            displayOutput = "Medlam-AI is thinking..."
+            displayOutput = "MEDLAM AI is thinking..."
         }
     }
 
-    if (displayOutput.isBlank()) return
+    if (displayOutput.isBlank() && thinkContent.isBlank()) return
 
     Column(
         modifier = Modifier
@@ -485,7 +998,7 @@ fun AgentMessageBubble(log: LogEntry) {
                 text = when {
                     isUser -> "You"
                     isSystem -> "System"
-                    else -> "Medlam-AI"
+                    else -> "MEDLAM AI"
                 },
                 style = MaterialTheme.typography.labelMedium,
                 color = if (isUser) NeonCyan else if (isSystem) MaterialTheme.colorScheme.outline else NeonPurple,
@@ -495,90 +1008,97 @@ fun AgentMessageBubble(log: LogEntry) {
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        Box(
-            modifier = Modifier
-                .widthIn(max = 340.dp)
-                .clip(
-                    RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        bottomStart = if (isUser) 16.dp else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else 16.dp
+        // ---- Thought Process Card (shown above main response for AGENT messages) ----
+        if (log.sender == "AGENT" && thinkContent.isNotBlank()) {
+            ThoughtProcessCard(thinkContent = thinkContent)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        if (displayOutput.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp,
+                            bottomStart = if (isUser) 16.dp else 4.dp,
+                            bottomEnd = if (isUser) 4.dp else 16.dp
+                        )
                     )
-                )
-                .background(
-                    if (isUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                    else if (isSystem) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    else MaterialTheme.colorScheme.surfaceVariant
-                )
-                .border(
-                    width = 1.dp,
-                    color = if (isUser) NeonCyan.copy(alpha = 0.3f)
-                            else if (isSystem) MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
-                            else NeonPurple.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        bottomStart = if (isUser) 16.dp else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else 16.dp
+                    .background(
+                        if (isUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        else if (isSystem) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                        else MaterialTheme.colorScheme.surfaceVariant
                     )
-                )
-                .padding(12.dp)
-        ) {
-            Column {
-                val annotatedParts = parseMarkdownWithCodeBlocks(displayOutput)
-                annotatedParts.forEach { part ->
-                    val isCode = part.spanStyles.any { it.item.color == CodeKeyword || it.item.color == CodeString }
-                    
-                    if (isCode) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            color = CodeBackground,
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Box(modifier = Modifier.padding(8.dp)) {
-                                Text(
-                                    text = part,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp
-                                    ),
-                                    color = Color(0xFFC9D1D9)
-                                )
+                    .border(
+                        width = 1.dp,
+                        color = if (isUser) NeonCyan.copy(alpha = 0.3f)
+                                else if (isSystem) MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                else NeonPurple.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp,
+                            bottomStart = if (isUser) 16.dp else 4.dp,
+                            bottomEnd = if (isUser) 4.dp else 16.dp
+                        )
+                    )
+                    .padding(12.dp)
+            ) {
+                Column {
+                    // ---- Render code blocks as rich interactive collapsible cards ----
+                    if (log.sender == "AGENT" && displayOutput.contains("```")) {
+                        val blocks = ToolExecutor.parseCodeBlocksWithPaths(displayOutput)
+                        var searchIndex = 0
+                        blocks.forEach { block ->
+                            val blockStartIndex = displayOutput.indexOf(block.rawMatch, searchIndex)
+                            if (blockStartIndex > searchIndex) {
+                                val textBefore = displayOutput.substring(searchIndex, blockStartIndex).trim()
+                                if (textBefore.isNotBlank()) {
+                                    FormattedTextParagraph(text = textBefore, isError = log.isError)
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                }
+                            }
+                            CollapsibleCodeBlock(
+                                language = block.language,
+                                code = block.code,
+                                filePath = block.targetPath
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            searchIndex = if (blockStartIndex != -1) blockStartIndex + block.rawMatch.length else searchIndex
+                        }
+                        if (searchIndex < displayOutput.length) {
+                            val textAfter = displayOutput.substring(searchIndex).trim()
+                            if (textAfter.isNotBlank()) {
+                                FormattedTextParagraph(text = textAfter, isError = log.isError)
                             }
                         }
                     } else {
-                        Text(
-                            text = part,
-                            style = if (isCurrentlyThinking && displayOutput == "Medlam-AI is thinking...") 
-                                MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic) 
-                                else MaterialTheme.typography.bodyMedium,
-                            color = if (log.isError) MaterialTheme.colorScheme.error 
-                                else if (isCurrentlyThinking && displayOutput == "Medlam-AI is thinking...")
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                else MaterialTheme.colorScheme.onSurface
+                        // Regular message (non-code): formatted paragraph with Arabic RTL and styled titles
+                        FormattedTextParagraph(
+                            text = displayOutput,
+                            isError = log.isError,
+                            isThinking = isCurrentlyThinking
                         )
                     }
-                }
-                
-                if (!isSystem && !isUser) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        IconButton(
-                            onClick = { clipboardManager.setText(AnnotatedString(displayOutput)) },
-                            modifier = Modifier.size(24.dp)
+
+                    if (!isSystem && !isUser) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Copy",
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                                modifier = Modifier.size(14.dp)
-                            )
+                            IconButton(
+                                onClick = { clipboardManager.setText(AnnotatedString(displayOutput)) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Copy",
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -587,78 +1107,384 @@ fun AgentMessageBubble(log: LogEntry) {
     }
 }
 
+
+/**
+ * SidebarContent — Modern Monochromatic Drawer showing Chronological Session History,
+ * New Chat trigger, and Quick System Navigation.
+ */
 @Composable
-fun AnimatedCdDisc(isSpinning: Boolean = false) {
-    val infiniteTransition = rememberInfiniteTransition(label = "cd_disc")
-    val rotation by if (isSpinning) {
-        infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(600, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "rotation"
-        )
-    } else {
-        remember { mutableStateOf(0f) }
-    }
+fun SidebarContent(
+    viewModel: AgentViewModel,
+    onCloseDrawer: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    val sessions by viewModel.chatSessions.collectAsState()
+    val activeSessionId by viewModel.currentSessionId.collectAsState()
 
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    Box(
-        modifier = Modifier
-            .size(42.dp)
-            .padding(4.dp),
-        contentAlignment = Alignment.Center
+    ModalDrawerSheet(
+        drawerContainerColor = Color(0xFF0E1117),
+        drawerContentColor = Color(0xFFE6EDF3),
+        modifier = Modifier.width(310.dp)
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width / 2, size.height / 2)
-            val radius = size.minDimension / 2
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            Spacer(modifier = Modifier.statusBarsPadding())
 
-            rotate(rotation) {
-                // Main disc surface with iridescent gradient
-                drawCircle(
-                    brush = Brush.sweepGradient(
-                        colors = listOf(
-                            Color(0xFFE2E2E2), Color(0xFFFFCCCC), Color(0xFFE2E2E2),
-                            Color(0xFFCCCCFF), Color(0xFFCCFFFF), Color(0xFFE2E2E2)
-                        ),
-                        center = center
-                    ),
-                    radius = radius
+            // Header: MEDLAM AI Branding
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "✦",
+                        color = NeonCyan,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Column {
+                        Text(
+                            text = "MEDLAM AI",
+                            color = Color(0xFFE6EDF3),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.sp
+                            )
+                        )
+                        Text(
+                            text = "NEURAL SESSION HUB",
+                            color = Color(0xFF8B949E),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                    }
+                }
+                IconButton(onClick = onCloseDrawer) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close Sidebar",
+                        tint = Color(0xFF8B949E),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // + New Chat Prominent Button
+            Button(
+                onClick = {
+                    viewModel.startNewSession()
+                    onCloseDrawer()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF161B22),
+                    contentColor = Color(0xFFE6EDF3)
+                ),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(0.5.dp, Color(0xFF30363D))
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.AddComment,
+                        contentDescription = null,
+                        tint = NeonCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "+ New Session",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Divider(color = Color(0xFF21262D), thickness = 0.5.dp)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Sessions Header
+            Text(
+                text = "CONVERSATION HISTORY (${sessions.size})",
+                color = Color(0xFF8B949E),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.5.sp
                 )
-                
-                // Subtle holographic ring
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.3f), Color.Transparent),
-                        center = center,
-                        radius = radius * 0.8f
-                    ),
-                    radius = radius * 0.8f,
-                    style = Stroke(width = 2.dp.toPx())
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Sessions List
+            if (sessions.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No saved conversations",
+                        color = Color(0xFF484F58),
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(sessions, key = { it.id }) { session ->
+                        val isSelected = session.id == activeSessionId
+                        val dateStr = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(session.updatedAt))
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.switchSession(session.id)
+                                    onCloseDrawer()
+                                },
+                            color = if (isSelected) Color(0xFF161B22) else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                0.5.dp,
+                                if (isSelected) NeonCyan.copy(alpha = 0.4f) else Color(0xFF21262D)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.ChatBubbleOutline,
+                                        contentDescription = null,
+                                        tint = if (isSelected) NeonCyan else Color(0xFF8B949E),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = session.title,
+                                            color = if (isSelected) Color(0xFFE6EDF3) else Color(0xFFC9D1D9),
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                fontFamily = FontFamily.Monospace
+                                            ),
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = dateStr,
+                                            color = Color(0xFF6E7681),
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 8.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.deleteSession(session.id) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = "Delete",
+                                        tint = Color(0xFF8B949E).copy(alpha = 0.7f),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = Color(0xFF21262D), thickness = 0.5.dp)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Footer info
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        onOpenSettings()
+                        onCloseDrawer()
+                    }
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "Settings",
+                    tint = Color(0xFF8B949E),
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "System Settings",
+                    color = Color(0xFFC9D1D9),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
                 )
             }
 
-            // Outer border
-            drawCircle(
-                color = Color.White.copy(alpha = 0.4f),
-                radius = radius,
-                style = Stroke(width = 0.5.dp.toPx())
+            Text(
+                text = "📁 Root: /sdcard/Medlam-Ai/",
+                color = Color(0xFF58A6FF),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace
+                ),
+                modifier = Modifier.padding(top = 4.dp)
             )
+        }
+    }
+}
 
-            // Inner hole (Center)
-            drawCircle(
-                color = surfaceColor,
-                radius = radius * 0.2f
+/**
+ * WelcomeHub — Clean monochromatic welcome screen with quick-action prompt chips.
+ */
+@Composable
+fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
+    val quickActions = listOf(
+        Pair("⚡ Modern Web Application", "Create a complete, responsive modern web application with HTML, CSS, and JavaScript."),
+        Pair("💻 Python Automation Script", "Write a robust Python automation script for file and system tasks."),
+        Pair("📱 Inspect Device Diagnostics", "Inspect device hardware, memory, available storage, and performance status."),
+        Pair("🛠 HTML5 Dashboard", "Build a clean, interactive HTML5 dashboard with dark mode and analytics cards."),
+        Pair("🔍 Code Optimization", "Help me analyze, optimize, and refactor code for maximum performance.")
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Monochromatic Emblem
+        Surface(
+            color = Color(0xFF161B22),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(0.5.dp, Color(0xFF30363D))
+        ) {
+            Box(modifier = Modifier.padding(16.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "✦",
+                    color = NeonCyan,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "MEDLAM AI",
+            color = Color(0xFFE6EDF3),
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp
             )
-            
-            // Inner plastic ring shadow
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.2f),
-                radius = radius * 0.2f,
-                style = Stroke(width = 1.dp.toPx())
+        )
+
+        Text(
+            text = "Autonomous On-Device Neural Agent",
+            color = Color(0xFF8B949E),
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp
             )
+        )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "QUICK ACTIONS",
+            color = Color(0xFF58A6FF),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.sp
+            ),
+            modifier = Modifier.align(Alignment.Start)
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            quickActions.forEach { (label, prompt) ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectPrompt(prompt) },
+                    color = Color(0xFF161B22),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(0.5.dp, Color(0xFF30363D))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = label,
+                            color = Color(0xFFC9D1D9),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = null,
+                            tint = NeonCyan.copy(alpha = 0.7f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -765,89 +1591,130 @@ fun ChatInputBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(Color(0xFF0E1117))
+            .border(BorderStroke(0.5.dp, Color(0xFF21262D)))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TextField(
-                value = inputText,
-                onValueChange = { inputText = it },
-                placeholder = {
-                    Text(
-                        "Message Medlam-AI...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            // Capsule input field with frosted blue background
+            Surface(
+                modifier = Modifier.weight(1f),
+                color = Color(0xFF131D2E),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.35f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        placeholder = {
+                            Text(
+                                "Message MEDLAM AI...",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                                color = Color(0xFF8B949E).copy(alpha = 0.7f)
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFFE6EDF3), fontSize = 13.5.sp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            cursorColor = NeonCyan,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        ),
+                        maxLines = 4
                     )
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    cursorColor = MaterialTheme.colorScheme.primary,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent
-                ),
-                maxLines = 4
-            )
+                }
+            }
 
-            IconButton(
+            // Circular Attachment (Clip) button
+            Surface(
                 onClick = { onFilePickerClick() },
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(if (selectedFileUri != null) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceVariant)
+                modifier = Modifier.size(42.dp),
+                shape = CircleShape,
+                color = if (selectedFileUri != null) Color(0xFF1F4470) else Color(0xFF161B22),
+                border = BorderStroke(0.5.dp, if (selectedFileUri != null) NeonCyan else Color(0xFF30363D))
             ) {
-                Icon(
-                    imageVector = Icons.Filled.AttachFile,
-                    contentDescription = "Attach",
-                    tint = if (selectedFileUri != null) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Outlined.AttachFile,
+                        contentDescription = "Attach",
+                        tint = if (selectedFileUri != null) NeonCyan else Color(0xFF8B949E),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            IconButton(
+            // Circular Voice (Mic) button
+            Surface(
                 onClick = { onRecordingClick() },
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(if (isRecording) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer)
+                modifier = Modifier.size(42.dp),
+                shape = CircleShape,
+                color = if (isRecording) Color(0xFF4C1D1D) else Color(0xFF161B22),
+                border = BorderStroke(0.5.dp, if (isRecording) Color(0xFFE5534B) else Color(0xFF30363D))
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Mic,
-                    contentDescription = "Voice",
-                    tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic,
+                        contentDescription = "Voice",
+                        tint = if (isRecording) Color(0xFFF85149) else Color(0xFF8B949E),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            IconButton(
-                onClick = { 
+            // Circular Send / Stop (Airplane) button
+            val canSend = inputText.isNotBlank() || selectedFileUri != null
+            Surface(
+                onClick = {
                     if (isProcessing) onStop()
-                    else if (inputText.isNotBlank() || selectedFileUri != null) {
+                    else if (canSend) {
                         onSend(inputText)
                         inputText = ""
                     }
                 },
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(if (isProcessing) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primary),
-                enabled = isProcessing || inputText.isNotBlank() || selectedFileUri != null
+                modifier = Modifier.size(42.dp),
+                shape = CircleShape,
+                color = when {
+                    isProcessing -> Color(0xFF4C1D1D)
+                    canSend -> NeonCyan
+                    else -> Color(0xFF161B22)
+                },
+                border = BorderStroke(
+                    0.5.dp,
+                    when {
+                        isProcessing -> Color(0xFFE5534B)
+                        canSend -> NeonCyan.copy(alpha = 0.8f)
+                        else -> Color(0xFF30363D)
+                    }
+                ),
+                enabled = isProcessing || canSend
             ) {
-                Icon(
-                    imageVector = if (isProcessing) Icons.Filled.Stop else Icons.Filled.Send,
-                    contentDescription = if (isProcessing) "Stop" else "Send",
-                    tint = if (isProcessing) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onPrimary
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isProcessing) Icons.Filled.Stop else Icons.Filled.Send,
+                        contentDescription = if (isProcessing) "Stop" else "Send",
+                        tint = when {
+                            isProcessing -> Color(0xFFF85149)
+                            canSend -> Color(0xFF0E1117)
+                            else -> Color(0xFF484F58)
+                        },
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }

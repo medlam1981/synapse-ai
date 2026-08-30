@@ -36,14 +36,14 @@ class GeminiModelClient(
     private val exhaustedKeys = mutableSetOf<Int>()
 
     var modelName: String = "gemini-1.5-flash"
-    var maxTokens: Int = 2048 // Reduced from 4096 to save quota
-    var temperature: Float = 0.1f
+    var maxTokens: Int = 8192
+    var temperature: Float = 0.7f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
 
     private fun fileLog(msg: String) {
         Log.d(TAG, msg)
         try {
-            val dir = File("/sdcard/MedlamAI")
+            val dir = File("/sdcard/Medlam-Ai")
             if (!dir.exists()) dir.mkdirs()
             File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] [GEMINI] $msg\n")
         } catch (_: Exception) {}
@@ -146,7 +146,7 @@ class GeminiModelClient(
         var lastErrorDetail = ""
 
         while (attempt < totalKeys && !success) {
-            val pair = getNextValidKey(forceRotate = true)
+            val pair = getNextValidKey(forceRotate = attempt > 0)
             if (pair == null) { attempt++; continue }
             val (apiKey, keyIdx) = pair
             try {
@@ -265,7 +265,7 @@ class GeminiModelClient(
         var lastErrorDetail = ""
 
         while (attempt < totalKeys && !success) {
-            val pair = getNextValidKey(forceRotate = true)
+            val pair = getNextValidKey(forceRotate = attempt > 0)
             if (pair == null) { attempt++; continue }
             val (apiKey, keyIdx) = pair
             try {

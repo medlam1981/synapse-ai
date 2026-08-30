@@ -37,7 +37,7 @@ class GGUFModelClient {
         private fun fileLog(msg: String) {
             Log.d(TAG, msg)
             try {
-                val dir = File("/sdcard/MedlamAI")
+                val dir = File("/sdcard/Medlam-Ai")
                 if (!dir.exists()) dir.mkdirs()
                 File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] $msg\n")
             } catch (_: Exception) {}
@@ -56,10 +56,13 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 2048
+    var contextLength: Int = 8192
     var threadCount: Int = 4
-    var maxTokens: Int = 2048
+    var maxTokens: Int = -1
     var temperature: Float = 0.1f
+    var draftModelPath: String? = null
+    var gpuLayers: Int = 0
+    var useMmap: Boolean = true
 
     private val internalPort: Int get() = serverPort + 1
     
@@ -142,12 +145,15 @@ class GGUFModelClient {
     private suspend fun startServer(resolvedPath: String, onStatus: (String) -> Unit = {}): Boolean = withContext(Dispatchers.IO) {
         fileLog("startServer called for: $resolvedPath")
 
-        if (globalLoadedPath == resolvedPath && isServerRunning()) {
-            fileLog("Server already running with same model — reusing")
-            onStatus("Model already loaded ✓")
-            serverThread = globalServerThread
-            return@withContext true
-        }
+        // Kill any previous or zombie server
+        onStatus("Stopping previous engine...")
+        try { LlamaServerJNI.stop() } catch (_: Exception) {}
+        delay(1000)
+        globalServerThread?.interrupt()
+        globalServerThread = null
+        globalLoadedPath = null
+        serverThread = null
+        delay(500)
 
         if (!LlamaServerJNI.load()) {
             fileLog("Failed to load native libraries")
@@ -161,38 +167,51 @@ class GGUFModelClient {
             ctx.startService(Intent(ctx, ModelEngineService::class.java))
         }
 
-        if (globalLoadedPath != null) {
-            onStatus("Stopping previous server...")
-            try { LlamaServerJNI.stop() } catch (_: Exception) {}
-            delay(2000)
-            globalServerThread?.interrupt()
-            globalServerThread = null
-            globalLoadedPath = null
-            serverThread = null
-            delay(1500)
-        }
-
         try {
             System.gc()
             val hw = appContext?.let { DeviceProfile.detect(it) }
             val batchSize = if (hw != null) DeviceProfile.optimalBatch(hw) else 128
             val ubatchSize = if (hw != null) DeviceProfile.optimalUbatch(hw) else 64
-            val threads = if (hw != null) DeviceProfile.optimalThreads(hw) else 4
+            val threads = if (threadCount > 0) threadCount else if (hw != null) DeviceProfile.optimalThreads(hw) else 8
 
-            val args = arrayOf(
+            val argsList = mutableListOf(
                 "llama-server", // Dummy argv[0] required by C++ main()
                 "-m", resolvedPath,
-                "-c", contextLength.toString(),
+                "-c", contextLength.coerceAtLeast(8192).toString(),
                 "-b", batchSize.toString(),
+                "-ub", ubatchSize.toString(),
                 "-t", threads.toString(),
+                "-ngl", gpuLayers.coerceIn(0, 33).toString(),
                 "--host", "127.0.0.1",
                 "--port", internalPort.toString()
             )
 
+            // Memory mapping flag
+            if (useMmap) {
+                argsList.add("--mmap")
+            } else {
+                argsList.add("--no-mmap")
+            }
+
+            // Speculative / Draft Model & MTP
+            val draftPath = draftModelPath
+            val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
+            if (resolvedDraft != null && File(resolvedDraft).exists()) {
+                argsList.add("-md")
+                argsList.add(resolvedDraft)
+                argsList.add("--draft-max")
+                argsList.add("4")
+            } else {
+                argsList.add("--draft-max")
+                argsList.add("4")
+            }
+
+            val args = argsList.toTypedArray()
+
             val newThread = Thread {
                 try {
                     // Redirect native stdout and stderr
-                    val logDir = File("/sdcard/MedlamAI")
+                    val logDir = File("/sdcard/Medlam-Ai")
                     if (!logDir.exists()) logDir.mkdirs()
                     val logFile = File(logDir, "native_log.txt")
                     val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
@@ -288,7 +307,7 @@ class GGUFModelClient {
 
         val body = JSONObject()
             .put("prompt", finalPrompt)
-            .put("n_predict", maxTokens)
+            .put("n_predict", -1)
             .put("temperature", temperature.toDouble())
             .put("stream", true)
             .put("cache_prompt", true)
@@ -310,7 +329,7 @@ class GGUFModelClient {
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
-        conn.connectTimeout = 8000
+        conn.connectTimeout = 60000
         conn.readTimeout = 300000 // 5 minutes
         conn.setRequestProperty("Content-Type", "application/json")
 

@@ -32,6 +32,17 @@ import com.synapse.localai.tools.DocumentTool
 
 enum class ModelType { GGUF, GEMINI, OPENAI }
 
+/** Dynamic phase tracking for in-stream status indicators */
+enum class AgentActionPhase {
+    IDLE,
+    THINKING,
+    PLANNING,
+    GENERATING_CODE,
+    WRITING_FILE,
+    EXECUTING_TOOL,
+    COMPLETING
+}
+
 data class ScheduledTask(
     val id: String = UUID.randomUUID().toString(),
     val description: String,
@@ -43,16 +54,19 @@ data class ScheduledTask(
 data class AgentConfig(
     val preferredModelType: ModelType = ModelType.GEMINI,
     val localModelPath: String = "",
+    val draftModelPath: String = "",
+    val gpuLayers: Int = 0,
+    val useMmap: Boolean = true,
     val geminiApiKeys: String = "",
-    val geminiModelName: String = "gemini-3.5-flash",
+    val geminiModelName: String = "gemini-1.5-flash",
     val openaiApiKeys: String = "",
     val openAiModelName: String = "gpt-4o",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 11434,
-    val contextLength: Int = 4096,
+    val contextLength: Int = 8192,
     val threadCount: Int = 4,
-    val maxTokens: Int = 4096,
-    val temperature: Float = 0.1f,
+    val maxTokens: Int = -1,
+    val temperature: Float = 0.7f,
     // Removed showFloatingBubble
     val enableVisualHistory: Boolean = false,
     val enableNeuralReflexes: Boolean = false,
@@ -62,27 +76,32 @@ data class AgentConfig(
 )
 
 data class AgentUiState(
-    val logs: List<LogEntry> = emptyList(),
     val isProcessing: Boolean = false,
+    val logs: List<LogEntry> = emptyList(),
+    val streamVersion: Int = 0,
     val config: AgentConfig = AgentConfig(),
-    val localModelLoaded: Boolean = false,
+    val serviceActive: Boolean = false,
+    val overlayActive: Boolean = false,
+    val keyboardActive: Boolean = false,
     val localModelLoading: Boolean = false,
+    val localModelLoaded: Boolean = false,
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
-    val streamVersion: Int = 0,
-    val shouldMinimize: Boolean = false,
     val scheduledTasks: List<ScheduledTask> = emptyList(),
-    val lastExecutionResult: String = "",
-    val currentKeyIndex: Int = 0,
-    val totalKeys: Int = 0,
     val specializedAgents: List<File> = emptyList(),
-    val isAccessibilityActive: Boolean = false,
-    val isKeyboardActive: Boolean = false,
-    val isNotificationActive: Boolean = false,
     val activeTasks: List<AgentTask> = emptyList(),
     val taskEngineRunning: Boolean = false,
     val taskQueueSize: Int = 0,
-    val taskSummary: String = ""
+    val taskSummary: String = "",
+    val currentPhase: AgentActionPhase = AgentActionPhase.IDLE,
+    val shouldMinimize: Boolean = false,
+    val lastExecutionResult: String = "",
+    val currentKeyIndex: Int = 0,
+    val totalKeys: Int = 0,
+    val isAccessibilityActive: Boolean = false,
+    val isKeyboardActive: Boolean = false,
+    val isNotificationActive: Boolean = false,
+    val streamInterruptMsg: String? = null
 )
 
 class AgentViewModel : ViewModel() {
@@ -92,7 +111,7 @@ class AgentViewModel : ViewModel() {
         private const val MAX_HISTORY_MESSAGES = 10  // Reduced: saves quota & memory
         private const val MAX_SCREEN_CONTEXT_MESSAGES = 4
         private const val MAX_TASK_ITERATIONS = 15     // Prevent infinite loops
-        private const val AGENTS_DIR = "/sdcard/MedlamAI/Agents"
+        private const val AGENTS_DIR = "/sdcard/Medlam-Ai/Agents"
         
         var instance: AgentViewModel? = null
             private set
@@ -114,6 +133,12 @@ class AgentViewModel : ViewModel() {
         private set
     var taskEngine: BackgroundTaskEngine? = null
         private set
+
+    var chatDb: ChatDatabaseHelper? = null
+        private set
+    val currentSessionId = MutableStateFlow<String>(UUID.randomUUID().toString())
+    val currentSessionTitle = MutableStateFlow<String>("New Session")
+    val chatSessions = MutableStateFlow<List<ChatSessionEntity>>(emptyList())
 
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
@@ -169,9 +194,9 @@ class AgentViewModel : ViewModel() {
             val isLowRam = hw.totalRamMb < 4000
             val maxCores = Runtime.getRuntime().availableProcessors()
             
-            var savedContext = prefs.getInt("context_length", 4096)
-            if (savedContext < 4096) {
-                savedContext = 4096 // Force 4096 as requested
+            var savedContext = prefs.getInt("context_length", 8192)
+            if (savedContext < 8192) {
+                savedContext = 8192 // Force 8192 as requested
             }
 
             var savedThreads = prefs.getInt("thread_count", maxCores)
@@ -187,10 +212,16 @@ class AgentViewModel : ViewModel() {
             
             var openaiKeys = prefs.getString("openai_api_keys", "") ?: ""
             var openAiModel = prefs.getString("openai_model_name", "gpt-4o") ?: "gpt-4o"
+            val draftPath = prefs.getString("draft_model_path", "") ?: ""
+            val gpuLayers = prefs.getInt("gpu_layers", 0)
+            val useMmap = prefs.getBoolean("use_mmap", true)
             
             val config = AgentConfig(
                 preferredModelType = modelType,
                 localModelPath = savedPath ?: "",
+                draftModelPath = draftPath,
+                gpuLayers = gpuLayers,
+                useMmap = useMmap,
                 geminiApiKeys = geminiKeys,
                 geminiModelName = geminiModel,
                 openaiApiKeys = openaiKeys,
@@ -199,8 +230,8 @@ class AgentViewModel : ViewModel() {
                 serverPort = prefs.getInt("server_port", 11434),
                 contextLength = savedContext,
                 threadCount = savedThreads,
-                maxTokens = prefs.getInt("max_tokens", 4096),
-                temperature = prefs.getFloat("temperature", 0.1f),
+                maxTokens = prefs.getInt("max_tokens", -1),
+                temperature = prefs.getFloat("temperature", 0.7f),
                 // showFloatingBubble removed
                 enableVisualHistory = prefs.getBoolean("enable_visual_history", false),
                 enableNeuralReflexes = prefs.getBoolean("enable_neural_reflexes", false),
@@ -222,7 +253,22 @@ class AgentViewModel : ViewModel() {
                 addSystemLog("⚡ System Online ($modelType). Active Keys: $activeKeys")
             }
 
-            restoreConversation(prefs)
+            // Consolidate legacy directories to single /sdcard/Medlam-Ai/ standard
+            consolidateWorkspaceDirectories()
+
+            // Initialize Chat Database & Sessions
+            if (chatDb == null) {
+                chatDb = ChatDatabaseHelper(context)
+            }
+            refreshSessions()
+            val existingSessions = chatDb?.getAllSessions() ?: emptyList()
+            if (existingSessions.isNotEmpty()) {
+                val latest = existingSessions.first()
+                switchSession(latest.id)
+            } else {
+                startNewSession()
+            }
+
             loadWorkflows(prefs)
             
             // Initialize persistent task system
@@ -303,12 +349,18 @@ class AgentViewModel : ViewModel() {
         val perfChanged = finalConfig.contextLength != oldConfig.contextLength ||
                          finalConfig.threadCount != oldConfig.threadCount ||
                          finalConfig.maxTokens != oldConfig.maxTokens ||
-                         finalConfig.temperature != oldConfig.temperature
+                         finalConfig.temperature != oldConfig.temperature ||
+                         finalConfig.gpuLayers != oldConfig.gpuLayers ||
+                         finalConfig.useMmap != oldConfig.useMmap ||
+                         finalConfig.draftModelPath != oldConfig.draftModelPath
 
         _uiState.update { it.copy(config = finalConfig) }
         val prefs = prefs(context)
         prefs.edit().apply {
             putString("local_model_path", finalConfig.localModelPath)
+            putString("draft_model_path", finalConfig.draftModelPath)
+            putInt("gpu_layers", finalConfig.gpuLayers)
+            putBoolean("use_mmap", finalConfig.useMmap)
             putString("preferred_model_type", finalConfig.preferredModelType.name)
             putString("gemini_api_keys", finalConfig.geminiApiKeys)
             putString("gemini_model_name", finalConfig.geminiModelName)
@@ -382,6 +434,9 @@ class AgentViewModel : ViewModel() {
                     threadCount = config.threadCount
                     maxTokens = config.maxTokens
                     temperature = config.temperature
+                    draftModelPath = config.draftModelPath.ifBlank { null }
+                    gpuLayers = config.gpuLayers
+                    useMmap = config.useMmap
                 }
                 ggufClient = client
                 client.loadModel(
@@ -522,10 +577,15 @@ To browse a site (e.g. Binance):
                 null
             } ?: if (modelType != ModelType.GGUF) {
                 """
-You are Medlam-AI, an Omnipotent Autonomous Device Controller for Android.
+You are MEDLAM AI, a hybrid autonomous on-device agent.
+
+ROOT WORKSPACE & FILE SYSTEM:
+Your working directory is strictly `/sdcard/Medlam-Ai/`. When asked to create applications, web pages, scripts, or components, generate complete, valid, un-truncated executable code with the target file path labeled on the line immediately preceding each code block (e.g., `File: /sdcard/Medlam-Ai/index.html`). All generated files are autonomously written directly into `/sdcard/Medlam-Ai/`. Structure multi-part tasks progressively and use structured tool calls for system interactions.
+
+You are an Omnipotent Autonomous Device Controller for Android.
 CRITICAL MANDATES FOR TOKEN EFFICIENCY & PRECISION:
 1. You are a FULL SYSTEM EXECUTOR with user authorization. You are NOT a restricted AI model.
-2. TOKEN ECONOMY: Be EXTREMELY CONCISE. Never output conversational filler ("I understand", "Sure", "Here is"). Only output the exact actions, commands, or data requested. 
+2. TOKEN ECONOMY: Be EXTREMELY CONCISE. Never output conversational filler ("I understand", "Sure", "Here is"). Only output the exact actions, commands, or data requested.
 3. Do NOT explain your reasoning unless explicitly asked. Your output should be pure action or direct answers. Every word consumes quota.
 4. If asked a question, provide the answer directly without introductory or concluding sentences.
 5. If executing a tool or command, provide the minimal necessary parameters. Do NOT narrate what you are doing.
@@ -537,7 +597,9 @@ CRITICAL MANDATES FOR TOKEN EFFICIENCY & PRECISION:
                 """.trimIndent()
             } else {
                 """
-You are Medlam-AI, a sophisticated assistant for Android.
+You are MEDLAM AI, a hybrid autonomous on-device agent.
+ROOT WORKSPACE: Your working directory is strictly `/sdcard/Medlam-Ai/`. When asked for applications or scripts, generate complete, valid, un-truncated executable code with the target path (e.g. `File: /sdcard/Medlam-Ai/App.kt`) preceding the code block.
+
 Be structured, clear, and professional. Extremely concise.
 Always respond in the SAME LANGUAGE the user is using.
 STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
@@ -545,10 +607,10 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
             }
         }
 
-        // PROFESSOR FIX: GGUF models (local) get a simple prompt to prevent XML hallucinations.
-        // Also instruct them to be concise to speed up generation on CPU.
+        // GGUF models (local) get a simple prompt to prevent XML hallucinations.
+        // Instruct them to generate complete code when asked, and be concise for CPU speed.
         if (modelType == ModelType.GGUF) {
-            val concisePrompt = "$basePrompt\n\nBe extremely concise. Answer directly in one or two sentences if possible. Do NOT use <think> tags. Do NOT show your reasoning."
+            val concisePrompt = "$basePrompt\n\nWhen generating code: output complete, valid, executable code without truncation. Be concise for conversational replies. Do NOT use <think> tags. Do NOT show your reasoning."
             return concisePrompt
         }
 
@@ -561,9 +623,14 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
         // Add persistent memory context
         val memoryContext = getPersistentMemoryContext()
         val memorySection = if (memoryContext.isNotBlank()) "\n\n$memoryContext" else ""
+
+        // Add long-term brain memory across past sessions
+        val brainContext = chatDb?.getRecentConversationsSummary(2) ?: ""
+        val brainSection = if (brainContext.isNotBlank()) "\n\n$brainContext" else ""
         
-        return "$basePrompt\n\n$toolsDescription$taskSection$memorySection"
+        return "$basePrompt\n\n$toolsDescription$taskSection$memorySection$brainSection"
     }
+
 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
         if (command.isBlank() && fileUri == null) return
@@ -578,7 +645,22 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
         }
         
         val actualContext = context ?: MainActivity.instance
-        addLog(LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]"))
+        autoTitleSessionIfNew(command)
+        val userLog = LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]")
+        addLog(userLog)
+        val sid = currentSessionId.value
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.insertMessage(
+                ChatMessageEntity(
+                    id = userLog.id,
+                    sessionId = sid,
+                    sender = "USER",
+                    text = userLog.text,
+                    timestamp = userLog.timestamp
+                )
+            )
+            refreshSessions()
+        }
         coreMission = command
 
         val service = SynapseAccessibilityService.instance
@@ -640,6 +722,11 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                 while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
                     iterationCount++
                     val responseSb = StringBuilder()
+                    // Track thinking vs content separately
+                    var inThinkBlock = false
+                    var streamInterrupted = false
+                    var interruptMsg = ""
+
                     try {
                         // Build history with screen context appended only to the LAST user message
                         val historyCopy = synchronized(conversationHistory) { conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList() }
@@ -651,7 +738,10 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                                 historyWithScreen[lastIdx] = role to content + lastScreenContext
                             }
                         }
-                        
+
+                        // Update phase to THINKING when stream begins
+                        _uiState.update { it.copy(currentPhase = AgentActionPhase.THINKING, streamInterruptMsg = null) }
+
                         val stream = when (modelType) {
                             ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(historyWithScreen, systemPrompt)
                             ModelType.GEMINI -> {
@@ -661,8 +751,8 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                                     if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
                                     json.put(m)
                                 }
-                                geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { 
-                                    responseSb.setLength(0) 
+                                geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
+                                    // onRetry: do NOT wipe responseSb — retain partial output
                                 }
                             }
                             ModelType.OPENAI -> {
@@ -672,45 +762,124 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                                     if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
                                     json.put(m)
                                 }
-                                openAiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { 
-                                    responseSb.setLength(0) 
+                                openAiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
+                                    // onRetry: do NOT wipe responseSb — retain partial output
                                 }
                             }
                         }
 
                         stream.collect { chunk ->
                             responseSb.append(chunk)
+                            // Detect and update phase based on content tokens
+                            val currentText = responseSb.toString()
+                            when {
+                                currentText.contains("<think>") && !currentText.contains("</think>") -> {
+                                    inThinkBlock = true
+                                    _uiState.update { it.copy(currentPhase = AgentActionPhase.THINKING) }
+                                }
+                                inThinkBlock && currentText.contains("</think>") -> {
+                                    inThinkBlock = false
+                                    _uiState.update { it.copy(currentPhase = AgentActionPhase.GENERATING_CODE) }
+                                }
+                                currentText.contains("```") -> {
+                                    _uiState.update { it.copy(currentPhase = AgentActionPhase.GENERATING_CODE) }
+                                }
+                                currentText.contains("<invoke") -> {
+                                    _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL) }
+                                }
+                                currentText.contains("<complete") -> {
+                                    _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
+                                }
+                                else -> {
+                                    if (!inThinkBlock) {
+                                        _uiState.update { it.copy(currentPhase = AgentActionPhase.PLANNING) }
+                                    }
+                                }
+                            }
                         }
                     } catch (e: Exception) {
-                        addLog(LogEntry(sender = "SYSTEM", text = "❌ Engine Error: ${e.message}", isError = true))
-                        break
+                        // RESILIENT: Do NOT wipe console or break on stream errors.
+                        // Surface an inline status banner and retain whatever was collected.
+                        streamInterrupted = true
+                        interruptMsg = e.message ?: e.javaClass.simpleName
+                        Log.w(TAG, "Stream interrupted: $interruptMsg")
+                        // Append interrupt marker to collected text so user sees what happened
+                        if (responseSb.isNotBlank()) {
+                            responseSb.append("\n\n[Stream Interrupted: $interruptMsg]")
+                        }
+                        _uiState.update { it.copy(streamInterruptMsg = interruptMsg) }
                     }
 
                     val fullResponse = responseSb.toString()
                     if (fullResponse.isNotBlank()) {
-                        val assistantReply = fullResponse.replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "").trim()
+                        // Strip thinking blocks from the reply stored in history, but keep full response for tool parsing
+                        val assistantReply = fullResponse
+                            .replace(Regex("<think>.*?</think>", RegexOption.DOT_MATCHES_ALL), "")
+                            .replace(Regex("^💭.*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
+                            .trim()
                         synchronized(conversationHistory) {
                             conversationHistory.add("assistant" to assistantReply)
                             while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
                         }
-                        
-                        val (usedTools, summary) = executeToolLoop(fullResponse)
-                        if (usedTools) {
-                            toolsUsedThisTurn = true
-                            // Update screen context for next iteration
-                            if (_uiState.value.activeModelType != ModelType.GGUF) {
-                                lastScreenContext = "\n[Current State]:\n${service?.getDroidrunPhoneState()}\n\n${service?.getDroidrunScreenTree()}"
+
+                        if (streamInterrupted) {
+                            // Show whatever partial content we have, with interrupt notice, then stop loop
+                            val agentLog = LogEntry(sender = "AGENT", text = assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" })
+                            addLog(agentLog)
+                            val sid = currentSessionId.value
+                            viewModelScope.launch(Dispatchers.IO) {
+                                chatDb?.insertMessage(
+                                    ChatMessageEntity(
+                                        id = agentLog.id,
+                                        sessionId = sid,
+                                        sender = "AGENT",
+                                        text = agentLog.text,
+                                        timestamp = agentLog.timestamp
+                                    )
+                                )
+                                refreshSessions()
                             }
-                            keepGoing = true
-                        } else {
-                            // Final Result: Show the summary if provided, otherwise the text reply
-                            val finalText = summary ?: assistantReply
-                            addLog(LogEntry(sender = "AGENT", text = finalText))
                             keepGoing = false
+                        } else {
+                            val (usedTools, summary) = executeToolLoop(fullResponse)
+                            if (usedTools) {
+                                toolsUsedThisTurn = true
+                                _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL) }
+                                // Update screen context for next iteration
+                                if (_uiState.value.activeModelType != ModelType.GGUF) {
+                                    lastScreenContext = "\n[Current State]:\n${service?.getDroidrunPhoneState()}\n\n${service?.getDroidrunScreenTree()}"
+                                }
+                                keepGoing = true
+                            } else {
+                                // Final Result: Show the summary if provided, otherwise the text reply
+                                _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
+                                val finalText = summary ?: assistantReply
+                                val agentLog = LogEntry(sender = "AGENT", text = finalText)
+                                addLog(agentLog)
+                                val sid = currentSessionId.value
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    chatDb?.insertMessage(
+                                        ChatMessageEntity(
+                                            id = agentLog.id,
+                                            sessionId = sid,
+                                            sender = "AGENT",
+                                            text = finalText,
+                                            timestamp = agentLog.timestamp
+                                        )
+                                    )
+                                    refreshSessions()
+                                }
+                                keepGoing = false
+                            }
                         }
-                    } else keepGoing = false
+                    } else {
+                        if (streamInterrupted) {
+                            addLog(LogEntry(sender = "SYSTEM", text = "⚠️ Stream interrupted: $interruptMsg", isError = true))
+                        }
+                        keepGoing = false
+                    }
                 }
-                
+
                 // Cleanup after all iterations
                 if (toolsUsedThisTurn) {
                     viewModelScope.launch {
@@ -722,7 +891,7 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                         }
                     }
                 }
-                
+
             } catch (e: Exception) {
                 addLog(LogEntry(sender = "SYSTEM", text = "Mission Error: ${e.message}", isError = true))
             } finally {
@@ -732,15 +901,16 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                     service?.restoreOriginalKeyboard()
                 }
 
-                _uiState.update { it.copy(isProcessing = false) }
+                _uiState.update { it.copy(isProcessing = false, currentPhase = AgentActionPhase.IDLE, streamInterruptMsg = null) }
                 service?.releaseWakeLock()
                 if (actualContext != null) saveConversation(actualContext)
                 updateTaskState()
-                
+
                 // Process next queued command if any
                 processNextQueuedCommand(context)
             }
         }
+
     }
     
     private fun processNextQueuedCommand(context: Context?) {
@@ -951,13 +1121,29 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
 
     private suspend fun executeToolLoop(response: String): Pair<Boolean, String?> {
         val service = SynapseAccessibilityService.instance
+
+        // File Extraction Engine: scan response for file path + code block pairs and write them
+        try {
+            val writtenFiles = withContext(Dispatchers.IO) {
+                ToolExecutor.extractAndWriteFiles(response)
+            }
+            if (writtenFiles.isNotEmpty()) {
+                writtenFiles.forEach { path ->
+                    addSystemLog("📄 File written: $path")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ToolExecutor error: ${e.message}")
+        }
+
         val clean = response.replace("```xml", "").replace("```", "").trim()
-        
-        // PROFESSOR FIX: Robust parsing. Check for <function_calls> but fallback to searching full text for <invoke>
+
+        // Robust parsing. Check for <function_calls> but fallback to searching full text for <invoke>
         val hasFunctionCalls = clean.contains("<function_calls>")
         val hasInvoke = clean.contains("<invoke")
-        
+
         if (!hasInvoke) return false to null
+
         
         val block = if (hasFunctionCalls) {
             val start = clean.indexOf("<function_calls>")
@@ -1104,31 +1290,132 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
         } catch (_: Exception) {}
     }
 
-    fun saveConversation(context: Context) {
-        val arr = JSONArray()
-        _uiState.value.logs.takeLast(30).forEach { log ->
-            arr.put(JSONObject().apply { put("sender", log.sender); put("text", log.text); put("isError", log.isError) })
+    fun consolidateWorkspaceDirectories() {
+        try {
+            val rootDir = File("/sdcard/Medlam-Ai")
+            if (!rootDir.exists()) rootDir.mkdirs()
+
+            val legacyDirs = listOf(
+                File("/sdcard/MedlamAi"),
+                File("/sdcard/MedlamAI"),
+                File("/storage/emulated/0/MedlamAi"),
+                File("/storage/emulated/0/MedlamAI")
+            )
+            legacyDirs.forEach { legacy ->
+                if (legacy.exists() && legacy.isDirectory && legacy.canonicalPath != rootDir.canonicalPath) {
+                    legacy.listFiles()?.forEach { file ->
+                        val target = File(rootDir, file.name)
+                        if (!target.exists()) {
+                            file.renameTo(target)
+                        }
+                    }
+                    legacy.deleteRecursively()
+                    Log.i(TAG, "Consolidated legacy directory ${legacy.absolutePath} into ${rootDir.absolutePath}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Directory consolidation error: ${e.message}")
         }
-        prefs(context).edit().putString("saved_conversation", arr.toString()).apply()
     }
 
-    private fun restoreConversation(prefs: SharedPreferences): Boolean {
-        try {
-            val arr = JSONArray(prefs.getString("saved_conversation", "[]") ?: "[]")
-            val restored = mutableListOf<LogEntry>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                restored.add(LogEntry(sender = o.getString("sender"), text = o.getString("text"), isError = o.optBoolean("isError", false)))
+    fun refreshSessions() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = chatDb?.getAllSessions() ?: emptyList()
+            chatSessions.value = list
+        }
+    }
+
+    fun startNewSession() {
+        val newId = UUID.randomUUID().toString()
+        currentSessionId.value = newId
+        currentSessionTitle.value = "New Session"
+        _uiState.update { it.copy(logs = emptyList()) }
+        conversationHistory.clear()
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.insertSession(
+                ChatSessionEntity(
+                    id = newId,
+                    title = "New Session",
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            refreshSessions()
+        }
+    }
+
+    fun switchSession(sessionId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = chatDb?.getSession(sessionId) ?: return@launch
+            val messages = chatDb?.getMessagesForSession(sessionId) ?: emptyList()
+            val restoredLogs = messages.map { msg ->
+                LogEntry(
+                    id = msg.id,
+                    sender = msg.sender,
+                    text = msg.text,
+                    isError = msg.isError,
+                    timestamp = msg.timestamp
+                )
             }
-            _uiState.update { it.copy(logs = restored) }
-            return true
-        } catch (_: Exception) { return false }
+            currentSessionId.value = session.id
+            currentSessionTitle.value = session.title
+            _uiState.update { it.copy(logs = restoredLogs) }
+            synchronized(conversationHistory) {
+                conversationHistory.clear()
+                restoredLogs.takeLast(MAX_HISTORY_MESSAGES).forEach { l ->
+                    val role = if (l.sender == "USER") "user" else "assistant"
+                    conversationHistory.add(role to l.text)
+                }
+            }
+        }
+    }
+
+    fun deleteSession(sessionId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.deleteSession(sessionId)
+            refreshSessions()
+            if (currentSessionId.value == sessionId) {
+                val remaining = chatDb?.getAllSessions() ?: emptyList()
+                if (remaining.isNotEmpty()) {
+                    switchSession(remaining.first().id)
+                } else {
+                    startNewSession()
+                }
+            }
+        }
+    }
+
+    fun autoTitleSessionIfNew(userMessage: String) {
+        val currentTitle = currentSessionTitle.value
+        if (currentTitle == "New Session" || currentTitle.isBlank()) {
+            val clean = userMessage.lines().firstOrNull { it.isNotBlank() }?.trim() ?: "Conversation"
+            val title = if (clean.length > 32) clean.take(32) + "..." else clean
+            currentSessionTitle.value = title
+            val sid = currentSessionId.value
+            viewModelScope.launch(Dispatchers.IO) {
+                chatDb?.updateSessionTitle(sid, title)
+                refreshSessions()
+            }
+        }
+    }
+
+    fun saveConversation(context: Context? = null) {
+        val sid = currentSessionId.value
+        val currentLogs = _uiState.value.logs
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.saveFullSessionMessages(sid, currentSessionTitle.value, currentLogs)
+            refreshSessions()
+        }
     }
 
     fun clearConversation(context: Context) {
         _uiState.update { it.copy(logs = emptyList()) }
         conversationHistory.clear()
-        saveConversation(context)
+        val sid = currentSessionId.value
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.saveFullSessionMessages(sid, currentSessionTitle.value, emptyList())
+            refreshSessions()
+        }
     }
 
     fun startScheduler() {
