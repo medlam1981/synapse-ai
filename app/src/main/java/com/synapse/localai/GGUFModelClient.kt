@@ -172,19 +172,7 @@ class GGUFModelClient {
     }
 
     private suspend fun isSocketOrHttpReachable(): Boolean = withContext(Dispatchers.IO) {
-        if (isServerRunning()) return@withContext true
-        val address = LlamaServerJNI.safeGetAddress()
-        val portFromAddress = address?.substringAfterLast(':')?.toIntOrNull()
-        val candidatePorts = listOfNotNull(portFromAddress, serverPort.takeIf { it > 0 }, 11435, 8080).distinct()
-        for (port in candidatePorts) {
-            try {
-                java.net.Socket().use { socket ->
-                    socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 200)
-                    return@withContext true
-                }
-            } catch (_: Exception) {}
-        }
-        false
+        isServerRunning()
     }
 
     private suspend fun startServer(
@@ -252,7 +240,10 @@ class GGUFModelClient {
             }
 
             // Speculative / Draft Model & MTP
-            val draftPath = draftModelPath
+            val draftPath = draftModelPath?.takeIf { path ->
+                val lower = path.lowercase()
+                !lower.contains("assistant") && !lower.contains("bf16") && !lower.contains("mtp-gemma-4")
+            }
             val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
                 argsList.add("--model-draft")
@@ -305,22 +296,10 @@ class GGUFModelClient {
             val baseSizeGb = baseFileSize / (1024f * 1024f * 1024f)
 
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
-                // Check if server thread died
-                if (!newThread.isAlive && !isServerRunning()) {
-                    fileLog("Server thread died during startup.")
-                    if (draftModelPath != null) {
-                        fileLog("Draft model incompatible; retrying cleanly without draft model...")
-                        draftModelPath = null
-                        return@withContext startServer(resolvedPath, onStatus, onProgress)
-                    }
-                    onProgress(0f, "Server crash")
-                    onStatus("❌ Error: Server process terminated.")
-                    return@withContext false
-                }
-
-                // 1. Check if server is ready via HTTP /health or socket on every iteration
-                if (isServerRunning() || isSocketOrHttpReachable()) {
+                // 1. Check if server is ready via HTTP /health on every iteration
+                if (isServerRunning()) {
                     fileLog("Server ready via JNI (health check verified)!")
+                    isLoaded = true
                     onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
@@ -338,39 +317,48 @@ class GGUFModelClient {
                             var line: String?
                             while (raf.readLine().also { line = it } != null) {
                                 val currentLine = line ?: continue
+
+                                // Check for draft model incompatibility and auto-fallback
+                                if ((currentLine.contains("failed to load draft model", ignoreCase = true) ||
+                                     currentLine.contains("unknown model architecture", ignoreCase = true) ||
+                                     currentLine.contains("failed to load model", ignoreCase = true)) && draftModelPath != null) {
+                                    fileLog("Draft model incompatible ($draftModelPath); retrying in standalone mode...")
+                                    draftModelPath = null
+                                    LlamaServerJNI.safeStop()
+                                    raf.close()
+                                    return@withContext startServer(resolvedPath, onStatus, onProgress)
+                                }
+
                                 val match1 = tensorRegex1.find(currentLine)
                                 if (match1 != null) {
                                     val cur = match1.groupValues[1].toFloatOrNull() ?: 0f
                                     val tot = match1.groupValues[2].toFloatOrNull() ?: 1f
                                     if (tot > 0) {
-                                        lastCalculatedProgress = (cur / tot).coerceIn(0.05f, 1.0f)
+                                        lastCalculatedProgress = (cur / tot).coerceIn(0.05f, 0.99f)
                                     }
                                 }
                                 val match2 = tensorRegex2.find(currentLine)
                                 if (match2 != null) {
                                     val pct = match2.groupValues[1].toFloatOrNull() ?: 0f
-                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 1.0f)
+                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.99f)
                                 }
                                 val match3 = tensorRegex3.find(currentLine)
                                 if (match3 != null) {
                                     val pct = match3.groupValues[1].toFloatOrNull() ?: 0f
-                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 1.0f)
+                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.99f)
                                 }
                                 if (currentLine.contains("HTTP server listening", ignoreCase = true) ||
                                     currentLine.contains("all slots are idle", ignoreCase = true) ||
-                                    currentLine.contains("llama_init_from_gpt_params", ignoreCase = true) ||
-                                    currentLine.contains("main: model loaded", ignoreCase = true) ||
-                                    currentLine.contains("load_all_tensors", ignoreCase = true) ||
+                                    currentLine.contains("main: server is listening", ignoreCase = true) ||
                                     currentLine.contains("server is listening", ignoreCase = true) ||
-                                    currentLine.contains("all tensors loaded", ignoreCase = true) ||
-                                    currentLine.contains("model loaded successfully", ignoreCase = true) ||
-                                    currentLine.contains("llama_server: listening", ignoreCase = true) ||
-                                    currentLine.contains("system_info:", ignoreCase = true)
+                                    currentLine.contains("model loaded successfully", ignoreCase = true)
                                 ) {
-                                    if (isServerRunning() || isSocketOrHttpReachable()) {
+                                    if (isServerRunning()) {
                                         fileLog("Initialization match in logs: $currentLine")
+                                        isLoaded = true
                                         onProgress(1.0f, "ONLINE • 100%")
                                         onStatus("✅ Local Server Ready.")
+                                        raf.close()
                                         return@withContext true
                                     }
                                 }
@@ -381,26 +369,21 @@ class GGUFModelClient {
                     }
                 } catch (_: Exception) {}
 
-                // Under mmap or swift startup, advance smoothly
+                // Under mmap, advance smoothly while loading tensors
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                if (useMmap && elapsedSec > 0.2f && lastCalculatedProgress < 0.95f) {
-                    lastCalculatedProgress = (0.3f + elapsedSec * 0.5f).coerceIn(0.3f, 0.95f)
+                if (useMmap && elapsedSec > 0.5f && lastCalculatedProgress < 0.95f) {
+                    lastCalculatedProgress = (0.05f + (elapsedSec / 25f) * 0.90f).coerceIn(0.05f, 0.95f)
                 }
 
-                if (isServerRunning() || isSocketOrHttpReachable()) {
-                    onProgress(1.0f, "ONLINE • 100%")
-                    onStatus("✅ Local Server Ready.")
-                    return@withContext true
-                }
-
-                val pctInt = (lastCalculatedProgress * 100).toInt().coerceIn(1, 97)
+                val pctInt = (lastCalculatedProgress * 100).toInt().coerceIn(1, 99)
                 val loadedGb = lastCalculatedProgress * baseSizeGb
                 val statusMsg = "Loading Neural Core: $pctInt% • ${String.format(java.util.Locale.US, "%.1f", loadedGb)}/${String.format(java.util.Locale.US, "%.1f", baseSizeGb)} GB"
                 onProgress(lastCalculatedProgress, statusMsg)
                 onStatus(statusMsg)
             }
 
-            if (isSocketOrHttpReachable() || isServerRunning()) {
+            if (isServerRunning()) {
+                isLoaded = true
                 onProgress(1.0f, "ONLINE • 100%")
                 onStatus("✅ Local Server Ready.")
                 return@withContext true
@@ -454,17 +437,15 @@ class GGUFModelClient {
         systemPrompt: String = "",
         onSpeedUpdate: ((Float) -> Unit)? = null
     ): Flow<String> = flow {
-        // Native Crash Prevention & Health Verification
-        val isRunning = LlamaServerJNI.safeIsRunning()
-        val jniAddr = LlamaServerJNI.safeGetAddress()
-        if (!isRunning || jniAddr.isNullOrBlank() || !isSocketOrHttpReachable()) {
-            val recMsg = "Native server not running (addr=$jniAddr, isRunning=$isRunning), attempting restart..."
-            fileLog(recMsg)
-            appendNativeLog("[GGUF RESTART] $recMsg")
+        // Native Health Verification
+        if (!isServerRunning()) {
             val ctx = appContext
             val currentPath = modelPath
             val resolvedPath = if (ctx != null && currentPath != null) resolveModelPath(ctx, currentPath) else null
             if (resolvedPath != null) {
+                val recMsg = "Native server not ready, initializing server for $resolvedPath..."
+                fileLog(recMsg)
+                appendNativeLog("[GGUF INIT] $recMsg")
                 startServer(resolvedPath)
             }
         }

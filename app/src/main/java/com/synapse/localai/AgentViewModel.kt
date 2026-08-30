@@ -210,20 +210,33 @@ class AgentViewModel : ViewModel() {
             var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
             var geminiModel = prefs.getString("gemini_model_name", "gemini-1.5-flash") ?: "gemini-1.5-flash"
             ModelScanner.ensureDirectories()
+            var localPath = savedPath ?: ""
+            if (localPath.isBlank()) {
+                val scannedModels = ModelScanner.scanBaseModels()
+                if (scannedModels.isNotEmpty()) {
+                    localPath = scannedModels.first().absolutePath
+                }
+            }
+
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
-            var draftPath = rawDraft
-            if (draftPath.isBlank() && !savedPath.isNullOrBlank()) {
-                val matched = ModelScanner.findMatchingMtpModel(savedPath)
+            var draftPath = if (rawDraft.contains("assistant", ignoreCase = true)) "" else rawDraft
+            if (draftPath.isBlank() && localPath.isNotBlank()) {
+                val matched = ModelScanner.findMatchingMtpModel(localPath)
                 if (matched != null) {
                     draftPath = matched.absolutePath
                 }
             }
             val gpuLayers = prefs.getInt("gpu_layers", 0)
             val useMmap = prefs.getBoolean("use_mmap", true)
+            val activeGeminiKeyCount = geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
+            var effectiveModelType = modelType
+            if (effectiveModelType == ModelType.GEMINI && activeGeminiKeyCount == 0 && localPath.isNotBlank()) {
+                effectiveModelType = ModelType.GGUF
+            }
             
             val config = AgentConfig(
-                preferredModelType = modelType,
-                localModelPath = savedPath ?: "",
+                preferredModelType = effectiveModelType,
+                localModelPath = localPath,
                 draftModelPath = draftPath,
                 gpuLayers = gpuLayers,
                 useMmap = useMmap,
@@ -243,13 +256,17 @@ class AgentViewModel : ViewModel() {
                 customToolsPrompt = prefs.getString("custom_tools_prompt", "") ?: ""
             )
             _uiState.update { it.copy(config = config) }
-
-            val activeGeminiKeyCount = geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
             
-            if (modelType == ModelType.GEMINI && activeGeminiKeyCount == 0) {
+            if (effectiveModelType == ModelType.GEMINI && activeGeminiKeyCount == 0) {
                 addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your Gemini keys.", isError = true))
             } else {
-                addSystemLog("⚡ System Online ($modelType). Active Keys: $activeGeminiKeyCount")
+                addSystemLog("⚡ System Online ($effectiveModelType). Active Keys: $activeGeminiKeyCount")
+            }
+
+            if (effectiveModelType == ModelType.GGUF && localPath.isNotBlank()) {
+                viewModelScope.launch {
+                    triggerModelLoad(context, localPath)
+                }
             }
 
             // Consolidate legacy directories to single /sdcard/Medlam-Ai/ standard
@@ -774,7 +791,7 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                             if (!liveBubbleAdded && currentText.isNotBlank()) {
                                 liveBubbleAdded = true
                                 val entry = LogEntry(id = liveLogId, sender = "AGENT", text = currentText)
-                                _uiState.update { it.copy(logs = it.logs + entry) }
+                                _uiState.update { it.copy(logs = it.logs + entry, currentPhase = AgentActionPhase.IDLE) }
                             } else if (liveBubbleAdded) {
                                 _uiState.update { state ->
                                     val updated = state.logs.map { log ->
