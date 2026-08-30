@@ -452,9 +452,9 @@ class AgentViewModel : ViewModel() {
                         }
                     }
                 )
-            } catch (e: Exception) {
-                Log.e(TAG, "GGUF load failed", e)
-                addLog(LogEntry(sender = "SYSTEM", text = "❌ Load Error: ${e.message}", isError = true))
+            } catch (t: Throwable) {
+                Log.e(TAG, "GGUF load failed", t)
+                addLog(LogEntry(sender = "SYSTEM", text = "❌ Load Error: ${t.message}", isError = true))
                 _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
             }
         }

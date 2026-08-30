@@ -6,26 +6,59 @@ import android.util.Log
 object LlamaServerJNI {
 
     private const val TAG = "LlamaServerJNI"
-    private var loaded = false
+    @Volatile private var loaded = false
 
     fun load(): Boolean {
         if (loaded) return true
+        return synchronized(this) {
+            if (loaded) return true
+            try {
+                // Load dependency chain bottom-up before libllama_server
+                System.loadLibrary("ggml-base")
+                System.loadLibrary("omp")
+                System.loadLibrary("ggml-cpu")
+                System.loadLibrary("ggml")
+                System.loadLibrary("llama")
+                System.loadLibrary("mtmd")
+                System.loadLibrary("llama_server")
+                System.loadLibrary("synapse_bridge")
+                loaded = true
+                Log.i(TAG, "Native libraries loaded successfully")
+                true
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to load native libraries: ${t.message}", t)
+                false
+            }
+        }
+    }
+
+    fun isLoaded(): Boolean = loaded
+
+    fun safeStop() {
+        if (!load()) return
+        try {
+            stop()
+        } catch (t: Throwable) {
+            Log.e(TAG, "safeStop error: ${t.message}")
+        }
+    }
+
+    fun safeGetAddress(): String? {
+        if (!load()) return null
         return try {
-            // Load dependency chain bottom-up before libllama_server
-            System.loadLibrary("ggml-base")
-            System.loadLibrary("omp")
-            System.loadLibrary("ggml-cpu")
-            System.loadLibrary("ggml")
-            System.loadLibrary("llama")
-            System.loadLibrary("mtmd")
-            System.loadLibrary("llama_server")
-            System.loadLibrary("synapse_bridge")
-            loaded = true
-            Log.i(TAG, "Native libraries loaded successfully")
-            true
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Failed to load native libraries: ${e.message}")
-            false
+            getAddress()
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    fun safeStart(args: Array<String>): Int {
+        if (!load()) return -1
+        return try {
+            start(args)
+        } catch (t: Throwable) {
+            Log.e(TAG, "safeStart error: ${t.message}")
+            -1
         }
     }
 

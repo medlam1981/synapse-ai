@@ -131,10 +131,10 @@ fun SettingsScreenContent(
             SCAN_DIRS.forEach { path ->
                 val dir = File(path)
                 if (dir.exists() && dir.isDirectory) {
-                    dir.listFiles { f -> f.extension == "gguf" }?.let { found.addAll(it) }
+                    dir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }?.let { found.addAll(it) }
                 }
             }
-            models = found.distinctBy { it.canonicalPath }
+            models = found.distinctBy { it.name }
         }
         isScanning = false
     }
@@ -357,144 +357,155 @@ fun SettingsScreenContent(
                 },
                 statusText = if (uiState.localModelLoading) "LOADING..." else if (uiState.localModelLoaded) "LOADED" else "OFFLINE"
             ) {
-                if (isScanning) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = NeonMagenta)
-                }
-
-                if (models.isEmpty()) {
-                    Text("No .gguf models found.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                }
-
-                // Base Model Selection
-                Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                models.forEach { file ->
-                    val isSelected = localModelPathState == file.absolutePath
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
-                            .border(0.5.dp, if (isSelected) NeonCyan.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(8.dp))
-                            .clickable { localModelPathState = file.absolutePath }
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(selected = isSelected, onClick = { localModelPathState = file.absolutePath })
-                        Column {
-                            Text(file.name, color = if (isSelected) NeonCyan else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(formatSize(file.length()) + " • " + file.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
-                        }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    if (isScanning) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = NeonMagenta)
                     }
-                }
 
-                // Draft / Speculative Model (Optional MTP)
-                if (models.size > 1) {
-                    Spacer(Modifier.height(4.dp))
-                    Text("DRAFT / MTP SPECULATIVE ACCELERATOR (Optional):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (draftModelPathState.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
-                            .clickable { draftModelPathState = "" }
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(selected = draftModelPathState.isBlank(), onClick = { draftModelPathState = "" })
-                        Text("None (Standard Speculative MTP)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
+                    if (models.isEmpty()) {
+                        Text("No .gguf models found.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                     }
-                    models.filter { it.absolutePath != localModelPathState }.forEach { file ->
-                        val isDraftSelected = draftModelPathState == file.absolutePath
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isDraftSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
-                                .clickable { draftModelPathState = file.absolutePath }
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = isDraftSelected, onClick = { draftModelPathState = file.absolutePath })
-                            Column {
-                                Text(file.name, color = if (isDraftSelected) NeonCyan else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text(formatSize(file.length()), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+
+                    // Base Model Selection
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        models.forEach { file ->
+                            val isSelected = localModelPathState == file.absolutePath
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
+                                    .border(0.5.dp, if (isSelected) NeonCyan.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable { localModelPathState = file.absolutePath }
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = isSelected, onClick = { localModelPathState = file.absolutePath })
+                                Column {
+                                    Text(file.name, color = if (isSelected) NeonCyan else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(formatSize(file.length()) + " • " + file.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                                }
                             }
                         }
                     }
-                }
 
-                Spacer(Modifier.height(4.dp))
-
-                // GPU Layers Slider
-                Text(
-                    text = "GPU Offload: $gpuLayersState layers ${if (gpuLayersState == 0) "(CPU Only)" else if (gpuLayersState >= 33) "(Full GPU Offload)" else "(Hybrid GPU/CPU)"}",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Slider(
-                    value = gpuLayersState.toFloat(),
-                    onValueChange = { gpuLayersState = it.toInt() },
-                    valueRange = 0f..33f,
-                    steps = 32,
-                    colors = SliderDefaults.colors(thumbColor = NeonMagenta, activeTrackColor = NeonMagenta)
-                )
-
-                // mmap Switch
-                SettingsToggle(
-                    title = "mmap Fast Loading",
-                    description = "Map model directly into memory space for instantaneous boot.",
-                    checked = useMmapState,
-                    onCheckedChange = { useMmapState = it }
-                )
-                
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { 
-                            isScanning = true
-                            coroutineScope.launch {
-                                val found = mutableListOf<File>()
-                                withContext(Dispatchers.IO) {
-                                    SCAN_DIRS.forEach { path ->
-                                        val dir = File(path)
-                                        if (dir.exists() && dir.isDirectory) {
-                                            dir.listFiles { f -> f.extension == "gguf" }?.let { found.addAll(it) }
-                                        }
+                    // Draft / Speculative Model (Optional MTP)
+                    if (models.size > 1) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("DRAFT / MTP SPECULATIVE ACCELERATOR (Optional):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (draftModelPathState.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
+                                    .clickable { draftModelPathState = "" }
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = draftModelPathState.isBlank(), onClick = { draftModelPathState = "" })
+                                Text("None (Standard Speculative MTP)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                            models.filter { it.absolutePath != localModelPathState }.forEach { file ->
+                                val isDraftSelected = draftModelPathState == file.absolutePath
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isDraftSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
+                                        .clickable { draftModelPathState = file.absolutePath }
+                                        .padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(selected = isDraftSelected, onClick = { draftModelPathState = file.absolutePath })
+                                    Column {
+                                        Text(file.name, color = if (isDraftSelected) NeonCyan else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Text(formatSize(file.length()), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
                                     }
                                 }
-                                models = found.distinctBy { it.canonicalPath }
-                                isScanning = false
                             }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("RE-SCAN", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                        }
                     }
 
-                    Button(
-                        onClick = {
-                            val newConfig = config.copy(
-                                localModelPath = localModelPathState,
-                                draftModelPath = draftModelPathState,
-                                gpuLayers = gpuLayersState,
-                                useMmap = useMmapState,
-                                preferredModelType = ModelType.GGUF
-                            )
-                            viewModel.saveConfig(context, newConfig)
-                            coroutineScope.launch {
-                                viewModel.triggerModelLoad(context, localModelPathState)
-                            }
-                            Toast.makeText(context, "Local Engine Launching ✓", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = NeonMagenta, contentColor = Color.White),
-                        shape = RoundedCornerShape(8.dp)
+                    // GPU Layers Slider
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "GPU Offload: $gpuLayersState layers ${if (gpuLayersState == 0) "(CPU Only)" else if (gpuLayersState >= 33) "(Full GPU Offload)" else "(Hybrid GPU/CPU)"}",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Slider(
+                            value = gpuLayersState.toFloat(),
+                            onValueChange = { gpuLayersState = it.toInt() },
+                            valueRange = 0f..33f,
+                            steps = 32,
+                            colors = SliderDefaults.colors(thumbColor = NeonMagenta, activeTrackColor = NeonMagenta)
+                        )
+                    }
+
+                    // mmap Switch
+                    SettingsToggle(
+                        title = "mmap Fast Loading",
+                        description = "Map model directly into memory space for instantaneous boot.",
+                        checked = useMmapState,
+                        onCheckedChange = { useMmapState = it }
+                    )
+                    
+                    // Balanced Action Button Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Apply Model", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Button(
+                            onClick = { 
+                                isScanning = true
+                                coroutineScope.launch {
+                                    val found = mutableListOf<File>()
+                                    withContext(Dispatchers.IO) {
+                                        SCAN_DIRS.forEach { path ->
+                                            val dir = File(path)
+                                            if (dir.exists() && dir.isDirectory) {
+                                                dir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }?.let { found.addAll(it) }
+                                            }
+                                        }
+                                    }
+                                    models = found.distinctBy { it.name }
+                                    isScanning = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("RE-SCAN", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                val newConfig = config.copy(
+                                    localModelPath = localModelPathState,
+                                    draftModelPath = draftModelPathState,
+                                    gpuLayers = gpuLayersState,
+                                    useMmap = useMmapState,
+                                    preferredModelType = ModelType.GGUF
+                                )
+                                viewModel.saveConfig(context, newConfig)
+                                Toast.makeText(context, "Local Engine Launching ✓", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonMagenta, contentColor = Color.White),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Apply Model", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
                     }
                 }
             }

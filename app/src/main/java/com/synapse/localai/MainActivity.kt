@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -624,33 +625,46 @@ fun ChatApp(viewModel: AgentViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
-                    .border(0.5.dp, Color(0xFF30363D))
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .background(Color(0xFF0E1117))
+                    .border(0.5.dp, Color(0xFF21262D))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // Left side: Menu hamburger + MEDLAM AI Branding vertically centered
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Menu,
-                                contentDescription = "Sidebar Menu",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        Surface(
+                            onClick = { coroutineScope.launch { drawerState.open() } },
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF161B22),
+                            border = BorderStroke(0.5.dp, Color(0xFF30363D)),
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Menu,
+                                    contentDescription = "Sidebar Menu",
+                                    tint = Color(0xFFE6EDF3),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
-                        Column {
+
+                        Column(
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(start = 2.dp)
+                        ) {
                             Text(
                                 text = "MEDLAM AI",
                                 style = TextStyle(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 17.sp,
+                                    color = Color(0xFFE6EDF3),
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace,
                                     letterSpacing = 1.5.sp
@@ -658,8 +672,8 @@ fun ChatApp(viewModel: AgentViewModel) {
                             )
                             Text(
                                 text = "AUTONOMOUS ON-DEVICE NEURAL AGENT",
-                                color = NeonCyan.copy(alpha = 0.8f),
-                                fontSize = 7.5.sp,
+                                color = NeonCyan.copy(alpha = 0.85f),
+                                fontSize = 7.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.5.sp,
                                 fontFamily = FontFamily.Monospace
@@ -667,33 +681,71 @@ fun ChatApp(viewModel: AgentViewModel) {
                         }
                     }
                     
+                    // Right side: New Session frosted glass action button + Settings + Clear Chat
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        IconButton(onClick = { viewModel.startNewSession() }) {
-                            Icon(
-                                imageVector = Icons.Outlined.AddComment,
-                                contentDescription = "New Session",
-                                tint = NeonCyan,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        Surface(
+                            onClick = { viewModel.startNewSession() },
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color(0xFF131D2E),
+                            border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.5f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = "New Session",
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "NEW CHAT",
+                                    color = NeonCyan,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
                         }
-                        IconButton(onClick = { showSettings = true }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Settings,
-                                contentDescription = "Settings",
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                modifier = Modifier.size(20.dp)
-                            )
+
+                        Surface(
+                            onClick = { showSettings = true },
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF161B22),
+                            border = BorderStroke(0.5.dp, Color(0xFF30363D)),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Settings,
+                                    contentDescription = "Settings",
+                                    tint = Color(0xFF8B949E),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
-                        IconButton(onClick = { viewModel.clearConversation(context) }) {
-                            Icon(
-                                imageVector = Icons.Outlined.DeleteOutline,
-                                contentDescription = "Clear Chat",
-                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                                modifier = Modifier.size(20.dp)
-                            )
+
+                        Surface(
+                            onClick = { viewModel.clearConversation(context) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF161B22),
+                            border = BorderStroke(0.5.dp, Color(0xFF30363D)),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    contentDescription = "Clear Chat",
+                                    tint = Color(0xFFE5534B).copy(alpha = 0.8f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1593,7 +1645,7 @@ fun ChatInputBar(
             .fillMaxWidth()
             .background(Color(0xFF0E1117))
             .border(BorderStroke(0.5.dp, Color(0xFF21262D)))
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1602,40 +1654,43 @@ fun ChatInputBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Capsule input field with frosted blue background
+            // Slim Capsule input field with frosted blue background
             Surface(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 46.dp, max = 100.dp),
                 color = Color(0xFF131D2E),
                 shape = RoundedCornerShape(24.dp),
                 border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.35f))
             ) {
-                Row(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.CenterStart
                 ) {
-                    TextField(
+                    BasicTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        placeholder = {
-                            Text(
-                                "Message MEDLAM AI...",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
-                                color = Color(0xFF8B949E).copy(alpha = 0.7f)
-                            )
-                        },
-                        modifier = Modifier.weight(1f),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFFE6EDF3), fontSize = 13.5.sp),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            cursorColor = NeonCyan,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color(0xFFE6EDF3),
+                            fontSize = 13.5.sp
                         ),
-                        maxLines = 4
+                        cursorBrush = SolidColor(NeonCyan),
+                        maxLines = 4,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        decorationBox = { innerTextField ->
+                            if (inputText.isEmpty()) {
+                                Text(
+                                    text = "Message MEDLAM AI...",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                                    color = Color(0xFF8B949E).copy(alpha = 0.7f)
+                                )
+                            }
+                            innerTextField()
+                        }
                     )
                 }
             }
@@ -1643,7 +1698,7 @@ fun ChatInputBar(
             // Circular Attachment (Clip) button
             Surface(
                 onClick = { onFilePickerClick() },
-                modifier = Modifier.size(42.dp),
+                modifier = Modifier.size(40.dp),
                 shape = CircleShape,
                 color = if (selectedFileUri != null) Color(0xFF1F4470) else Color(0xFF161B22),
                 border = BorderStroke(0.5.dp, if (selectedFileUri != null) NeonCyan else Color(0xFF30363D))
@@ -1653,7 +1708,7 @@ fun ChatInputBar(
                         imageVector = Icons.Outlined.AttachFile,
                         contentDescription = "Attach",
                         tint = if (selectedFileUri != null) NeonCyan else Color(0xFF8B949E),
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -1661,7 +1716,7 @@ fun ChatInputBar(
             // Circular Voice (Mic) button
             Surface(
                 onClick = { onRecordingClick() },
-                modifier = Modifier.size(42.dp),
+                modifier = Modifier.size(40.dp),
                 shape = CircleShape,
                 color = if (isRecording) Color(0xFF4C1D1D) else Color(0xFF161B22),
                 border = BorderStroke(0.5.dp, if (isRecording) Color(0xFFE5534B) else Color(0xFF30363D))
@@ -1671,7 +1726,7 @@ fun ChatInputBar(
                         imageVector = if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic,
                         contentDescription = "Voice",
                         tint = if (isRecording) Color(0xFFF85149) else Color(0xFF8B949E),
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -1686,7 +1741,7 @@ fun ChatInputBar(
                         inputText = ""
                     }
                 },
-                modifier = Modifier.size(42.dp),
+                modifier = Modifier.size(40.dp),
                 shape = CircleShape,
                 color = when {
                     isProcessing -> Color(0xFF4C1D1D)
@@ -1712,7 +1767,7 @@ fun ChatInputBar(
                             canSend -> Color(0xFF0E1117)
                             else -> Color(0xFF484F58)
                         },
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }

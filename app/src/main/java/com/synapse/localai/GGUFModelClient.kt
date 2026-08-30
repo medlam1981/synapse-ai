@@ -124,17 +124,17 @@ class GGUFModelClient {
     }
 
     private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
-        val address = try { LlamaServerJNI.getAddress() } catch (_: Throwable) { null } 
+        val address = LlamaServerJNI.safeGetAddress()
         val urlToTry = address?.replace("0.0.0.0", "127.0.0.1") ?: fallbackUrl
         
         var conn: HttpURLConnection? = null
         return@withContext try {
             val url = URL("$urlToTry/health")
             conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 2000
-            conn.readTimeout = 2000
+            conn.connectTimeout = 1000
+            conn.readTimeout = 1000
             val response = conn.inputStream.bufferedReader().use { it.readText() }
-            response.contains("ok")
+            response.contains("ok") || response.contains("status")
         } catch (e: Exception) {
             false
         } finally {
@@ -145,21 +145,24 @@ class GGUFModelClient {
     private suspend fun startServer(resolvedPath: String, onStatus: (String) -> Unit = {}): Boolean = withContext(Dispatchers.IO) {
         fileLog("startServer called for: $resolvedPath")
 
-        // Kill any previous or zombie server
-        onStatus("Stopping previous engine...")
-        try { LlamaServerJNI.stop() } catch (_: Exception) {}
-        delay(1000)
-        globalServerThread?.interrupt()
-        globalServerThread = null
-        globalLoadedPath = null
-        serverThread = null
-        delay(500)
-
         if (!LlamaServerJNI.load()) {
             fileLog("Failed to load native libraries")
             onStatus("❌ Error: Native Engine Load Failure")
             return@withContext false
         }
+
+        // Kill any previous or zombie server forcefully
+        onStatus("Stopping previous engine...")
+        LlamaServerJNI.safeStop()
+        try {
+            Runtime.getRuntime().exec(arrayOf("sh", "-c", "killall -9 llama-server || pkill -9 llama-server")).waitFor()
+        } catch (_: Exception) {}
+        delay(500)
+        globalServerThread?.interrupt()
+        globalServerThread = null
+        globalLoadedPath = null
+        serverThread = null
+        delay(200)
 
         val ctx = appContext
         if (ctx != null) {
@@ -172,10 +175,9 @@ class GGUFModelClient {
             val hw = appContext?.let { DeviceProfile.detect(it) }
             val batchSize = if (hw != null) DeviceProfile.optimalBatch(hw) else 128
             val ubatchSize = if (hw != null) DeviceProfile.optimalUbatch(hw) else 64
-            val threads = if (threadCount > 0) threadCount else if (hw != null) DeviceProfile.optimalThreads(hw) else 8
+            val threads = if (threadCount > 0) threadCount else 4
 
             val argsList = mutableListOf(
-                "llama-server", // Dummy argv[0] required by C++ main()
                 "-m", resolvedPath,
                 "-c", contextLength.coerceAtLeast(8192).toString(),
                 "-b", batchSize.toString(),
@@ -197,11 +199,8 @@ class GGUFModelClient {
             val draftPath = draftModelPath
             val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
-                argsList.add("-md")
+                argsList.add("--model-draft")
                 argsList.add(resolvedDraft)
-                argsList.add("--draft-max")
-                argsList.add("4")
-            } else {
                 argsList.add("--draft-max")
                 argsList.add("4")
             }
@@ -219,7 +218,7 @@ class GGUFModelClient {
                     Os.dup2(fd, OsConstants.STDERR_FILENO)
 
                     fileLog("JNI server thread starting with args: ${args.joinToString(" ")}")
-                    val result = LlamaServerJNI.start(args)
+                    val result = LlamaServerJNI.safeStart(args)
                     fileLog("JNI server thread finished (returned $result)")
                 } catch (e: Exception) {
                     fileLog("JNI server thread exception: ${e.message}")
@@ -237,20 +236,25 @@ class GGUFModelClient {
             proxy = OllamaProxy(serverPort, internalPort, "127.0.0.1")
             proxy?.start()
 
+            val maxWaitMs = 15_000L
+            val pollIntervalMs = 250L
             val startTime = System.currentTimeMillis()
-            while (System.currentTimeMillis() - startTime < SERVER_START_TIMEOUT_MS) {
-                delay(SERVER_POLL_INTERVAL_MS)
+            while (System.currentTimeMillis() - startTime < maxWaitMs) {
+                delay(pollIntervalMs)
                 if (isServerRunning()) {
                     fileLog("Server ready via JNI!")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
                 }
                 val elapsed = (System.currentTimeMillis() - startTime) / 1000
-                if (elapsed % 10 == 0L) {
-                    onStatus("Loading model... ${elapsed}s")
-                }
+                onStatus("Loading model... ${elapsed}s")
             }
-            fileLog("Timeout: Server did not respond within ${SERVER_START_TIMEOUT_MS/1000}s")
+            // If still not answering on internal port, do one final quick check
+            if (isServerRunning()) {
+                onStatus("✅ Local Server Ready.")
+                return@withContext true
+            }
+            fileLog("Timeout: Server did not respond within ${maxWaitMs/1000}s")
             onStatus("❌ Error: Boot Timeout.")
             return@withContext false
         } catch (e: Exception) {
@@ -279,13 +283,13 @@ class GGUFModelClient {
         history: List<Pair<String, String>>,
         systemPrompt: String = ""
     ): Flow<String> = flow {
-        var address = try { LlamaServerJNI.getAddress() } catch (_: Throwable) { null }
+        var address = LlamaServerJNI.safeGetAddress()
         if (address == null && modelPath != null) {
             fileLog("Address is null during stream request, attempting restart...")
             val ctx = appContext
             val resolvedPath = if (ctx != null) resolveModelPath(ctx, modelPath!!) else null
             if (resolvedPath != null) startServer(resolvedPath)
-            address = try { LlamaServerJNI.getAddress() } catch (_: Throwable) { null }
+            address = LlamaServerJNI.safeGetAddress()
         }
 
         if (address == null) {
@@ -382,7 +386,7 @@ class GGUFModelClient {
         }
         
         if (globalLoadedPath != null) {
-            try { LlamaServerJNI.stop() } catch (_: Exception) {}
+            LlamaServerJNI.safeStop()
             globalServerThread?.interrupt()
             globalServerThread = null
         }
