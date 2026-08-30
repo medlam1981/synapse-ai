@@ -202,7 +202,6 @@ class AgentViewModel : ViewModel() {
             var savedThreads = prefs.getInt("thread_count", maxCores)
             if (savedThreads < maxCores) {
                 savedThreads = maxCores
-                addSystemLog("⚡ High Performance: Using $maxCores CPU cores.")
             }
             
             val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
@@ -210,6 +209,8 @@ class AgentViewModel : ViewModel() {
             var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
             var geminiModel = prefs.getString("gemini_model_name", "gemini-1.5-flash") ?: "gemini-1.5-flash"
             ModelScanner.ensureDirectories()
+            PersonaManager.ensurePersonaInitialized(context)
+
             var localPath = savedPath ?: ""
             if (localPath.isBlank()) {
                 val scannedModels = ModelScanner.scanBaseModels()
@@ -219,7 +220,7 @@ class AgentViewModel : ViewModel() {
             }
 
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
-            var draftPath = if (rawDraft.contains("assistant", ignoreCase = true)) "" else rawDraft
+            var draftPath = rawDraft
             if (draftPath.isBlank() && localPath.isNotBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(localPath)
                 if (matched != null) {
@@ -259,8 +260,6 @@ class AgentViewModel : ViewModel() {
             
             if (effectiveModelType == ModelType.GEMINI && activeGeminiKeyCount == 0) {
                 addLog(LogEntry(sender = "SYSTEM", text = "⚠️ NO API KEYS: Go to Settings to add your Gemini keys.", isError = true))
-            } else {
-                addSystemLog("⚡ System Online ($effectiveModelType). Active Keys: $activeGeminiKeyCount")
             }
 
             if (effectiveModelType == ModelType.GGUF && localPath.isNotBlank()) {
@@ -1499,7 +1498,9 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
 
 
 
-    fun addSystemLog(text: String) { addLog(LogEntry(sender = "SYSTEM", text = text)) }
+    fun addSystemLog(text: String) { 
+        Log.i(TAG, "SystemLog: $text") 
+    }
     private fun prefs(context: Context) = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
     override fun onCleared() { 
         super.onCleared()

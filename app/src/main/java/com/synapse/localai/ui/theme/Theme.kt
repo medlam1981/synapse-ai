@@ -72,6 +72,7 @@ fun SynapseAITheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = Typography,
         content = content
     )
 }

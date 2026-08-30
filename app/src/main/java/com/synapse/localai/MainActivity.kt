@@ -975,9 +975,9 @@ fun FormattedTextParagraph(
                         text = cleanLine,
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            fontFamily = if (isArabicLine) FontFamily.Default else FontFamily.Monospace,
+                            fontFamily = FontFamily.SansSerif,
                             fontSize = 13.5.sp,
-                            letterSpacing = if (isArabicLine) 0.sp else 0.5.sp
+                            letterSpacing = if (isArabicLine) 0.sp else 0.25.sp
                         ),
                         color = NeonCyan,
                         textAlign = textAlign,
@@ -999,7 +999,7 @@ fun FormattedTextParagraph(
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp,
                                 fontWeight = FontWeight.Normal,
-                                fontFamily = if (isArabicLine) FontFamily.Default else FontFamily.Monospace
+                                fontFamily = FontFamily.SansSerif
                             ),
                             color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                             textAlign = textAlign,
@@ -1010,9 +1010,9 @@ fun FormattedTextParagraph(
                     Text(
                         text = cleanLine,
                         style = if (isThinking)
-                            MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic, fontSize = 12.5.sp, lineHeight = 18.sp)
+                            MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.SansSerif, fontStyle = FontStyle.Italic, fontSize = 12.5.sp, lineHeight = 18.sp)
                         else
-                            MaterialTheme.typography.bodyMedium.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+                            MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.SansSerif, fontSize = 12.5.sp, lineHeight = 18.sp),
                         color = when {
                             isError -> MaterialTheme.colorScheme.error
                             isThinking -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
@@ -1033,10 +1033,9 @@ fun AgentMessageBubble(log: LogEntry) {
     val isSystem = log.sender == "SYSTEM"
     val clipboardManager = LocalClipboardManager.current
     
-    if (isSystem) {
-        val isVisibleMarker = log.isError || log.text.startsWith("✅") || log.text.startsWith("📎")
-            || log.text.startsWith("⚠️") || log.text.startsWith("⏰") || log.text.startsWith("⚡")
-        if (!isVisibleMarker) return
+    // Clean Minimalist Chat Screen: suppress routine system status noise, show only critical user-facing errors
+    if (isSystem && !log.isError) {
+        return
     }
 
     // ---- Extract thinking blocks before processing ----

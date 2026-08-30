@@ -248,10 +248,7 @@ class GGUFModelClient {
             }
 
             // Speculative / Draft Model & MTP
-            val draftPath = draftModelPath?.takeIf { path ->
-                val lower = path.lowercase()
-                !lower.contains("assistant") && !lower.contains("bf16") && !lower.contains("mtp-gemma-4")
-            }
+            val draftPath = draftModelPath?.takeIf { it.isNotBlank() }
             val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
                 argsList.add("--model-draft")
@@ -260,7 +257,9 @@ class GGUFModelClient {
                 argsList.add("4")
                 argsList.add("--draft-min")
                 argsList.add("2")
-                fileLog("Auto-pairing MTP draft model: $resolvedDraft")
+                argsList.add("--override-kv")
+                argsList.add("general.architecture=str:gemma4")
+                fileLog("Auto-pairing MTP draft model: $resolvedDraft with KV override general.architecture=str:gemma4")
             }
 
             val args = argsList.toTypedArray()
@@ -462,8 +461,18 @@ class GGUFModelClient {
         val activeBase = getActiveBaseUrl()
         val targetUrl = "$activeBase/v1/chat/completions"
 
+        // Inject Dynamic System Persona
+        val persona = if (systemPrompt.isNotBlank()) {
+            systemPrompt.trim()
+        } else {
+            PersonaManager.getPersonaContent(appContext)
+        }
+
         // Strict Gemma Chat Turn Markers and Stop Tokens
         val messagesArray = JSONArray()
+        if (persona.isNotBlank()) {
+            messagesArray.put(JSONObject().put("role", "system").put("content", persona))
+        }
         for ((role, content) in history) {
             val roleName = if (role == "user") "user" else "assistant"
             messagesArray.put(JSONObject().put("role", roleName).put("content", content.trim()))

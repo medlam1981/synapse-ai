@@ -5,6 +5,7 @@ import java.io.File
 object ModelScanner {
     const val MODELS_DIR = "/sdcard/Medlam-Ai/models"
     const val MTP_DIR = "/sdcard/Medlam-Ai/mtp"
+    const val PERSONA_DIR = "/sdcard/Medlam-Ai/persona"
     const val ROOT_DIR = "/sdcard/Medlam-Ai"
 
     private val LEGACY_DIRS = listOf(
@@ -22,6 +23,8 @@ object ModelScanner {
             File(ROOT_DIR).mkdirs()
             File(MODELS_DIR).mkdirs()
             File(MTP_DIR).mkdirs()
+            File(PERSONA_DIR).mkdirs()
+            PersonaManager.ensurePersonaInitialized()
         } catch (_: Exception) {}
     }
 
@@ -78,23 +81,13 @@ object ModelScanner {
         val baseName = File(baseModelPath).nameWithoutExtension.lowercase()
         val baseTokens = baseName.split("-", "_", ".").filter { it.length > 2 }
 
-        // Filter out incompatible assistant block files (e.g. gemma4-assistant / mtp-gemma-4)
-        val candidateFiles = mtpFiles.filter { file ->
-            val name = file.name.lowercase()
-            !name.contains("gemma4-assistant") && 
-            !name.contains("assistant") && 
-            !name.contains("bf16") && 
-            !name.contains("mtp-gemma-4")
-        }
-        if (candidateFiles.isEmpty()) return null
-
         // Priority 1: Match tokens from base model name
-        val match = candidateFiles.firstOrNull { mtpFile ->
+        val match = mtpFiles.firstOrNull { mtpFile ->
             val mtpName = mtpFile.nameWithoutExtension.lowercase()
             val cleanMtp = mtpName.removePrefix("mtp-").removePrefix("mtp_")
             baseTokens.any { token -> cleanMtp.contains(token) }
         }
 
-        return match ?: candidateFiles.firstOrNull()
+        return match ?: mtpFiles.firstOrNull()
     }
 }
