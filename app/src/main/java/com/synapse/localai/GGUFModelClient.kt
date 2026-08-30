@@ -120,9 +120,27 @@ class GGUFModelClient {
         return name ?: uri.lastPathSegment?.substringAfterLast('/')
     }
 
+    fun getBaseUrl(): String {
+        val port = if (serverPort > 0) serverPort else 8080
+        val jniAddress = LlamaServerJNI.safeGetAddress()?.trim()
+        if (!jniAddress.isNullOrBlank()) {
+            var raw = jniAddress.replace("0.0.0.0", "127.0.0.1").trimEnd('/')
+            if (raw.startsWith(":")) raw = "127.0.0.1$raw"
+            val formatted = when {
+                raw.startsWith("http://") || raw.startsWith("https://") -> raw
+                else -> "http://$raw"
+            }
+            if (!formatted.contains("://:") && formatted.length > 7) {
+                return formatted
+            }
+        }
+        val host = if (serverHost.isBlank() || serverHost == "0.0.0.0") "127.0.0.1" else serverHost
+        val base = if (host.startsWith("http://") || host.startsWith("https://")) host else "http://$host"
+        return "${base.trimEnd('/')}:$port"
+    }
+
     private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
-        val address = LlamaServerJNI.safeGetAddress()
-        val primaryUrl = address?.takeIf { it.isNotBlank() }?.replace("0.0.0.0", "127.0.0.1") ?: "http://127.0.0.1:$serverPort"
+        val primaryUrl = getBaseUrl()
         val candidateUrls = listOf(
             primaryUrl,
             "http://127.0.0.1:$serverPort",
@@ -133,7 +151,8 @@ class GGUFModelClient {
         for (baseUrl in candidateUrls) {
             var conn: HttpURLConnection? = null
             try {
-                val url = URL("$baseUrl/health")
+                val cleanBase = baseUrl.trimEnd('/')
+                val url = URL("$cleanBase/health")
                 conn = url.openConnection() as HttpURLConnection
                 conn.connectTimeout = 300
                 conn.readTimeout = 300
@@ -425,6 +444,8 @@ class GGUFModelClient {
         onLoaded()
     }
 
+    fun generateCompletionStream(prompt: String, systemPrompt: String = ""): Flow<String> = generateStream(prompt, systemPrompt)
+
     fun generateStream(prompt: String, systemPrompt: String = ""): Flow<String> = flow {
         val history = listOf("user" to prompt)
         generateStreamWithHistory(history, systemPrompt).collect { emit(it) }
@@ -435,19 +456,9 @@ class GGUFModelClient {
         systemPrompt: String = "",
         onSpeedUpdate: ((Float) -> Unit)? = null
     ): Flow<String> = flow {
-        var address = LlamaServerJNI.safeGetAddress()
-        if (address == null && modelPath != null) {
-            fileLog("Address is null during stream request, attempting restart...")
-            val ctx = appContext
-            val resolvedPath = if (ctx != null) resolveModelPath(ctx, modelPath!!) else null
-            if (resolvedPath != null) startServer(resolvedPath)
-            address = LlamaServerJNI.safeGetAddress()
-        }
-
-        if (address == null) {
-            fileLog("ERROR: Server address unavailable, cannot send request.")
-            return@flow
-        }
+        // Construct full absolute URL with protocol, host, and active port
+        val baseUrl = getBaseUrl()
+        val fullUrl = "$baseUrl/completion"
 
         // Build prompt using ChatML format (compatible with modern llama.cpp models)
         val promptBuilder = StringBuilder()
@@ -464,7 +475,7 @@ class GGUFModelClient {
         val body = JSONObject()
             .put("prompt", finalPrompt)
             .put("n_predict", -1)
-            .put("temperature", temperature.toDouble())
+            .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
             .put("cache_prompt", true)
             .put("stop", JSONArray()
@@ -481,16 +492,16 @@ class GGUFModelClient {
                 .put("<end_of_turn>")
             )
 
-        val effectiveUrl = address.replace("0.0.0.0", "127.0.0.1")
-        fileLog("Streaming to: $effectiveUrl/completion | prompt_len=${finalPrompt.length}")
+        fileLog("Streaming to: $fullUrl | prompt_len=${finalPrompt.length}")
 
-        val url = URL("$effectiveUrl/completion")
+        val url = URL(fullUrl)
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 60000
         conn.readTimeout = 300000 // 5 minutes
         conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Accept", "text/event-stream")
 
         var tokenCount = 0
         val startTime = System.currentTimeMillis()
