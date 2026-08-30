@@ -52,6 +52,11 @@ object LlamaServerJNI {
         }
     }
 
+    fun safeIsRunning(): Boolean {
+        val addr = safeGetAddress()
+        return !addr.isNullOrBlank()
+    }
+
     fun safeStart(args: Array<String>): Int {
         if (!load()) return -1
         return try {

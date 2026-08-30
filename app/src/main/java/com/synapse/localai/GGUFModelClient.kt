@@ -43,6 +43,14 @@ class GGUFModelClient {
             } catch (_: Exception) {}
         }
 
+        private fun appendNativeLog(msg: String) {
+            try {
+                val dir = File("/sdcard/Medlam-Ai")
+                if (!dir.exists()) dir.mkdirs()
+                File(dir, "native_log.txt").appendText("[${java.util.Date()}] $msg\n")
+            } catch (_: Exception) {}
+        }
+
         
         @Volatile private var globalLoadedPath: String? = null
         @Volatile var globalServerThread: Thread? = null
@@ -120,26 +128,23 @@ class GGUFModelClient {
         return name ?: uri.lastPathSegment?.substringAfterLast('/')
     }
 
-    fun getBaseUrl(): String {
-        val jniAddress = LlamaServerJNI.safeGetAddress()?.trim()
-        if (!jniAddress.isNullOrBlank()) {
-            var raw = jniAddress.replace("0.0.0.0", "127.0.0.1").trimEnd('/')
-            if (raw.startsWith(":")) raw = "127.0.0.1$raw"
-            val formatted = when {
-                raw.startsWith("http://") || raw.startsWith("https://") -> raw
-                else -> "http://$raw"
-            }
-            if (!formatted.contains("://:") && formatted.length > 7 && !formatted.contains("11434")) {
-                return formatted
-            }
+    fun getActiveBaseUrl(): String {
+        val jniAddr = LlamaServerJNI.safeGetAddress()?.trim()
+        return when {
+            !jniAddr.isNullOrBlank() && (jniAddr.startsWith("http://") || jniAddr.startsWith("https://")) -> jniAddr.trimEnd('/')
+            !jniAddr.isNullOrBlank() && jniAddr.contains(":") -> "http://" + jniAddr.replace("0.0.0.0", "127.0.0.1").trimEnd('/')
+            serverPort > 0 -> "http://127.0.0.1:$serverPort"
+            else -> "http://127.0.0.1:11435" // Match JNI default runtime port
         }
-        return "http://127.0.0.1:8080"
     }
 
+    fun getBaseUrl(): String = getActiveBaseUrl()
+
     private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
-        val primaryUrl = getBaseUrl()
+        val primaryUrl = getActiveBaseUrl()
         val candidateUrls = listOf(
             primaryUrl,
+            "http://127.0.0.1:11435",
             "http://127.0.0.1:8080"
         ).distinct()
 
@@ -169,8 +174,8 @@ class GGUFModelClient {
     private suspend fun isSocketOrHttpReachable(): Boolean = withContext(Dispatchers.IO) {
         if (isServerRunning()) return@withContext true
         val address = LlamaServerJNI.safeGetAddress()
-        val portFromAddress = address?.substringAfterLast(':')?.toIntOrNull()?.takeIf { it != 11434 }
-        val candidatePorts = listOfNotNull(portFromAddress, 8080).distinct()
+        val portFromAddress = address?.substringAfterLast(':')?.toIntOrNull()
+        val candidatePorts = listOfNotNull(portFromAddress, serverPort.takeIf { it > 0 }, 11435, 8080).distinct()
         for (port in candidatePorts) {
             try {
                 java.net.Socket().use { socket ->
@@ -451,8 +456,24 @@ class GGUFModelClient {
         systemPrompt: String = "",
         onSpeedUpdate: ((Float) -> Unit)? = null
     ): Flow<String> = flow {
-        // Authoritative local OpenAI-compatible endpoint on port 8080
-        val targetUrl = "http://127.0.0.1:8080/v1/chat/completions"
+        // Native Crash Prevention & Health Verification
+        val isRunning = LlamaServerJNI.safeIsRunning()
+        val jniAddr = LlamaServerJNI.safeGetAddress()
+        if (!isRunning || jniAddr.isNullOrBlank() || !isSocketOrHttpReachable()) {
+            val recMsg = "Native server not running (addr=$jniAddr, isRunning=$isRunning), attempting restart..."
+            fileLog(recMsg)
+            appendNativeLog("[GGUF RESTART] $recMsg")
+            val ctx = appContext
+            val currentPath = modelPath
+            val resolvedPath = if (ctx != null && currentPath != null) resolveModelPath(ctx, currentPath) else null
+            if (resolvedPath != null) {
+                startServer(resolvedPath)
+            }
+        }
+
+        // Dynamically resolve target URL from active JNI bridge
+        val activeBase = getActiveBaseUrl()
+        val targetUrl = "$activeBase/v1/chat/completions"
 
         // Build messages array
         val messagesArray = JSONArray()
@@ -464,14 +485,17 @@ class GGUFModelClient {
             messagesArray.put(JSONObject().put("role", roleName).put("content", content))
         }
 
+        // For Gemma models, do not pass invalid max_tokens (-1). Pass 4096 or custom positive tokens.
         val body = JSONObject()
             .put("messages", messagesArray)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
-            .put("max_tokens", -1)
+            .put("max_tokens", if (maxTokens > 0) maxTokens else 4096)
 
         val bodyBytes = body.toString().toByteArray(Charsets.UTF_8)
-        fileLog("Streaming to: $targetUrl | messages_count=${messagesArray.length()}")
+        val streamMsg = "Streaming to: $targetUrl | messages_count=${messagesArray.length()}"
+        fileLog(streamMsg)
+        appendNativeLog("[GGUF STREAM] $streamMsg")
 
         var conn: HttpURLConnection? = null
         var responseCode = -1
@@ -492,7 +516,9 @@ class GGUFModelClient {
                 responseCode = conn.responseCode
 
                 if (responseCode == 503 && (System.currentTimeMillis() - retryStartTime < retryTimeoutMs)) {
-                    fileLog("HTTP 503 (server warmup), retrying in 500ms...")
+                    val retryMsg = "HTTP 503 (server warmup), retrying in 500ms..."
+                    fileLog(retryMsg)
+                    appendNativeLog("[GGUF RETRY] $retryMsg")
                     conn.disconnect()
                     conn = null
                     delay(500L)
@@ -501,13 +527,17 @@ class GGUFModelClient {
                 break
             } catch (e: Exception) {
                 if (System.currentTimeMillis() - retryStartTime < retryTimeoutMs) {
-                    fileLog("Connection attempt failed (${e.message}), retrying in 500ms...")
+                    val retryMsg = "Connection attempt failed to $targetUrl (${e.message}), retrying in 500ms..."
+                    fileLog(retryMsg)
+                    appendNativeLog("[GGUF RETRY] $retryMsg")
                     conn?.disconnect()
                     conn = null
                     delay(500L)
                     continue
                 }
-                fileLog("Stream connection error: ${e.message}")
+                val errMsg = "Stream connection error to $targetUrl: ${e.message}"
+                fileLog(errMsg)
+                appendNativeLog("[GGUF ERROR] $errMsg")
                 emit("[ERROR: ${e.message}]")
                 return@flow
             }
@@ -515,9 +545,13 @@ class GGUFModelClient {
 
         if (conn == null) return@flow
 
+        appendNativeLog("[GGUF STATUS] $targetUrl responded with HTTP $responseCode")
+
         if (responseCode != 200) {
             val err = conn.errorStream?.bufferedReader()?.use { it.readText() }
-            fileLog("HTTP Error $responseCode: $err")
+            val errMsg = "HTTP Error $responseCode: $err"
+            fileLog(errMsg)
+            appendNativeLog("[GGUF ERROR] $errMsg")
             emit("[ERROR: Server returned $responseCode]")
             conn.disconnect()
             return@flow
