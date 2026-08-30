@@ -36,10 +36,16 @@ object LlamaServerJNI {
 
     fun safeStop() {
         if (!load()) return
-        try {
-            stop()
-        } catch (t: Throwable) {
-            Log.e(TAG, "safeStop error: ${t.message}")
+        Thread {
+            try {
+                stop()
+            } catch (t: Throwable) {
+                Log.e(TAG, "safeStop error: ${t.message}")
+            }
+        }.apply {
+            name = "llama-server-stop"
+            isDaemon = true
+            start()
         }
     }
 

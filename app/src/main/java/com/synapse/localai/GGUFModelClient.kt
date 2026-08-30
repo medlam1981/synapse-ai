@@ -189,6 +189,14 @@ class GGUFModelClient {
             return@withContext false
         }
 
+        if (globalLoadedPath == resolvedPath && isServerRunning()) {
+            fileLog("Server already running with active model $resolvedPath")
+            isLoaded = true
+            onProgress(1.0f, "ONLINE • 100%")
+            onStatus("✅ Local Server Ready.")
+            return@withContext true
+        }
+
         // Kill any previous or zombie server forcefully
         onStatus("Stopping previous engine...")
         onProgress(0.02f, "Stopping previous engine...")
