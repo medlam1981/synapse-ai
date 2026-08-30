@@ -125,7 +125,7 @@ class GGUFModelClient {
 
     private suspend fun isServerRunning(): Boolean = withContext(Dispatchers.IO) {
         val address = LlamaServerJNI.safeGetAddress()
-        val urlToTry = address?.replace("0.0.0.0", "127.0.0.1") ?: fallbackUrl
+        val urlToTry = address?.takeIf { it.isNotBlank() }?.replace("0.0.0.0", "127.0.0.1") ?: fallbackUrl
         
         var conn: HttpURLConnection? = null
         return@withContext try {
@@ -133,8 +133,13 @@ class GGUFModelClient {
             conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 1000
             conn.readTimeout = 1000
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-            response.contains("ok") || response.contains("status")
+            val code = conn.responseCode
+            if (code == 200) {
+                val response = conn.inputStream.bufferedReader().use { it.readText() }
+                response.contains("ok") || response.contains("status")
+            } else {
+                false
+            }
         } catch (e: Exception) {
             false
         } finally {
@@ -185,7 +190,8 @@ class GGUFModelClient {
                 "-t", threads.toString(),
                 "-ngl", gpuLayers.coerceIn(0, 33).toString(),
                 "--host", "127.0.0.1",
-                "--port", internalPort.toString()
+                "--port", internalPort.toString(),
+                "--no-warmup"
             )
 
             // Memory mapping flag
@@ -236,8 +242,8 @@ class GGUFModelClient {
             proxy = OllamaProxy(serverPort, internalPort, "127.0.0.1")
             proxy?.start()
 
-            val maxWaitMs = 15_000L
-            val pollIntervalMs = 250L
+            val maxWaitMs = 300_000L // 5 minutes timeout for large GGUF models
+            val pollIntervalMs = 500L
             val startTime = System.currentTimeMillis()
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
                 delay(pollIntervalMs)
@@ -247,7 +253,7 @@ class GGUFModelClient {
                     return@withContext true
                 }
                 val elapsed = (System.currentTimeMillis() - startTime) / 1000
-                onStatus("Loading model... ${elapsed}s")
+                onStatus("Loading model tensors... ${elapsed}s")
             }
             // If still not answering on internal port, do one final quick check
             if (isServerRunning()) {
