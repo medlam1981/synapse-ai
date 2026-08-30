@@ -135,12 +135,12 @@ class GGUFModelClient {
             try {
                 val url = URL("$baseUrl/health")
                 conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 800
-                conn.readTimeout = 800
+                conn.connectTimeout = 300
+                conn.readTimeout = 300
                 val code = conn.responseCode
                 if (code == 200) {
-                    val response = conn.inputStream.bufferedReader().use { it.readText() }
-                    if (!response.contains("loading model")) {
+                    val response = try { conn.inputStream.bufferedReader().use { it.readText() } } catch (_: Exception) { "" }
+                    if (!response.contains("loading model", ignoreCase = true)) {
                         return@withContext true
                     }
                 }
@@ -269,7 +269,7 @@ class GGUFModelClient {
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
                 // 1. Check if server is ready via HTTP /health on every iteration
                 if (isServerRunning()) {
-                    fileLog("Server ready via JNI!")
+                    fileLog("Server ready via JNI (health check succeeded)!")
                     onProgress(1.0f, "ONLINE • 100%")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
@@ -292,28 +292,34 @@ class GGUFModelClient {
                                     val cur = match1.groupValues[1].toFloatOrNull() ?: 0f
                                     val tot = match1.groupValues[2].toFloatOrNull() ?: 1f
                                     if (tot > 0) {
-                                        lastCalculatedProgress = (cur / tot).coerceIn(0.05f, 0.98f)
+                                        lastCalculatedProgress = (cur / tot).coerceIn(0.05f, 1.0f)
                                     }
                                 }
                                 val match2 = tensorRegex2.find(currentLine)
                                 if (match2 != null) {
                                     val pct = match2.groupValues[1].toFloatOrNull() ?: 0f
-                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.98f)
+                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 1.0f)
                                 }
                                 val match3 = tensorRegex3.find(currentLine)
                                 if (match3 != null) {
                                     val pct = match3.groupValues[1].toFloatOrNull() ?: 0f
-                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.98f)
+                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 1.0f)
                                 }
-                                if (currentLine.contains("load_all_tensors") ||
-                                    currentLine.contains("HTTP server listening") ||
-                                    currentLine.contains("server is listening") ||
-                                    currentLine.contains("main: model loaded") ||
-                                    currentLine.contains("all tensors loaded") ||
-                                    currentLine.contains("llama_init_from_gpt_params") ||
-                                    currentLine.contains("model loaded successfully")
+                                if (currentLine.contains("HTTP server listening", ignoreCase = true) ||
+                                    currentLine.contains("all slots are idle", ignoreCase = true) ||
+                                    currentLine.contains("llama_init_from_gpt_params", ignoreCase = true) ||
+                                    currentLine.contains("main: model loaded", ignoreCase = true) ||
+                                    currentLine.contains("load_all_tensors", ignoreCase = true) ||
+                                    currentLine.contains("server is listening", ignoreCase = true) ||
+                                    currentLine.contains("all tensors loaded", ignoreCase = true) ||
+                                    currentLine.contains("model loaded successfully", ignoreCase = true) ||
+                                    currentLine.contains("llama_server: listening", ignoreCase = true) ||
+                                    currentLine.contains("system_info:", ignoreCase = true)
                                 ) {
-                                    lastCalculatedProgress = 1.0f
+                                    fileLog("Initialization match in logs: $currentLine")
+                                    onProgress(1.0f, "ONLINE • 100%")
+                                    onStatus("✅ Local Server Ready.")
+                                    return@withContext true
                                 }
                             }
                             lastLogReadPos = raf.filePointer
@@ -324,8 +330,8 @@ class GGUFModelClient {
 
                 // Under mmap or swift startup, advance smoothly
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                if (useMmap && elapsedSec > 0.3f && lastCalculatedProgress < 0.95f) {
-                    lastCalculatedProgress = (0.25f + elapsedSec * 0.4f).coerceIn(0.25f, 0.95f)
+                if (useMmap && elapsedSec > 0.2f && lastCalculatedProgress < 0.99f) {
+                    lastCalculatedProgress = (0.3f + elapsedSec * 0.5f).coerceIn(0.3f, 0.99f)
                 }
 
                 if (lastCalculatedProgress >= 1.0f || isServerRunning()) {

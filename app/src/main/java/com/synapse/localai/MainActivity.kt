@@ -760,18 +760,6 @@ fun ChatApp(viewModel: AgentViewModel) {
                 }
             }
 
-            // Micro progress indicator flush directly beneath TopBar during loading phase only
-            if (uiState.localModelLoading) {
-                LinearProgressIndicator(
-                    progress = (uiState.loadingProgress ?: 0.05f).coerceIn(0f, 1f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp),
-                    color = Color(0xFF0284C7),
-                    trackColor = Color(0xFF0284C7).copy(alpha = 0.2f)
-                )
-            }
-
             SystemDashboard(context, dynamicTelemetry, uiState)
 
             ScheduledTasksTicker(uiState.scheduledTasks)
