@@ -562,38 +562,41 @@ class GGUFModelClient {
         val startTime = System.currentTimeMillis()
 
         try {
-            val reader = BufferedReader(InputStreamReader(conn.inputStream))
+            val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
             var line: String? = null
             var firstChunk = true
             while (coroutineContext.isActive && reader.readLine().also { line = it } != null) {
-                val l = line ?: continue
-                if (!l.startsWith("data: ")) continue
-                val data = l.removePrefix("data: ").trim()
+                val l = line?.trim() ?: continue
+                if (!l.startsWith("data:")) continue
+                val data = l.removePrefix("data:").trim()
                 if (data == "[DONE]") break
+                if (data.isEmpty()) continue
+
                 try {
                     val json = JSONObject(data)
                     val choices = json.optJSONArray("choices")
                     val firstChoice = choices?.optJSONObject(0)
                     if (firstChoice != null) {
-                        val finishReason = firstChoice.optString("finish_reason", "")
-                        if (finishReason == "stop" || finishReason == "length") {
-                            // completed
-                        }
                         val delta = firstChoice.optJSONObject("delta")
-                        val content = delta?.optString("content", "") 
-                            ?: firstChoice.optString("text", "")
-                        
-                        if (!content.isNullOrEmpty()) {
+                        val content = delta?.optString("content", "") ?: ""
+                        val reasoning = delta?.optString("reasoning_content", "") ?: ""
+                        val text = when {
+                            content.isNotEmpty() -> content
+                            reasoning.isNotEmpty() -> reasoning
+                            else -> firstChoice.optString("text", "")
+                        }
+
+                        if (!text.isNullOrEmpty()) {
                             tokenCount++
                             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                             if (elapsedSec > 0.5f) {
                                 onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                             }
                             if (firstChunk) {
-                                fileLog("First chunk received: ${content.take(50)}")
+                                fileLog("First token received: ${text.take(30)}")
                                 firstChunk = false
                             }
-                            emit(content)
+                            emit(text)
                         }
                     } else {
                         val content = json.optString("content", "")
@@ -604,7 +607,7 @@ class GGUFModelClient {
                                 onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                             }
                             if (firstChunk) {
-                                fileLog("First chunk received: ${content.take(50)}")
+                                fileLog("First token received: ${content.take(30)}")
                                 firstChunk = false
                             }
                             emit(content)

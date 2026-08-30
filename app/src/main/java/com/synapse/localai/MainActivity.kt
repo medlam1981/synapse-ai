@@ -616,28 +616,6 @@ fun ChatApp(viewModel: AgentViewModel) {
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
 
-            val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys, uiState.localModelLoading, uiState.localModelLoaded, uiState.loadingProgress) {
-                if (uiState.localModelLoading && !uiState.localModelLoaded) {
-                    val pct = ((uiState.loadingProgress ?: 0.05f) * 100).toInt().coerceIn(1, 98)
-                    "$pct% LOADING • ${uiState.activeModelName.ifBlank { "Gemma 12B" }}"
-                } else when (uiState.activeModelType) {
-                    ModelType.GGUF -> {
-                        val name = if (uiState.activeModelName.isNotBlank()) {
-                            val clean = uiState.activeModelName.replace("-it", "").replace("-qat", "").replace("-UD", "").replace("-Q4_K_XL", " Q4").replace("-Q4_0", " Q4")
-                            if (clean.length > 14) clean.take(14) + ".." else clean
-                        } else "Gemma 12B"
-                        val hasMtp = uiState.config.draftModelPath.isNotBlank()
-                        val tpsStr = if (uiState.tokensPerSecond > 0f) " • ${uiState.tokensPerSecond.toInt()} T/s" else ""
-                        "ONLINE • $name${if (hasMtp) " + ⚡ MTP LINKED" else ""}$tpsStr"
-                    }
-                    ModelType.GEMINI -> {
-                        val modelShort = uiState.config.geminiModelName.removePrefix("models/").removePrefix("gemini-").replace("-flash", " Flash").replace("-pro", " Pro")
-                        "ONLINE • Gemini $modelShort • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
-                    }
-                    else -> "ONLINE • NEURAL INTERFACE ACTIVE"
-                }
-            }
-
             // Modern Monochromatic Theme-Aware Top Bar
             Box(
                 modifier = Modifier
@@ -687,14 +665,82 @@ fun ChatApp(viewModel: AgentViewModel) {
                                     letterSpacing = 1.5.sp
                                 )
                             )
-                            Text(
-                                text = dynamicTelemetry,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 7.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
+
+                            if (uiState.localModelLoading && !uiState.localModelLoaded) {
+                                val pct = ((uiState.loadingProgress ?: 0.05f) * 100).toInt().coerceIn(1, 98)
+                                Text(
+                                    text = "$pct% LOADING • ${uiState.activeModelName.ifBlank { "Gemma 12B" }}",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontSize = 7.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            } else when (uiState.activeModelType) {
+                                ModelType.GGUF -> {
+                                    val name = if (uiState.activeModelName.isNotBlank()) {
+                                        val clean = uiState.activeModelName.replace("-it", "").replace("-qat", "").replace("-UD", "").replace("-Q4_K_XL", " Q4").replace("-Q4_0", " Q4")
+                                        if (clean.length > 14) clean.take(14) + ".." else clean
+                                    } else "Gemma 12B Q4"
+                                    val hasMtp = uiState.config.draftModelPath.isNotBlank()
+                                    val tpsStr = if (uiState.tokensPerSecond > 0f) " • ${uiState.tokensPerSecond.toInt()} T/s" else ""
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "ONLINE",
+                                            color = Color(0xFF10B981),
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                        Text(
+                                            text = " • $name$tpsStr",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    if (hasMtp) {
+                                        Text(
+                                            text = "⚡ MTP LINKED",
+                                            color = Color(0xFF10B981),
+                                            fontSize = 7.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            letterSpacing = 0.3.sp
+                                        )
+                                    }
+                                }
+                                ModelType.GEMINI -> {
+                                    val modelShort = uiState.config.geminiModelName.removePrefix("models/").removePrefix("gemini-").replace("-flash", " Flash").replace("-pro", " Pro")
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "ONLINE",
+                                            color = Color(0xFF10B981),
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                        Text(
+                                            text = " • Gemini $modelShort • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+                                else -> {
+                                    Text(
+                                        text = "ONLINE • NEURAL INTERFACE ACTIVE",
+                                        color = Color(0xFF10B981),
+                                        fontSize = 7.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
                         }
                     }
                     
@@ -757,7 +803,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                 }
             }
 
-            SystemDashboard(context, dynamicTelemetry, uiState)
+            SystemDashboard(context, "", uiState)
 
             ScheduledTasksTicker(uiState.scheduledTasks)
             
