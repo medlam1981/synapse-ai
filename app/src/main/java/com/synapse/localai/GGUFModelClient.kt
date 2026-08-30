@@ -51,7 +51,6 @@ class GGUFModelClient {
     private var modelPath: String? = null
     private var modelPfd: ParcelFileDescriptor? = null
     private var appContext: Context? = null
-    private var proxy: OllamaProxy? = null
     var serverThread: Thread? = null
 
     var serverHost: String = DEFAULT_HOST
@@ -64,9 +63,7 @@ class GGUFModelClient {
     var gpuLayers: Int = 0
     var useMmap: Boolean = true
 
-    private val internalPort: Int get() = serverPort + 1
-    
-    private val fallbackUrl: String get() = "http://127.0.0.1:$internalPort"
+    private val fallbackUrl: String get() = "http://127.0.0.1:$serverPort"
 
     var isLoaded: Boolean = false
         private set
@@ -190,7 +187,9 @@ class GGUFModelClient {
                 "-t", threads.toString(),
                 "-ngl", gpuLayers.coerceIn(0, 33).toString(),
                 "--host", "127.0.0.1",
-                "--port", internalPort.toString(),
+                "--port", serverPort.toString(),
+                "--cache-type-k", "q8_0",
+                "--cache-type-v", "q8_0",
                 "--no-warmup"
             )
 
@@ -209,6 +208,8 @@ class GGUFModelClient {
                 argsList.add(resolvedDraft)
                 argsList.add("--draft-max")
                 argsList.add("4")
+                argsList.add("--draft-min")
+                argsList.add("2")
             }
 
             val args = argsList.toTypedArray()
@@ -237,10 +238,6 @@ class GGUFModelClient {
             serverThread = newThread
             globalServerThread = newThread
             globalLoadedPath = resolvedPath
-
-            proxy?.stop()
-            proxy = OllamaProxy(serverPort, internalPort, "127.0.0.1")
-            proxy?.start()
 
             val maxWaitMs = 300_000L // 5 minutes timeout for large GGUF models
             val pollIntervalMs = 500L
@@ -287,7 +284,8 @@ class GGUFModelClient {
 
     fun generateStreamWithHistory(
         history: List<Pair<String, String>>,
-        systemPrompt: String = ""
+        systemPrompt: String = "",
+        onSpeedUpdate: ((Float) -> Unit)? = null
     ): Flow<String> = flow {
         var address = LlamaServerJNI.safeGetAddress()
         if (address == null && modelPath != null) {
@@ -303,7 +301,7 @@ class GGUFModelClient {
             return@flow
         }
 
-        // Build prompt using ChatML format (compatible with all llama.cpp models)
+        // Build prompt using ChatML format (compatible with modern llama.cpp models)
         val promptBuilder = StringBuilder()
         if (systemPrompt.isNotBlank()) {
             promptBuilder.append("<|im_start|>system\n$systemPrompt<|im_end|>\n")
@@ -330,6 +328,9 @@ class GGUFModelClient {
                 .put("[INST]")
                 .put("[/INST]")
                 .put("<|eot_id|>")
+                .put("<turn|>")
+                .put("<start_of_turn>")
+                .put("<end_of_turn>")
             )
 
         val effectiveUrl = address.replace("0.0.0.0", "127.0.0.1")
@@ -342,6 +343,9 @@ class GGUFModelClient {
         conn.connectTimeout = 60000
         conn.readTimeout = 300000 // 5 minutes
         conn.setRequestProperty("Content-Type", "application/json")
+
+        var tokenCount = 0
+        val startTime = System.currentTimeMillis()
 
         try {
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -366,6 +370,11 @@ class GGUFModelClient {
                     if (json.optBoolean("stop", false)) break
                     val content = json.optString("content", "")
                     if (content.isNotEmpty()) {
+                        tokenCount++
+                        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+                        if (elapsedSec > 0.5f) {
+                            onSpeedUpdate?.invoke(tokenCount / elapsedSec)
+                        }
                         if (firstChunk) {
                             fileLog("First chunk received: ${content.take(50)}")
                             firstChunk = false
@@ -375,7 +384,7 @@ class GGUFModelClient {
                 } catch (_: Exception) {}
             }
             reader.close()
-            fileLog("Stream finished normally.")
+            fileLog("Stream finished normally. Total tokens: $tokenCount")
         } catch (e: Exception) {
             fileLog("Stream error: ${e.message}")
             emit("[ERROR: ${e.message}]")
@@ -396,7 +405,6 @@ class GGUFModelClient {
             globalServerThread?.interrupt()
             globalServerThread = null
         }
-        proxy?.stop()
         globalLoadedPath = null
         serverThread = null
     }

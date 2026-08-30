@@ -22,11 +22,15 @@ private val DarkColorScheme = darkColorScheme(
     tertiary = DarkAccent,
     background = DarkBackground,
     surface = DarkSurface,
-    onPrimary = DarkBackground,
-    onSecondary = DarkBackground,
-    onTertiary = DarkBackground,
+    surfaceVariant = DarkSurfaceVariant,
+    onPrimary = Color(0xFF0A0E14),
+    onSecondary = Color(0xFF0A0E14),
+    onTertiary = Color(0xFF0A0E14),
     onBackground = DarkOnSurface,
     onSurface = DarkOnSurface,
+    onSurfaceVariant = DarkOnSurfaceVariant,
+    outline = DarkOutline,
+    outlineVariant = DarkOutlineVariant,
     error = DarkError
 )
 
@@ -36,34 +40,33 @@ private val LightColorScheme = lightColorScheme(
     tertiary = LightAccent,
     background = LightBackground,
     surface = LightSurface,
+    surfaceVariant = LightSurfaceVariant,
     onPrimary = Color.White,
     onSecondary = Color.White,
     onTertiary = Color.White,
     onBackground = LightOnSurface,
     onSurface = LightOnSurface,
+    onSurfaceVariant = LightOnSurfaceVariant,
+    outline = LightOutline,
+    outlineVariant = LightOutlineVariant,
     error = LightError
 )
 
 @Composable
 fun SynapseAITheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
+            window.statusBarColor = colorScheme.surface.toArgb()
+            window.navigationBarColor = colorScheme.surface.toArgb()
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !darkTheme
         }
     }
 

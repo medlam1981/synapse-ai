@@ -621,12 +621,34 @@ fun ChatApp(viewModel: AgentViewModel) {
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
 
-            // Modern Monochromatic Top Bar
+            val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys) {
+                when (uiState.activeModelType) {
+                    ModelType.GGUF -> {
+                        val name = if (uiState.activeModelName.isNotBlank()) {
+                            val clean = uiState.activeModelName.replace("-it", "").replace("-qat", "").replace("-UD", "").replace("-Q4_K_XL", " Q4").replace("-Q4_0", " Q4")
+                            if (clean.length > 14) clean.take(14) + ".." else clean
+                        } else "Gemma 12B"
+                        val hasMtp = uiState.config.draftModelPath.isNotBlank()
+                        val tpsStr = if (uiState.tokensPerSecond > 0f) " • ${uiState.tokensPerSecond.toInt()} T/s" else ""
+                        "$name • ${if (hasMtp) "MTP ON" else "LOCAL"}$tpsStr"
+                    }
+                    ModelType.GEMINI -> {
+                        val modelShort = uiState.config.geminiModelName.removePrefix("models/").removePrefix("gemini-").replace("-flash", " Flash").replace("-pro", " Pro")
+                        "Gemini $modelShort • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
+                    }
+                    ModelType.OPENAI -> {
+                        "${uiState.config.openAiModelName} • Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys.coerceAtLeast(1)}"
+                    }
+                    else -> "AUTONOMOUS ON-DEVICE NEURAL AGENT"
+                }
+            }
+
+            // Modern Monochromatic Theme-Aware Top Bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF0E1117))
-                    .border(0.5.dp, Color(0xFF21262D))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
                 Row(
@@ -642,15 +664,15 @@ fun ChatApp(viewModel: AgentViewModel) {
                         Surface(
                             onClick = { coroutineScope.launch { drawerState.open() } },
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF161B22),
-                            border = BorderStroke(0.5.dp, Color(0xFF30363D)),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.size(38.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Outlined.Menu,
                                     contentDescription = "Sidebar Menu",
-                                    tint = Color(0xFFE6EDF3),
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -663,7 +685,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                             Text(
                                 text = "MEDLAM AI",
                                 style = TextStyle(
-                                    color = Color(0xFFE6EDF3),
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace,
@@ -671,9 +693,9 @@ fun ChatApp(viewModel: AgentViewModel) {
                                 )
                             )
                             Text(
-                                text = "AUTONOMOUS ON-DEVICE NEURAL AGENT",
-                                color = NeonCyan.copy(alpha = 0.85f),
-                                fontSize = 7.sp,
+                                text = dynamicTelemetry,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 7.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.5.sp,
                                 fontFamily = FontFamily.Monospace
@@ -689,8 +711,8 @@ fun ChatApp(viewModel: AgentViewModel) {
                         Surface(
                             onClick = { viewModel.startNewSession() },
                             shape = RoundedCornerShape(18.dp),
-                            color = Color(0xFF131D2E),
-                            border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.5f))
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -700,12 +722,12 @@ fun ChatApp(viewModel: AgentViewModel) {
                                 Icon(
                                     imageVector = Icons.Filled.Add,
                                     contentDescription = "New Session",
-                                    tint = NeonCyan,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Text(
                                     text = "NEW CHAT",
-                                    color = NeonCyan,
+                                    color = MaterialTheme.colorScheme.primary,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace,
@@ -717,15 +739,15 @@ fun ChatApp(viewModel: AgentViewModel) {
                         Surface(
                             onClick = { showSettings = true },
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF161B22),
-                            border = BorderStroke(0.5.dp, Color(0xFF30363D)),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.size(36.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Outlined.Settings,
                                     contentDescription = "Settings",
-                                    tint = Color(0xFF8B949E),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -734,15 +756,15 @@ fun ChatApp(viewModel: AgentViewModel) {
                         Surface(
                             onClick = { viewModel.clearConversation(context) },
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF161B22),
-                            border = BorderStroke(0.5.dp, Color(0xFF30363D)),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.size(36.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Outlined.DeleteOutline,
                                     contentDescription = "Clear Chat",
-                                    tint = Color(0xFFE5534B).copy(alpha = 0.8f),
+                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -751,7 +773,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                 }
             }
 
-            SystemDashboard(context)
+            SystemDashboard(context, dynamicTelemetry)
 
             ScheduledTasksTicker(uiState.scheduledTasks)
             
@@ -949,7 +971,7 @@ fun FormattedTextParagraph(
                                 fontWeight = FontWeight.Normal,
                                 fontFamily = if (isArabicLine) FontFamily.Default else FontFamily.Monospace
                             ),
-                            color = if (isError) MaterialTheme.colorScheme.error else Color(0xFFE6EDF3),
+                            color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                             textAlign = textAlign,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -963,8 +985,8 @@ fun FormattedTextParagraph(
                             MaterialTheme.typography.bodyMedium.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
                         color = when {
                             isError -> MaterialTheme.colorScheme.error
-                            isThinking -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            else -> Color(0xFFE6EDF3)
+                            isThinking -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            else -> MaterialTheme.colorScheme.onSurface
                         },
                         textAlign = textAlign,
                         modifier = Modifier.fillMaxWidth()
@@ -1174,8 +1196,8 @@ fun SidebarContent(
     val activeSessionId by viewModel.currentSessionId.collectAsState()
 
     ModalDrawerSheet(
-        drawerContainerColor = Color(0xFF0E1117),
-        drawerContentColor = Color(0xFFE6EDF3),
+        drawerContainerColor = MaterialTheme.colorScheme.surface,
+        drawerContentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.width(310.dp)
     ) {
         Column(
@@ -1197,14 +1219,14 @@ fun SidebarContent(
                 ) {
                     Text(
                         text = "✦",
-                        color = NeonCyan,
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Column {
                         Text(
                             text = "MEDLAM AI",
-                            color = Color(0xFFE6EDF3),
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
@@ -1213,7 +1235,7 @@ fun SidebarContent(
                         )
                         Text(
                             text = "NEURAL SESSION HUB",
-                            color = Color(0xFF8B949E),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 8.sp,
                                 fontFamily = FontFamily.Monospace
@@ -1225,7 +1247,7 @@ fun SidebarContent(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close Sidebar",
-                        tint = Color(0xFF8B949E),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -1243,11 +1265,11 @@ fun SidebarContent(
                     .fillMaxWidth()
                     .height(44.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF161B22),
-                    contentColor = Color(0xFFE6EDF3)
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 shape = RoundedCornerShape(8.dp),
-                border = BorderStroke(0.5.dp, Color(0xFF30363D))
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1256,7 +1278,7 @@ fun SidebarContent(
                     Icon(
                         imageVector = Icons.Outlined.AddComment,
                         contentDescription = null,
-                        tint = NeonCyan,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
@@ -1270,13 +1292,13 @@ fun SidebarContent(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            Divider(color = Color(0xFF21262D), thickness = 0.5.dp)
+            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(12.dp))
 
             // Sessions Header
             Text(
                 text = "CONVERSATION HISTORY (${sessions.size})",
-                color = Color(0xFF8B949E),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
@@ -1297,7 +1319,7 @@ fun SidebarContent(
                 ) {
                     Text(
                         text = "No saved conversations",
-                        color = Color(0xFF484F58),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                     )
                 }
@@ -1317,11 +1339,11 @@ fun SidebarContent(
                                     viewModel.switchSession(session.id)
                                     onCloseDrawer()
                                 },
-                            color = if (isSelected) Color(0xFF161B22) else Color.Transparent,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
                             shape = RoundedCornerShape(8.dp),
                             border = BorderStroke(
                                 0.5.dp,
-                                if (isSelected) NeonCyan.copy(alpha = 0.4f) else Color(0xFF21262D)
+                                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant
                             )
                         ) {
                             Row(
@@ -1339,13 +1361,13 @@ fun SidebarContent(
                                     Icon(
                                         imageVector = Icons.Outlined.ChatBubbleOutline,
                                         contentDescription = null,
-                                        tint = if (isSelected) NeonCyan else Color(0xFF8B949E),
+                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Column {
                                         Text(
                                             text = session.title,
-                                            color = if (isSelected) Color(0xFFE6EDF3) else Color(0xFFC9D1D9),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                             style = MaterialTheme.typography.bodySmall.copy(
                                                 fontSize = 11.sp,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
@@ -1355,7 +1377,7 @@ fun SidebarContent(
                                         )
                                         Text(
                                             text = dateStr,
-                                            color = Color(0xFF6E7681),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 fontSize = 8.sp,
                                                 fontFamily = FontFamily.Monospace
@@ -1371,7 +1393,7 @@ fun SidebarContent(
                                     Icon(
                                         imageVector = Icons.Outlined.Delete,
                                         contentDescription = "Delete",
-                                        tint = Color(0xFF8B949E).copy(alpha = 0.7f),
+                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
                                         modifier = Modifier.size(13.dp)
                                     )
                                 }
@@ -1382,7 +1404,7 @@ fun SidebarContent(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            Divider(color = Color(0xFF21262D), thickness = 0.5.dp)
+            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(8.dp))
 
             // Footer info
@@ -1400,12 +1422,12 @@ fun SidebarContent(
                 Icon(
                     imageVector = Icons.Outlined.Settings,
                     contentDescription = "Settings",
-                    tint = Color(0xFF8B949E),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
                     text = "System Settings",
-                    color = Color(0xFFC9D1D9),
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
@@ -1415,7 +1437,7 @@ fun SidebarContent(
 
             Text(
                 text = "📁 Root: /sdcard/Medlam-Ai/",
-                color = Color(0xFF58A6FF),
+                color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontSize = 8.5.sp,
                     fontFamily = FontFamily.Monospace
@@ -1448,14 +1470,14 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
     ) {
         // Monochromatic Emblem
         Surface(
-            color = Color(0xFF161B22),
+            color = MaterialTheme.colorScheme.surfaceVariant,
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(0.5.dp, Color(0xFF30363D))
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Box(modifier = Modifier.padding(16.dp), contentAlignment = Alignment.Center) {
                 Text(
                     text = "✦",
-                    color = NeonCyan,
+                    color = MaterialTheme.colorScheme.primary,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Black
                 )
@@ -1466,7 +1488,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
 
         Text(
             text = "MEDLAM AI",
-            color = Color(0xFFE6EDF3),
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Black,
                 fontFamily = FontFamily.Monospace,
@@ -1476,7 +1498,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
 
         Text(
             text = "Autonomous On-Device Neural Agent",
-            color = Color(0xFF8B949E),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp
@@ -1487,7 +1509,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
 
         Text(
             text = "QUICK ACTIONS",
-            color = Color(0xFF58A6FF),
+            color = MaterialTheme.colorScheme.primary,
             style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
@@ -1508,9 +1530,9 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onSelectPrompt(prompt) },
-                    color = Color(0xFF161B22),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(0.5.dp, Color(0xFF30363D))
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
                         modifier = Modifier
@@ -1521,7 +1543,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
                     ) {
                         Text(
                             text = label,
-                            color = Color(0xFFC9D1D9),
+                            color = MaterialTheme.colorScheme.onSurface,
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontSize = 11.5.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -1531,7 +1553,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
                         Icon(
                             imageVector = Icons.Default.ArrowForward,
                             contentDescription = null,
-                            tint = NeonCyan.copy(alpha = 0.7f),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(14.dp)
                         )
                     }
@@ -1542,7 +1564,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
 }
 
 @Composable
-fun SystemDashboard(context: android.content.Context) {
+fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String = "") {
     var stats by remember { mutableStateOf(SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)) }
 
     LaunchedEffect(Unit) {
@@ -1570,7 +1592,7 @@ fun SystemDashboard(context: android.content.Context) {
         ) {
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
+                    if (dynamicTelemetry.isNotBlank()) "$dynamicTelemetry • ONLINE" else "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Black,
@@ -1643,8 +1665,8 @@ fun ChatInputBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF0E1117))
-            .border(BorderStroke(0.5.dp, Color(0xFF21262D)))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant))
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Row(
@@ -1654,14 +1676,14 @@ fun ChatInputBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Slim Capsule input field with frosted blue background
+            // Slim Capsule input field with theme-aware background
             Surface(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 46.dp, max = 100.dp),
-                color = Color(0xFF131D2E),
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.35f))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
             ) {
                 Box(
                     modifier = Modifier
@@ -1673,10 +1695,10 @@ fun ChatInputBar(
                         value = inputText,
                         onValueChange = { inputText = it },
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = Color(0xFFE6EDF3),
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 13.5.sp
                         ),
-                        cursorBrush = SolidColor(NeonCyan),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         maxLines = 4,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1686,7 +1708,7 @@ fun ChatInputBar(
                                 Text(
                                     text = "Message MEDLAM AI...",
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
-                                    color = Color(0xFF8B949E).copy(alpha = 0.7f)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
                             innerTextField()
@@ -1700,14 +1722,14 @@ fun ChatInputBar(
                 onClick = { onFilePickerClick() },
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = if (selectedFileUri != null) Color(0xFF1F4470) else Color(0xFF161B22),
-                border = BorderStroke(0.5.dp, if (selectedFileUri != null) NeonCyan else Color(0xFF30363D))
+                color = if (selectedFileUri != null) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(0.5.dp, if (selectedFileUri != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Outlined.AttachFile,
                         contentDescription = "Attach",
-                        tint = if (selectedFileUri != null) NeonCyan else Color(0xFF8B949E),
+                        tint = if (selectedFileUri != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(19.dp)
                     )
                 }
@@ -1718,14 +1740,14 @@ fun ChatInputBar(
                 onClick = { onRecordingClick() },
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = if (isRecording) Color(0xFF4C1D1D) else Color(0xFF161B22),
-                border = BorderStroke(0.5.dp, if (isRecording) Color(0xFFE5534B) else Color(0xFF30363D))
+                color = if (isRecording) MaterialTheme.colorScheme.error.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(0.5.dp, if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic,
                         contentDescription = "Voice",
-                        tint = if (isRecording) Color(0xFFF85149) else Color(0xFF8B949E),
+                        tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(19.dp)
                     )
                 }
@@ -1744,28 +1766,21 @@ fun ChatInputBar(
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
                 color = when {
-                    isProcessing -> Color(0xFF4C1D1D)
-                    canSend -> NeonCyan
-                    else -> Color(0xFF161B22)
+                    isProcessing -> MaterialTheme.colorScheme.error
+                    canSend -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceVariant
                 },
-                border = BorderStroke(
-                    0.5.dp,
-                    when {
-                        isProcessing -> Color(0xFFE5534B)
-                        canSend -> NeonCyan.copy(alpha = 0.8f)
-                        else -> Color(0xFF30363D)
-                    }
-                ),
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                 enabled = isProcessing || canSend
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = if (isProcessing) Icons.Filled.Stop else Icons.Filled.Send,
+                        imageVector = if (isProcessing) Icons.Default.Stop else Icons.Default.Send,
                         contentDescription = if (isProcessing) "Stop" else "Send",
                         tint = when {
-                            isProcessing -> Color(0xFFF85149)
-                            canSend -> Color(0xFF0E1117)
-                            else -> Color(0xFF484F58)
+                            isProcessing -> MaterialTheme.colorScheme.onError
+                            canSend -> MaterialTheme.colorScheme.onPrimary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         },
                         modifier = Modifier.size(18.dp)
                     )

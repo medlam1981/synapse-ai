@@ -101,7 +101,8 @@ data class AgentUiState(
     val isAccessibilityActive: Boolean = false,
     val isKeyboardActive: Boolean = false,
     val isNotificationActive: Boolean = false,
-    val streamInterruptMsg: String? = null
+    val streamInterruptMsg: String? = null,
+    val tokensPerSecond: Float = 0f
 )
 
 class AgentViewModel : ViewModel() {
@@ -743,7 +744,13 @@ STYLE: Human-professional, no asterisks (*), no markdown bold/italic markers.
                         _uiState.update { it.copy(currentPhase = AgentActionPhase.THINKING, streamInterruptMsg = null) }
 
                         val stream = when (modelType) {
-                            ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(historyWithScreen, systemPrompt)
+                            ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(
+                                history = historyWithScreen,
+                                systemPrompt = systemPrompt,
+                                onSpeedUpdate = { tps ->
+                                    _uiState.update { it.copy(tokensPerSecond = tps) }
+                                }
+                            )
                             ModelType.GEMINI -> {
                                 val json = JSONArray()
                                 historyWithScreen.forEachIndexed { i, (r, c) ->
