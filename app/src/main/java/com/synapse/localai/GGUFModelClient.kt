@@ -144,22 +144,28 @@ class GGUFModelClient {
         }
     }
 
-    private suspend fun startServer(resolvedPath: String, onStatus: (String) -> Unit = {}): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun startServer(
+        resolvedPath: String, 
+        onStatus: (String) -> Unit = {},
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): Boolean = withContext(Dispatchers.IO) {
         fileLog("startServer called for: $resolvedPath")
 
         if (!LlamaServerJNI.load()) {
             fileLog("Failed to load native libraries")
             onStatus("❌ Error: Native Engine Load Failure")
+            onProgress(0f, "Native Engine Load Failure")
             return@withContext false
         }
 
         // Kill any previous or zombie server forcefully
         onStatus("Stopping previous engine...")
+        onProgress(0.02f, "Stopping previous engine...")
         LlamaServerJNI.safeStop()
         try {
             Runtime.getRuntime().exec(arrayOf("sh", "-c", "killall -9 llama-server || pkill -9 llama-server")).waitFor()
         } catch (_: Exception) {}
-        delay(500)
+        delay(300)
         globalServerThread?.interrupt()
         globalServerThread = null
         globalLoadedPath = null
@@ -213,13 +219,14 @@ class GGUFModelClient {
             }
 
             val args = argsList.toTypedArray()
+            val logDir = File("/sdcard/Medlam-Ai")
+            if (!logDir.exists()) logDir.mkdirs()
+            val logFile = File(logDir, "native_log.txt")
+            try { logFile.delete() } catch (_: Exception) {}
 
             val newThread = Thread {
                 try {
                     // Redirect native stdout and stderr
-                    val logDir = File("/sdcard/Medlam-Ai")
-                    if (!logDir.exists()) logDir.mkdirs()
-                    val logFile = File(logDir, "native_log.txt")
                     val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
                     Os.dup2(fd, OsConstants.STDOUT_FILENO)
                     Os.dup2(fd, OsConstants.STDERR_FILENO)
@@ -240,39 +247,111 @@ class GGUFModelClient {
             globalLoadedPath = resolvedPath
 
             val maxWaitMs = 300_000L // 5 minutes timeout for large GGUF models
-            val pollIntervalMs = 500L
+            val pollIntervalMs = 300L
             val startTime = System.currentTimeMillis()
+            var lastCalculatedProgress = 0.05f
+            var lastLogReadPos = 0L
+
+            val tensorRegex1 = Regex("tensor\\s+(\\d+)\\s*/\\s*(\\d+)")
+            val tensorRegex2 = Regex("loading model tensors:\\s*(\\d+)%")
+            val tensorRegex3 = Regex("\\[\\s*(\\d+)%\\s*\\]")
+            val baseFileSize = File(resolvedPath).length().takeIf { it > 0 } ?: (4L * 1024 * 1024 * 1024)
+            val baseSizeGb = baseFileSize / (1024f * 1024f * 1024f)
+
             while (System.currentTimeMillis() - startTime < maxWaitMs) {
                 delay(pollIntervalMs)
+
+                // 1. Check if server is ready via HTTP /health
                 if (isServerRunning()) {
                     fileLog("Server ready via JNI!")
+                    onProgress(1.0f, "Neural Core Online (100%)")
                     onStatus("✅ Local Server Ready.")
                     return@withContext true
                 }
-                val elapsed = (System.currentTimeMillis() - startTime) / 1000
-                onStatus("Loading model tensors... ${elapsed}s")
+
+                // 2. Parse log progress from native_log.txt
+                try {
+                    if (logFile.exists()) {
+                        val currentLen = logFile.length()
+                        if (currentLen > lastLogReadPos) {
+                            val raf = java.io.RandomAccessFile(logFile, "r")
+                            raf.seek(lastLogReadPos)
+                            var line: String?
+                            while (raf.readLine().also { line = it } != null) {
+                                val currentLine = line ?: continue
+                                val match1 = tensorRegex1.find(currentLine)
+                                if (match1 != null) {
+                                    val cur = match1.groupValues[1].toFloatOrNull() ?: 0f
+                                    val tot = match1.groupValues[2].toFloatOrNull() ?: 1f
+                                    if (tot > 0) {
+                                        lastCalculatedProgress = (cur / tot).coerceIn(0.05f, 0.98f)
+                                    }
+                                }
+                                val match2 = tensorRegex2.find(currentLine)
+                                if (match2 != null) {
+                                    val pct = match2.groupValues[1].toFloatOrNull() ?: 0f
+                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.98f)
+                                }
+                                val match3 = tensorRegex3.find(currentLine)
+                                if (match3 != null) {
+                                    val pct = match3.groupValues[1].toFloatOrNull() ?: 0f
+                                    lastCalculatedProgress = (pct / 100f).coerceIn(0.05f, 0.98f)
+                                }
+                                if (currentLine.contains("load_all_tensors: loaded") || currentLine.contains("HTTP server listening")) {
+                                    lastCalculatedProgress = 0.99f
+                                }
+                            }
+                            lastLogReadPos = raf.filePointer
+                            raf.close()
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                val pctInt = (lastCalculatedProgress * 100).toInt().coerceIn(1, 99)
+                val loadedGb = lastCalculatedProgress * baseSizeGb
+                val statusMsg = "Loading Neural Core: $pctInt% • ${String.format(java.util.Locale.US, "%.1f", loadedGb)}/${String.format(java.util.Locale.US, "%.1f", baseSizeGb)} GB"
+                onProgress(lastCalculatedProgress, statusMsg)
+                onStatus(statusMsg)
             }
-            // If still not answering on internal port, do one final quick check
+
             if (isServerRunning()) {
+                onProgress(1.0f, "Neural Core Online (100%)")
                 onStatus("✅ Local Server Ready.")
                 return@withContext true
             }
             fileLog("Timeout: Server did not respond within ${maxWaitMs/1000}s")
+            onProgress(0f, "Boot Timeout")
             onStatus("❌ Error: Boot Timeout.")
             return@withContext false
         } catch (e: Exception) {
             fileLog("Failed to start JNI server: ${e.message}")
+            onProgress(0f, "Error: ${e.message}")
             return@withContext false
         }
     }
 
-    suspend fun loadModel(context: Context, path: String, onStatus: (String) -> Unit = {}, onLoaded: () -> Unit = {}) {
+    suspend fun loadModel(
+        context: Context, 
+        path: String, 
+        onStatus: (String) -> Unit = {}, 
+        onProgress: (Float, String) -> Unit = { _, _ -> },
+        onLoaded: () -> Unit = {}
+    ) {
         appContext = context.applicationContext
         val resolvedPath = withContext(Dispatchers.IO) { resolveModelPath(context, path, onStatus) }
-        if (resolvedPath == null) { onStatus("❌ Error: File not found."); return }
+        if (resolvedPath == null) { 
+            onStatus("❌ Error: File not found.")
+            onProgress(0f, "File not found")
+            return 
+        }
         modelPath = path
-        if (isServerRunning() && globalLoadedPath == resolvedPath) { isLoaded = true; onLoaded(); return }
-        val started = startServer(resolvedPath, onStatus)
+        if (isServerRunning() && globalLoadedPath == resolvedPath) { 
+            isLoaded = true
+            onProgress(1.0f, "Neural Core Online (100%)")
+            onLoaded()
+            return 
+        }
+        val started = startServer(resolvedPath, onStatus, onProgress)
         isLoaded = started
         onLoaded()
     }

@@ -621,8 +621,11 @@ fun ChatApp(viewModel: AgentViewModel) {
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
 
-            val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys) {
-                when (uiState.activeModelType) {
+            val dynamicTelemetry = remember(uiState.activeModelType, uiState.activeModelName, uiState.config, uiState.tokensPerSecond, uiState.currentKeyIndex, uiState.totalKeys, uiState.localModelLoading, uiState.loadingProgress) {
+                if (uiState.localModelLoading) {
+                    val pct = ((uiState.loadingProgress ?: 0f) * 100).toInt()
+                    "$pct% LOADING • ${uiState.activeModelName.ifBlank { "Gemma 12B" }}"
+                } else when (uiState.activeModelType) {
                     ModelType.GGUF -> {
                         val name = if (uiState.activeModelName.isNotBlank()) {
                             val clean = uiState.activeModelName.replace("-it", "").replace("-qat", "").replace("-UD", "").replace("-Q4_K_XL", " Q4").replace("-Q4_0", " Q4")
@@ -773,7 +776,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                 }
             }
 
-            SystemDashboard(context, dynamicTelemetry)
+            SystemDashboard(context, dynamicTelemetry, uiState)
 
             ScheduledTasksTicker(uiState.scheduledTasks)
             
@@ -1564,7 +1567,7 @@ fun WelcomeHub(onSelectPrompt: (String) -> Unit) {
 }
 
 @Composable
-fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String = "") {
+fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String = "", uiState: AgentUiState? = null) {
     var stats by remember { mutableStateOf(SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)) }
 
     LaunchedEffect(Unit) {
@@ -1588,17 +1591,61 @@ fun SystemDashboard(context: android.content.Context, dynamicTelemetry: String =
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    if (dynamicTelemetry.isNotBlank()) "$dynamicTelemetry • ONLINE" else "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
-                    color = MaterialTheme.colorScheme.primary,
+                    if (uiState?.localModelLoading == true) "NEURAL CORE INITIALIZING • LOADING MODEL"
+                    else if (dynamicTelemetry.isNotBlank()) "$dynamicTelemetry • ONLINE" 
+                    else "SYSTEM ONLINE • NEURAL INTERFACE ACTIVE",
+                    color = if (uiState?.localModelLoading == true) NeonMagenta else MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
                     letterSpacing = 1.sp
                 )
+            }
+
+            if (uiState?.localModelLoading == true) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                        .border(BorderStroke(0.5.dp, NeonMagenta.copy(alpha = 0.5f)), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
+                            color = NeonMagenta,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
+                            color = NeonCyan,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = (uiState?.loadingProgress ?: 0.05f).coerceIn(0f, 1f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = NeonMagenta,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant
+                    )
+                }
             }
 
             Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)

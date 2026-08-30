@@ -84,22 +84,13 @@ fun SettingsScreenContent(
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     
-    // --- LOCAL DRAFT STATE ---
-    var preferredModelType by remember(config.preferredModelType) { mutableStateOf(config.preferredModelType) }
-    var apiKeysState by remember(config.geminiApiKeys) { mutableStateOf(config.geminiApiKeys) }
-    var geminiModelNameState by remember(config.geminiModelName) { mutableStateOf(config.geminiModelName) }
+    // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
-    
-    var openAiKeysState by remember(config.openaiApiKeys) { mutableStateOf(config.openaiApiKeys) }
-    var openAiModelNameState by remember(config.openAiModelName) { mutableStateOf(config.openAiModelName) }
     var openAiKeysVisible by remember { mutableStateOf(false) }
-    var contextLengthState by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
-    var threadCountState by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
+    var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
+    var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
-    var localModelPathState by remember(config.localModelPath) { mutableStateOf(config.localModelPath) }
-    var draftModelPathState by remember(config.draftModelPath) { mutableStateOf(config.draftModelPath) }
     var gpuLayersState by remember(config.gpuLayers) { mutableStateOf(config.gpuLayers) }
-    var useMmapState by remember(config.useMmap) { mutableStateOf(config.useMmap) }
 
     LaunchedEffect(Unit) {
         isScanning = true
@@ -123,6 +114,7 @@ fun SettingsScreenContent(
     ) {
         Spacer(modifier = Modifier.statusBarsPadding())
 
+        // Top App Bar
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -150,7 +142,7 @@ fun SettingsScreenContent(
                         letterSpacing = 1.sp
                     )
                     Text(
-                        "CONFIGURATION CORE",
+                        "CONFIGURATION CORE • AUTO-SAVED",
                         color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
@@ -183,7 +175,7 @@ fun SettingsScreenContent(
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // ==========================================
-            // CARD 1: COGNITIVE ENGINE SELECTOR
+            // CARD 1: COGNITIVE ENGINE SELECTOR (AUTO-SAVING)
             // ==========================================
             SettingsCard(
                 title = "1. COGNITIVE ENGINE",
@@ -192,53 +184,69 @@ fun SettingsScreenContent(
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        val isGemini = config.preferredModelType == ModelType.GEMINI
+                        val isOpenAi = config.preferredModelType == ModelType.OPENAI
+                        val isGguf = config.preferredModelType == ModelType.GGUF
+
                         Button(
-                            onClick = { preferredModelType = ModelType.GEMINI },
+                            onClick = {
+                                val newConfig = config.copy(preferredModelType = ModelType.GEMINI)
+                                viewModel.saveConfig(context, newConfig)
+                            },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (preferredModelType == ModelType.GEMINI) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isGemini) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("Gemini", color = if (preferredModelType == ModelType.GEMINI) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Gemini", color = if (isGemini) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         Button(
-                            onClick = { preferredModelType = ModelType.OPENAI },
+                            onClick = {
+                                val newConfig = config.copy(preferredModelType = ModelType.OPENAI)
+                                viewModel.saveConfig(context, newConfig)
+                            },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (preferredModelType == ModelType.OPENAI) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isOpenAi) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("OpenAI", color = if (preferredModelType == ModelType.OPENAI) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("OpenAI", color = if (isOpenAi) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         Button(
-                            onClick = { preferredModelType = ModelType.GGUF },
+                            onClick = {
+                                val newConfig = config.copy(preferredModelType = ModelType.GGUF)
+                                viewModel.saveConfig(context, newConfig)
+                            },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (preferredModelType == ModelType.GGUF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isGguf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("Local GGUF", color = if (preferredModelType == ModelType.GGUF) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Local GGUF", color = if (isGguf) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    // Cloud Credentials (if cloud engine chosen)
-                    if (preferredModelType == ModelType.GEMINI) {
+                    // Cloud Credentials Section (Auto-Saving)
+                    if (config.preferredModelType == ModelType.GEMINI) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedTextField(
-                                value = apiKeysState,
-                                onValueChange = { apiKeysState = it },
+                                value = config.geminiApiKeys,
+                                onValueChange = {
+                                    val newConfig = config.copy(geminiApiKeys = it)
+                                    viewModel.saveConfig(context, newConfig)
+                                },
                                 label = { Text("Gemini API Keys (comma-separated)") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = settingsFieldColors(),
@@ -252,8 +260,11 @@ fun SettingsScreenContent(
                             )
 
                             OutlinedTextField(
-                                value = geminiModelNameState,
-                                onValueChange = { geminiModelNameState = it },
+                                value = config.geminiModelName,
+                                onValueChange = {
+                                    val newConfig = config.copy(geminiModelName = it)
+                                    viewModel.saveConfig(context, newConfig)
+                                },
                                 label = { Text("Gemini Model Name") },
                                 placeholder = { Text("gemini-1.5-flash") },
                                 modifier = Modifier.fillMaxWidth(),
@@ -261,11 +272,14 @@ fun SettingsScreenContent(
                                 textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                             )
                         }
-                    } else if (preferredModelType == ModelType.OPENAI) {
+                    } else if (config.preferredModelType == ModelType.OPENAI) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedTextField(
-                                value = openAiKeysState,
-                                onValueChange = { openAiKeysState = it },
+                                value = config.openaiApiKeys,
+                                onValueChange = {
+                                    val newConfig = config.copy(openaiApiKeys = it)
+                                    viewModel.saveConfig(context, newConfig)
+                                },
                                 label = { Text("OpenAI API Keys (comma-separated)") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = settingsFieldColors(),
@@ -279,8 +293,11 @@ fun SettingsScreenContent(
                             )
 
                             OutlinedTextField(
-                                value = openAiModelNameState,
-                                onValueChange = { openAiModelNameState = it },
+                                value = config.openAiModelName,
+                                onValueChange = {
+                                    val newConfig = config.copy(openAiModelName = it)
+                                    viewModel.saveConfig(context, newConfig)
+                                },
                                 label = { Text("OpenAI Model Name") },
                                 placeholder = { Text("gpt-4o") },
                                 modifier = Modifier.fillMaxWidth(),
@@ -289,68 +306,108 @@ fun SettingsScreenContent(
                             )
                         }
                     }
-
-                    Button(
-                        onClick = {
-                            val newConfig = config.copy(
-                                preferredModelType = preferredModelType,
-                                geminiApiKeys = apiKeysState,
-                                geminiModelName = geminiModelNameState,
-                                openaiApiKeys = openAiKeysState,
-                                openAiModelName = openAiModelNameState
-                            )
-                            viewModel.saveConfig(context, newConfig)
-                            Toast.makeText(context, "Engine set to ${preferredModelType.name} ✓", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Apply Engine", fontWeight = FontWeight.Bold)
-                    }
                 }
             }
 
             // ==========================================
-            // CARD 2: LOCAL CORE (GGUF + MTP SPECULATIVE)
+            // CARD 2: LOCAL NEURAL CORE (GGUF + MTP)
             // ==========================================
             SettingsCard(
                 title = "2. LOCAL NEURAL CORE",
                 titleColor = NeonMagenta,
                 statusDot = when {
-                    uiState.localModelLoaded && preferredModelType == ModelType.GGUF -> Color.Green
+                    uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> Color.Green
                     uiState.localModelLoading -> Color.Yellow
                     else -> Color.Red
-                }
+                },
+                statusText = if (uiState.localModelLoading) "LOADING..." else if (uiState.localModelLoaded) "LOADED" else "OFFLINE"
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // Real-Time 0-100% Model Loading Progress Bar
+                    if (uiState.localModelLoading) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .border(BorderStroke(0.5.dp, NeonMagenta.copy(alpha = 0.6f)), RoundedCornerShape(10.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
+                                    color = NeonMagenta,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
+                                    color = NeonCyan,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = (uiState.loadingProgress ?: 0.05f).coerceIn(0f, 1f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = NeonMagenta,
+                                trackColor = MaterialTheme.colorScheme.outlineVariant
+                            )
+                        }
+                    }
+
                     if (isScanning) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = NeonMagenta)
                     }
 
-                    if (models.isEmpty()) {
+                    if (models.isEmpty() && !isScanning) {
                         Text("No .gguf models found in /sdcard/Medlam-Ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                     }
 
-                    // Base Model Picker
+                    // Base Model Picker (Auto-Saving)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         models.forEach { file ->
-                            val isSelected = localModelPathState == file.absolutePath
+                            val isSelected = config.localModelPath == file.absolutePath
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
                                     .border(0.5.dp, if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                    .clickable { localModelPathState = file.absolutePath }
+                                    .clickable {
+                                        val newConfig = config.copy(
+                                            localModelPath = file.absolutePath,
+                                            preferredModelType = ModelType.GGUF
+                                        )
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
                                     .padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                RadioButton(selected = isSelected, onClick = { localModelPathState = file.absolutePath })
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = {
+                                        val newConfig = config.copy(
+                                            localModelPath = file.absolutePath,
+                                            preferredModelType = ModelType.GGUF
+                                        )
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                )
                                 Spacer(Modifier.width(8.dp))
                                 Column {
                                     Text(file.name, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
@@ -360,7 +417,7 @@ fun SettingsScreenContent(
                         }
                     }
 
-                    // Draft / MTP Accelerator Picker
+                    // Draft / MTP Accelerator Picker (Auto-Saving)
                     if (models.size > 1) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("DRAFT / MTP SPECULATIVE ACCELERATOR:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
@@ -368,29 +425,47 @@ fun SettingsScreenContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (draftModelPathState.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
-                                    .border(0.5.dp, if (draftModelPathState.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                    .clickable { draftModelPathState = "" }
+                                    .background(if (config.draftModelPath.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
+                                    .border(0.5.dp, if (config.draftModelPath.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        val newConfig = config.copy(draftModelPath = "")
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
                                     .padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                RadioButton(selected = draftModelPathState.isBlank(), onClick = { draftModelPathState = "" })
+                                RadioButton(
+                                    selected = config.draftModelPath.isBlank(),
+                                    onClick = {
+                                        val newConfig = config.copy(draftModelPath = "")
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                )
                                 Spacer(Modifier.width(8.dp))
                                 Text("None (Single Model Mode)", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurface)
                             }
-                            models.filter { it.absolutePath != localModelPathState }.forEach { file ->
-                                val isDraftSelected = draftModelPathState == file.absolutePath
+                            models.filter { it.absolutePath != config.localModelPath }.forEach { file ->
+                                val isDraftSelected = config.draftModelPath == file.absolutePath
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(if (isDraftSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
                                         .border(0.5.dp, if (isDraftSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                        .clickable { draftModelPathState = file.absolutePath }
+                                        .clickable {
+                                            val newConfig = config.copy(draftModelPath = file.absolutePath)
+                                            viewModel.saveConfig(context, newConfig)
+                                        }
                                         .padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    RadioButton(selected = isDraftSelected, onClick = { draftModelPathState = file.absolutePath })
+                                    RadioButton(
+                                        selected = isDraftSelected,
+                                        onClick = {
+                                            val newConfig = config.copy(draftModelPath = file.absolutePath)
+                                            viewModel.saveConfig(context, newConfig)
+                                        }
+                                    )
                                     Spacer(Modifier.width(8.dp))
                                     Column {
                                         Text(file.name, color = if (isDraftSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
@@ -401,114 +476,129 @@ fun SettingsScreenContent(
                         }
                     }
 
-                    // GPU Layers Offload Slider
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "GPU Layers Offload: $gpuLayersState ${if (gpuLayersState == 0) "(CPU Only)" else if (gpuLayersState >= 33) "(Full GPU Offload)" else "(Hybrid GPU/CPU)"}",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Slider(
-                            value = gpuLayersState.toFloat(),
-                            onValueChange = { gpuLayersState = it.toInt() },
-                            valueRange = 0f..33f,
-                            steps = 32,
-                            colors = SliderDefaults.colors(thumbColor = NeonMagenta, activeTrackColor = NeonMagenta)
-                        )
-                    }
-
-                    // mmap Fast Loading Switch with explicit spacious layout
+                    // ========================================================
+                    // REVAMPED SUB-CARD: GPU LAYERS, MMAP & RE-SCAN ACTION
+                    // ========================================================
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(10.dp),
                         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "mmap Fast Loading",
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    "Direct memory mapping for instant loading",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 10.5.sp
+                            // Top Row: mmap Direct Memory Switch
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                    Text(
+                                        "mmap Direct Memory",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "Direct memory mapping for instant loading",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 10.5.sp,
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                                Switch(
+                                    checked = config.useMmap,
+                                    onCheckedChange = {
+                                        val newConfig = config.copy(useMmap = it)
+                                        viewModel.saveConfig(context, newConfig)
+                                    },
+                                    colors = SwitchDefaults.colors(checkedThumbColor = NeonCyan, checkedTrackColor = NeonCyan.copy(alpha = 0.5f))
                                 )
                             }
-                            Switch(
-                                checked = useMmapState,
-                                onCheckedChange = { useMmapState = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = NeonCyan, checkedTrackColor = NeonCyan.copy(alpha = 0.5f))
-                            )
-                        }
-                    }
 
-                    // Action Row: RE-SCAN and Apply Model
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                isScanning = true
-                                val found = mutableListOf<File>()
-                                coroutineScope.launch {
-                                    withContext(Dispatchers.IO) {
-                                        SCAN_DIRS.forEach { path ->
-                                            val dir = File(path)
-                                            if (dir.exists() && dir.isDirectory) {
-                                                dir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }?.let { found.addAll(it) }
+                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
+
+                            // Middle Row: GPU Offload Layers Slider with Active Count Badge
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "GPU Offload Layers",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    val badgeText = when (gpuLayersState) {
+                                        0 -> "[ 0 / 33 (CPU Only) ]"
+                                        33 -> "[ 33 / 33 (Full GPU) ]"
+                                        else -> "[ $gpuLayersState / 33 (Hybrid) ]"
+                                    }
+                                    Text(
+                                        text = badgeText,
+                                        color = if (gpuLayersState > 0) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+
+                                Slider(
+                                    value = gpuLayersState.toFloat(),
+                                    onValueChange = { gpuLayersState = it.toInt() },
+                                    onValueChangeFinished = {
+                                        val newConfig = config.copy(gpuLayers = gpuLayersState)
+                                        viewModel.saveConfig(context, newConfig)
+                                    },
+                                    valueRange = 0f..33f,
+                                    steps = 32,
+                                    colors = SliderDefaults.colors(thumbColor = NeonMagenta, activeTrackColor = NeonMagenta)
+                                )
+                            }
+
+                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
+
+                            // Bottom Row: Centered single [Re-Scan Models] outline button
+                            OutlinedButton(
+                                onClick = {
+                                    isScanning = true
+                                    val found = mutableListOf<File>()
+                                    coroutineScope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            SCAN_DIRS.forEach { path ->
+                                                val dir = File(path)
+                                                if (dir.exists() && dir.isDirectory) {
+                                                    dir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }?.let { found.addAll(it) }
+                                                }
                                             }
                                         }
                                         models = found.distinctBy { it.name }
                                         isScanning = false
                                     }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.width(6.dp))
-                            Text("RE-SCAN", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = {
-                                val newConfig = config.copy(
-                                    localModelPath = localModelPathState,
-                                    draftModelPath = draftModelPathState,
-                                    gpuLayers = gpuLayersState,
-                                    useMmap = useMmapState,
-                                    preferredModelType = ModelType.GGUF
-                                )
-                                viewModel.saveConfig(context, newConfig)
-                                Toast.makeText(context, "Local Engine Saved ✓", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = NeonMagenta, contentColor = Color.White),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Apply Model", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                            ) {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Re-Scan Models", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
             }
 
             // ==========================================
-            // CARD 3: INFERENCE PARAMETERS
+            // CARD 3: INFERENCE PARAMETERS (AUTO-SAVING)
             // ==========================================
             SettingsCard(
                 title = "3. INFERENCE PARAMETERS",
@@ -523,16 +613,32 @@ fun SettingsScreenContent(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedTextField(
-                            value = contextLengthState,
-                            onValueChange = { contextLengthState = it },
+                            value = contextLengthText,
+                            onValueChange = {
+                                contextLengthText = it
+                                it.toIntOrNull()?.let { len ->
+                                    if (len >= 2048) {
+                                        val newConfig = config.copy(contextLength = len)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                }
+                            },
                             label = { Text("Context Size") },
                             modifier = Modifier.weight(1f),
                             colors = settingsFieldColors(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
                         OutlinedTextField(
-                            value = threadCountState,
-                            onValueChange = { threadCountState = it },
+                            value = threadCountText,
+                            onValueChange = {
+                                threadCountText = it
+                                it.toIntOrNull()?.let { thr ->
+                                    if (thr in 1..32) {
+                                        val newConfig = config.copy(threadCount = thr)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                }
+                            },
                             label = { Text("CPU Threads") },
                             modifier = Modifier.weight(1f),
                             colors = settingsFieldColors(),
@@ -541,31 +647,24 @@ fun SettingsScreenContent(
                     }
                     
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Temperature: ${String.format("%.2f", temperatureState)}", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Temperature", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = NeonCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        }
                         Slider(
                             value = temperatureState,
                             onValueChange = { temperatureState = it },
+                            onValueChangeFinished = {
+                                val newConfig = config.copy(temperature = temperatureState)
+                                viewModel.saveConfig(context, newConfig)
+                            },
                             valueRange = 0f..1.5f,
                             colors = SliderDefaults.colors(thumbColor = NeonCyan, activeTrackColor = NeonCyan)
                         )
-                    }
-
-                    Button(
-                        onClick = {
-                            val newConfig = config.copy(
-                                contextLength = contextLengthState.toIntOrNull() ?: config.contextLength,
-                                threadCount = threadCountState.toIntOrNull() ?: config.threadCount,
-                                temperature = temperatureState,
-                                maxTokens = -1
-                            )
-                            viewModel.saveConfig(context, newConfig)
-                            Toast.makeText(context, "Inference Parameters Saved ✓", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Apply Inference Settings", fontWeight = FontWeight.Bold)
                     }
                 }
             }

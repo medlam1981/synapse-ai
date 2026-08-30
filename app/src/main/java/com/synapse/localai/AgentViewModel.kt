@@ -85,6 +85,8 @@ data class AgentUiState(
     val keyboardActive: Boolean = false,
     val localModelLoading: Boolean = false,
     val localModelLoaded: Boolean = false,
+    val loadingProgress: Float? = null,
+    val loadingStatusText: String = "",
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
     val scheduledTasks: List<ScheduledTask> = emptyList(),
@@ -423,7 +425,13 @@ class AgentViewModel : ViewModel() {
         val type = detectModelType(path)
         val modelName = java.io.File(path).nameWithoutExtension
         
-        _uiState.update { it.copy(localModelLoading = true, localModelLoaded = false, activeModelType = null) }
+        _uiState.update { it.copy(
+            localModelLoading = true, 
+            localModelLoaded = false, 
+            activeModelType = null,
+            loadingProgress = 0.05f,
+            loadingStatusText = "Initializing Neural Core..."
+        ) }
         
         if (type == ModelType.GGUF) {
             try {
@@ -444,19 +452,39 @@ class AgentViewModel : ViewModel() {
                     context = context,
                     path = path,
                     onStatus = { status -> addSystemLog(status) },
+                    onProgress = { progress, statusText ->
+                        _uiState.update { it.copy(loadingProgress = progress, loadingStatusText = statusText) }
+                    },
                     onLoaded = {
                         if (client.isLoaded) {
-                            _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                            _uiState.update { it.copy(
+                                localModelLoaded = true, 
+                                localModelLoading = false, 
+                                activeModelType = ModelType.GGUF, 
+                                activeModelName = modelName,
+                                loadingProgress = null,
+                                loadingStatusText = ""
+                            ) }
                             addSystemLog("✅ Local Model Active: $modelName")
                         } else {
-                            _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
+                            _uiState.update { it.copy(
+                                localModelLoaded = false, 
+                                localModelLoading = false,
+                                loadingProgress = null,
+                                loadingStatusText = ""
+                            ) }
                         }
                     }
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "GGUF load failed", t)
                 addLog(LogEntry(sender = "SYSTEM", text = "❌ Load Error: ${t.message}", isError = true))
-                _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false) }
+                _uiState.update { it.copy(
+                    localModelLoaded = false, 
+                    localModelLoading = false,
+                    loadingProgress = null,
+                    loadingStatusText = ""
+                ) }
             }
         }
     }
