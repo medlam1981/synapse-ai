@@ -628,7 +628,7 @@ fun ChatApp(viewModel: AgentViewModel) {
                         } else "Gemma 12B"
                         val hasMtp = uiState.config.draftModelPath.isNotBlank()
                         val tpsStr = if (uiState.tokensPerSecond > 0f) " • ${uiState.tokensPerSecond.toInt()} T/s" else ""
-                        "ONLINE • $name${if (hasMtp) " + MTP" else ""}$tpsStr"
+                        "ONLINE • $name${if (hasMtp) " + ⚡ MTP LINKED" else ""}$tpsStr"
                     }
                     ModelType.GEMINI -> {
                         val modelShort = uiState.config.geminiModelName.removePrefix("models/").removePrefix("gemini-").replace("-flash", " Flash").replace("-pro", " Pro")

@@ -253,7 +253,7 @@ class GGUFModelClient {
 
             // Speculative / Draft Model & MTP
             val draftPath = draftModelPath
-            val resolvedDraft = if (!draftPath.isNullOrBlank() && !draftPath.contains("mtp", ignoreCase = true) && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
+            val resolvedDraft = if (!draftPath.isNullOrBlank() && ctx != null) resolveModelPath(ctx, draftPath, {}) else null
             if (resolvedDraft != null && File(resolvedDraft).exists()) {
                 argsList.add("--model-draft")
                 argsList.add(resolvedDraft)
@@ -261,6 +261,7 @@ class GGUFModelClient {
                 argsList.add("4")
                 argsList.add("--draft-min")
                 argsList.add("2")
+                fileLog("Auto-pairing MTP draft model: $resolvedDraft")
             }
 
             val args = argsList.toTypedArray()

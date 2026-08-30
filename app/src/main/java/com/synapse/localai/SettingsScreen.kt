@@ -94,14 +94,7 @@ fun SettingsScreenContent(
     LaunchedEffect(Unit) {
         isScanning = true
         withContext(Dispatchers.IO) {
-            val found = mutableListOf<File>()
-            SCAN_DIRS.forEach { path ->
-                val dir = File(path)
-                if (dir.exists() && dir.isDirectory) {
-                    dir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }?.let { found.addAll(it) }
-                }
-            }
-            models = found.distinctBy { it.name }
+            models = ModelScanner.scanBaseModels()
         }
         isScanning = false
     }
@@ -328,11 +321,13 @@ fun SettingsScreenContent(
                         Text("No .gguf models found in /sdcard/Medlam-Ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                     }
 
-                    // Base Model Picker (Auto-Saving)
+                    // Base Model Picker (Auto-Saving & Auto-MTP Pairing)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         models.forEach { file ->
                             val isSelected = config.localModelPath == file.absolutePath
+                            val matchedMtp = remember(file.absolutePath) { ModelScanner.findMatchingMtpModel(file.absolutePath) }
+
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -342,6 +337,7 @@ fun SettingsScreenContent(
                                     .clickable {
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
+                                            draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -354,6 +350,7 @@ fun SettingsScreenContent(
                                     onClick = {
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
+                                            draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -363,64 +360,39 @@ fun SettingsScreenContent(
                                 Column {
                                     Text(file.name, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                                     Text(formatSize(file.length()) + " • " + file.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                                }
-                            }
-                        }
-                    }
 
-                    // Draft / MTP Accelerator Picker (Auto-Saving)
-                    if (models.size > 1) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("DRAFT / MTP SPECULATIVE ACCELERATOR:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (config.draftModelPath.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
-                                    .border(0.5.dp, if (config.draftModelPath.isBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        val newConfig = config.copy(draftModelPath = "")
-                                        viewModel.saveConfig(context, newConfig)
-                                    }
-                                    .padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = config.draftModelPath.isBlank(),
-                                    onClick = {
-                                        val newConfig = config.copy(draftModelPath = "")
-                                        viewModel.saveConfig(context, newConfig)
-                                    }
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("None (Single Model Mode)", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurface)
-                            }
-                            models.filter { it.absolutePath != config.localModelPath }.forEach { file ->
-                                val isDraftSelected = config.draftModelPath == file.absolutePath
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (isDraftSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                        .border(0.5.dp, if (isDraftSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            val newConfig = config.copy(draftModelPath = file.absolutePath)
-                                            viewModel.saveConfig(context, newConfig)
+                                    if (isSelected) {
+                                        if (matchedMtp != null) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = Color(0xFF10B981).copy(alpha = 0.15f),
+                                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.7f)),
+                                                modifier = Modifier.padding(top = 6.dp)
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    Text("⚡ MTP LINKED: ${matchedMtp.name}", color = Color(0xFF10B981), fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                                }
+                                            }
+                                        } else {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                                                modifier = Modifier.padding(top = 6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Standalone Mode (No MTP)",
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    fontSize = 10.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
                                         }
-                                        .padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    RadioButton(
-                                        selected = isDraftSelected,
-                                        onClick = {
-                                            val newConfig = config.copy(draftModelPath = file.absolutePath)
-                                            viewModel.saveConfig(context, newConfig)
-                                        }
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Column {
-                                        Text(file.name, color = if (isDraftSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-                                        Text(formatSize(file.length()), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
                                     }
                                 }
                             }
@@ -520,17 +492,10 @@ fun SettingsScreenContent(
                             OutlinedButton(
                                 onClick = {
                                     isScanning = true
-                                    val found = mutableListOf<File>()
                                     coroutineScope.launch {
                                         withContext(Dispatchers.IO) {
-                                            SCAN_DIRS.forEach { path ->
-                                                val dir = File(path)
-                                                if (dir.exists() && dir.isDirectory) {
-                                                    dir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }?.let { found.addAll(it) }
-                                                }
-                                            }
+                                            models = ModelScanner.scanBaseModels()
                                         }
-                                        models = found.distinctBy { it.name }
                                         isScanning = false
                                     }
                                 },
