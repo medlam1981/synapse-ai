@@ -220,7 +220,13 @@ class AgentViewModel : ViewModel() {
             }
 
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
-            var draftPath = if (rawDraft.contains("assistant", ignoreCase = true) || rawDraft.contains("bf16", ignoreCase = true)) "" else rawDraft
+            // Only strip genuinely incompatible auxiliary blocks:
+            //  - "assistant" files (lack standalone context)
+            //  - BF16 mtp-gemma-4 without E2B (12B auxiliary only)
+            val rawLower = rawDraft.lowercase()
+            val draftIsInvalid = rawLower.contains("assistant") ||
+                (rawLower.contains("bf16") && rawLower.contains("mtp-gemma-4") && !rawLower.contains("e2b"))
+            var draftPath = if (draftIsInvalid) "" else rawDraft
             if (draftPath.isBlank() && localPath.isNotBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(localPath)
                 if (matched != null) {

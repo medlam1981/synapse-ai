@@ -3,18 +3,32 @@ package com.synapse.localai
 import java.io.File
 
 object ModelScanner {
-    const val MODELS_DIR = "/sdcard/Medlam-Ai/models"
-    const val MTP_DIR = "/sdcard/Medlam-Ai/mtp"
+    // Primary dirs (lowercase canonical)
+    const val MODELS_DIR  = "/sdcard/Medlam-Ai/models"
+    const val MTP_DIR     = "/sdcard/Medlam-Ai/mtp"
     const val PERSONA_DIR = "/sdcard/Medlam-Ai/persona"
-    const val ROOT_DIR = "/sdcard/Medlam-Ai"
+    const val ROOT_DIR    = "/sdcard/Medlam-Ai"
+
+    // All case variants to search (case-insensitive FS support)
+    private val MODELS_DIRS = listOf(
+        "/sdcard/Medlam-Ai/models",
+        "/sdcard/Medlam-Ai/Models",
+        "/storage/emulated/0/Medlam-Ai/models",
+        "/storage/emulated/0/Medlam-Ai/Models"
+    )
+
+    private val MTP_DIRS = listOf(
+        "/sdcard/Medlam-Ai/mtp",
+        "/sdcard/Medlam-Ai/Mtp",
+        "/sdcard/Medlam-Ai/MTP",
+        "/storage/emulated/0/Medlam-Ai/mtp",
+        "/storage/emulated/0/Medlam-Ai/Mtp"
+    )
 
     private val LEGACY_DIRS = listOf(
-        "/sdcard/Medlam-Ai/Models",
         "/sdcard/Medlam-Ai",
         "/sdcard/Models",
         "/sdcard/Download",
-        "/storage/emulated/0/Medlam-Ai/models",
-        "/storage/emulated/0/Medlam-Ai/mtp",
         "/storage/emulated/0/Download"
     )
 
@@ -31,12 +45,17 @@ object ModelScanner {
     fun scanBaseModels(): List<File> {
         ensureDirectories()
         val found = mutableListOf<File>()
-        val primaryDir = File(MODELS_DIR)
-        if (primaryDir.exists() && primaryDir.isDirectory) {
-            primaryDir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) }?.let {
-                found.addAll(it)
+
+        // Search all case variants of models dir
+        for (path in MODELS_DIRS) {
+            val dir = File(path)
+            if (dir.exists() && dir.isDirectory) {
+                dir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) }?.let {
+                    found.addAll(it)
+                }
             }
         }
+
         // Fallback to legacy directories if primary is empty
         if (found.isEmpty()) {
             LEGACY_DIRS.forEach { path ->
@@ -53,17 +72,30 @@ object ModelScanner {
 
     fun scanMtpModels(): List<File> {
         ensureDirectories()
-        val primaryDir = File(MTP_DIR)
-        if (primaryDir.exists() && primaryDir.isDirectory) {
-            val list = primaryDir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) }?.toList()
-            if (!list.isNullOrEmpty()) return list
+        val found = mutableListOf<File>()
+
+        // Search all case variants of mtp dir
+        for (path in MTP_DIRS) {
+            val dir = File(path)
+            if (dir.exists() && dir.isDirectory) {
+                dir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) }?.let {
+                    found.addAll(it)
+                }
+            }
         }
-        // Also check if any mtp files exist in /models or legacy dirs
+
+        if (found.isNotEmpty()) return found.distinctBy { it.name }
+
+        // Also check if any mtp files exist in /models dirs
         val fallback = mutableListOf<File>()
-        val modelsDir = File(MODELS_DIR)
-        if (modelsDir.exists() && modelsDir.isDirectory) {
-            modelsDir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) && f.name.contains("mtp", ignoreCase = true) }?.let {
-                fallback.addAll(it)
+        for (path in MODELS_DIRS) {
+            val dir = File(path)
+            if (dir.exists() && dir.isDirectory) {
+                dir.listFiles { f ->
+                    f.isFile &&
+                    f.extension.equals("gguf", ignoreCase = true) &&
+                    f.name.contains("mtp", ignoreCase = true)
+                }?.let { fallback.addAll(it) }
             }
         }
         return fallback.distinctBy { it.name }
@@ -71,32 +103,55 @@ object ModelScanner {
 
     /**
      * Smart Auto-Pairing Logic:
-     * When a base model is selected, search /sdcard/Medlam-Ai/mtp/ for candidate draft models.
+     * When a base model is selected, find the best matching MTP draft model.
+     *
+     * Matching strategy (priority order):
+     *  1. Same model family tokens (e.g. "e2b", "12b", "gemma", "4") in MTP filename
+     *  2. Highest token overlap score
+     *  3. First available MTP candidate if no specific match
+     *
+     * Exclusions: standalone auxiliary assistant/bf16 blocks that lack full draft context.
+     * NOTE: For the E2B model, mtp-gemma-4-E2B files ARE valid draft models and must NOT be excluded.
      */
     fun findMatchingMtpModel(baseModelPath: String): File? {
         if (baseModelPath.isBlank()) return null
         val mtpFiles = scanMtpModels()
         if (mtpFiles.isEmpty()) return null
 
-        val baseName = File(baseModelPath).nameWithoutExtension.lowercase()
-        val baseTokens = baseName.split("-", "_", ".").filter { it.length > 2 }
+        val baseFile = File(baseModelPath)
+        val baseName = baseFile.nameWithoutExtension.lowercase()
 
-        // Filter out auxiliary assistant layer files that lack standalone context (require full draft models)
+        // Extract meaningful tokens from base model name
+        val baseTokens = baseName
+            .split("-", "_", ".")
+            .filter { it.length > 1 }
+            .map { it.lowercase() }
+
+        // Determine if a file is a disqualified auxiliary block:
+        // Only exclude "mtp-gemma-4" paired with "bf16" AND "assistant" together,
+        // or files that explicitly say "assistant" — NOT generic E2B mtp files.
         val candidateFiles = mtpFiles.filter { file ->
             val name = file.name.lowercase()
-            !name.contains("assistant") && 
-            !name.contains("bf16") && 
-            !name.contains("mtp-gemma-4")
+            val isAssistantBlock = name.contains("assistant")
+            val isBf16OnlyAuxiliary = name.contains("bf16") && name.contains("mtp-gemma-4") && !name.contains("e2b")
+            !isAssistantBlock && !isBf16OnlyAuxiliary
         }
+
         if (candidateFiles.isEmpty()) return null
 
-        // Priority 1: Match tokens from base model name
-        val match = candidateFiles.firstOrNull { mtpFile ->
-            val mtpName = mtpFile.nameWithoutExtension.lowercase()
-            val cleanMtp = mtpName.removePrefix("mtp-").removePrefix("mtp_")
-            baseTokens.any { token -> cleanMtp.contains(token) }
-        }
+        // Score each candidate by token overlap with base model
+        data class Scored(val file: File, val score: Int)
 
-        return match ?: candidateFiles.firstOrNull()
+        val scored = candidateFiles.map { mtpFile ->
+            val mtpName = mtpFile.nameWithoutExtension.lowercase()
+            val cleanMtp = mtpName
+                .removePrefix("mtp-")
+                .removePrefix("mtp_")
+            val score = baseTokens.count { token -> cleanMtp.contains(token) }
+            Scored(mtpFile, score)
+        }.sortedByDescending { it.score }
+
+        // Return best match if it shares at least 1 token, otherwise first candidate
+        return scored.firstOrNull { it.score > 0 }?.file ?: candidateFiles.firstOrNull()
     }
 }

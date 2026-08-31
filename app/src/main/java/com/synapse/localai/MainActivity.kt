@@ -702,8 +702,14 @@ fun ChatApp(viewModel: AgentViewModel) {
                                         )
                                     }
                                     if (hasMtp) {
+                                        val draftName = uiState.config.draftModelPath
+                                            .let { java.io.File(it).nameWithoutExtension }
+                                            .removePrefix("mtp-")
+                                            .replace("-it", "")
+                                            .replace("-qat", "")
+                                            .let { if (it.length > 18) it.take(18) + ".." else it }
                                         Text(
-                                            text = "⚡ MTP LINKED",
+                                            text = "⚡ MTP: $draftName",
                                             color = Color(0xFF10B981),
                                             fontSize = 7.sp,
                                             fontWeight = FontWeight.Bold,
