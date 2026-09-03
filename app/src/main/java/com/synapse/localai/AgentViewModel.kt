@@ -471,11 +471,17 @@ class AgentViewModel : ViewModel() {
             apply()
         }
 
+        val oldDraftPath = oldConfig.draftModelPath
+        val draftChanged = finalConfig.draftModelPath != oldDraftPath
+        val modelChanged = finalConfig.localModelPath != oldPath
+        val typeChanged = oldType != finalConfig.preferredModelType
+        val notLoaded = !isModelLoaded()
+
         if (finalConfig.preferredModelType == ModelType.GGUF) {
-            if (finalConfig.localModelPath != oldPath || !isModelLoaded() || oldType != ModelType.GGUF) {
+            if (modelChanged || draftChanged || typeChanged || notLoaded) {
                 closeAllModels()
                 viewModelScope.launch {
-                    delay(800)
+                    delay(300)
                     triggerModelLoad(context, finalConfig.localModelPath)
                 }
             }
@@ -492,79 +498,87 @@ class AgentViewModel : ViewModel() {
 
     fun updateConfig(config: AgentConfig, context: Context) = saveConfig(context, config)
 
+    private var modelLoadJob: Job? = null
     @Volatile private var isModelLoadingInProgress = false
 
     suspend fun triggerModelLoad(context: Context, path: String) {
-        if (isModelLoadingInProgress || _uiState.value.localModelLoading) return
-        isModelLoadingInProgress = true
-        try {
-            val type = detectModelType(path)
-            val modelName = java.io.File(path).nameWithoutExtension
-            
-            _uiState.update { it.copy(
-                localModelLoading = true, 
-                localModelLoaded = false, 
-                activeModelType = null,
-                loadingProgress = 0.05f,
-                loadingStatusText = "Initializing Neural Core..."
-            ) }
-            
-            if (type == ModelType.GGUF) {
-                try {
-                    val config = _uiState.value.config
-                    val client = GGUFModelClient().apply {
-                        serverHost = config.serverHost
-                        serverPort = config.serverPort
-                        contextLength = config.contextLength
-                        threadCount = config.threadCount
-                        maxTokens = config.maxTokens
-                        temperature = config.temperature
-                        draftModelPath = config.draftModelPath.ifBlank { null }
-                        gpuLayers = config.gpuLayers
-                        useMmap = config.useMmap
-                    }
-                    ggufClient = client
-                    client.loadModel(
-                        context = context,
-                        path = path,
-                        onStatus = { status -> addSystemLog(status) },
-                        onProgress = { progress, statusText ->
-                            _uiState.update { it.copy(loadingProgress = progress, loadingStatusText = statusText) }
-                        },
-                        onLoaded = {
-                            if (client.isLoaded) {
-                                _uiState.update { it.copy(
-                                    localModelLoaded = true, 
-                                    localModelLoading = false, 
-                                    activeModelType = ModelType.GGUF, 
-                                    activeModelName = modelName,
-                                    loadingProgress = null,
-                                    loadingStatusText = ""
-                                ) }
-                                addSystemLog("Local Model Active: $modelName")
-                            } else {
-                                _uiState.update { it.copy(
-                                    localModelLoaded = false, 
-                                    localModelLoading = false, 
-                                    loadingProgress = null,
-                                    loadingStatusText = ""
-                                ) }
-                            }
+        modelLoadJob?.cancel()
+        isModelLoadingInProgress = false
+
+        modelLoadJob = viewModelScope.launch {
+            if (isModelLoadingInProgress) return@launch
+            isModelLoadingInProgress = true
+            try {
+                val type = detectModelType(path)
+                val modelName = java.io.File(path).nameWithoutExtension
+                
+                _uiState.update { it.copy(
+                    localModelLoading = true, 
+                    localModelLoaded = false, 
+                    activeModelType = null,
+                    loadingProgress = 0.05f,
+                    loadingStatusText = "Initializing Neural Core..."
+                ) }
+                
+                if (type == ModelType.GGUF) {
+                    try {
+                        val config = _uiState.value.config
+                        val client = GGUFModelClient().apply {
+                            serverHost = config.serverHost
+                            serverPort = config.serverPort
+                            contextLength = config.contextLength
+                            threadCount = config.threadCount
+                            maxTokens = config.maxTokens
+                            temperature = config.temperature
+                            draftModelPath = config.draftModelPath.ifBlank { null }
+                            gpuLayers = config.gpuLayers
+                            useMmap = config.useMmap
                         }
-                    )
-                } catch (t: Throwable) {
-                    Log.e(TAG, "GGUF load failed", t)
-                    addLog(LogEntry(sender = "SYSTEM", text = "Load Error: ${t.message}", isError = true))
-                    _uiState.update { it.copy(
-                        localModelLoaded = false, 
-                        localModelLoading = false, 
-                        loadingProgress = null,
-                        loadingStatusText = ""
-                    ) }
+                        ggufClient = client
+                        client.loadModel(
+                            context = context,
+                            path = path,
+                            onStatus = { status -> addSystemLog(status) },
+                            onProgress = { progress, statusText ->
+                                _uiState.update { it.copy(loadingProgress = progress, loadingStatusText = statusText) }
+                            },
+                            onLoaded = {
+                                isModelLoadingInProgress = false
+                                if (client.isLoaded) {
+                                    _uiState.update { it.copy(
+                                        localModelLoaded = true, 
+                                        localModelLoading = false, 
+                                        activeModelType = ModelType.GGUF, 
+                                        activeModelName = modelName,
+                                        loadingProgress = null,
+                                        loadingStatusText = ""
+                                    ) }
+                                    addSystemLog("Local Model Active: $modelName")
+                                } else {
+                                    _uiState.update { it.copy(
+                                        localModelLoaded = false, 
+                                        localModelLoading = false, 
+                                        loadingProgress = null,
+                                        loadingStatusText = ""
+                                    ) }
+                                }
+                            }
+                        )
+                    } catch (t: Throwable) {
+                        isModelLoadingInProgress = false
+                        Log.e(TAG, "GGUF load failed", t)
+                        addLog(LogEntry(sender = "SYSTEM", text = "Load Error: ${t.message}", isError = true))
+                        _uiState.update { it.copy(
+                            localModelLoaded = false, 
+                            localModelLoading = false, 
+                            loadingProgress = null,
+                            loadingStatusText = ""
+                        ) }
+                    }
                 }
+            } finally {
+                isModelLoadingInProgress = false
             }
-        } finally {
-            isModelLoadingInProgress = false
         }
     }
 
@@ -606,11 +620,23 @@ class AgentViewModel : ViewModel() {
     }
 
     fun closeAllModels() {
+        modelLoadJob?.cancel()
+        modelLoadJob = null
+        isModelLoadingInProgress = false
         GGUFModelClient.stopGlobalServer()
         ggufClient?.close()
         ggufClient = null
         geminiClient = null
-        _uiState.update { it.copy(localModelLoaded = false, activeModelType = null, activeModelName = "", currentKeyIndex = 0, totalKeys = 0) }
+        _uiState.update { it.copy(
+            localModelLoaded = false, 
+            localModelLoading = false, 
+            loadingProgress = null,
+            loadingStatusText = "",
+            activeModelType = null, 
+            activeModelName = "", 
+            currentKeyIndex = 0, 
+            totalKeys = 0
+        ) }
     }
 
     private fun getToolsDescription(): String {
@@ -758,6 +784,11 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                 val modelType = _uiState.value.activeModelType
                 if (modelType == null || !isModelLoaded()) {
                     val modelPath = _uiState.value.config.localModelPath
+                    if (_uiState.value.config.preferredModelType == ModelType.GGUF && modelPath.isNotBlank() && File(modelPath).exists()) {
+                        addLog(LogEntry(sender = "SYSTEM", text = "Starting local model: ${File(modelPath).name}...", isError = false))
+                        actualContext?.let { ctx -> triggerModelLoad(ctx, modelPath) }
+                        return@launch
+                    }
                     val hint = if (modelPath.isNotBlank())
                         "Engine not ready. Check logs in /sdcard/Medlam-Ai/"
                     else

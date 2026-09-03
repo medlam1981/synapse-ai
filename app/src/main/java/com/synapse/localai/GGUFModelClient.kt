@@ -1,6 +1,7 @@
 package com.synapse.localai
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.system.Os
@@ -37,21 +38,21 @@ class GGUFModelClient {
 
         @Volatile private var globalServerThread: Thread? = null
         @Volatile private var globalLoadedPath: String? = null
+        @Volatile private var globalLoadedDraftPath: String? = null
         private val serverMutex = Mutex()
 
         fun stopGlobalServer() {
-            if (globalLoadedPath != null || globalServerThread != null) {
-                try {
-                    LlamaServerJNI.stop()
-                    fileLog("Stopped llama-server via JNI stopGlobalServer")
-                } catch (t: Throwable) {
-                    fileLog("Could not stop JNI server: ${t.message}")
-                }
-                globalServerThread?.interrupt()
-                globalServerThread = null
-                globalLoadedPath = null
-                try { Thread.sleep(500) } catch (_: Exception) {}
+            try {
+                LlamaServerJNI.stop()
+                fileLog("Stopped llama-server via JNI stopGlobalServer")
+            } catch (t: Throwable) {
+                fileLog("Could not stop JNI server: ${t.message}")
             }
+            globalServerThread?.interrupt()
+            globalServerThread = null
+            globalLoadedPath = null
+            globalLoadedDraftPath = null
+            try { Thread.sleep(300) } catch (_: Exception) {}
         }
 
         private fun fileLog(msg: String) {
@@ -190,6 +191,9 @@ class GGUFModelClient {
     private suspend fun launchNativeProcess(args: Array<String>, logFile: File): Int {
         return withContext(Dispatchers.IO) {
             try {
+                try {
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE)
+                } catch (_: Exception) {}
                 val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
                 Os.dup2(fd, OsConstants.STDOUT_FILENO)
                 Os.dup2(fd, OsConstants.STDERR_FILENO)
@@ -209,8 +213,9 @@ class GGUFModelClient {
         serverMutex.withLock {
             fileLog("startServer requested for: $resolvedPath")
 
-            if (globalLoadedPath == resolvedPath && isServerReady()) {
-                fileLog("Server already active: $resolvedPath")
+            val isSameInstance = globalLoadedPath == resolvedPath && globalLoadedDraftPath == (draftModelPath?.ifBlank { null })
+            if (isSameInstance && isServerReady()) {
+                fileLog("Server already active: $resolvedPath (draft: $draftModelPath)")
                 isLoaded = true
                 serverThread = globalServerThread
                 onProgress(1.0f, "ONLINE • 100%")
@@ -283,6 +288,7 @@ class GGUFModelClient {
                 "-ub", effectiveUbatch.toString(),
                 "-t", optimalThreads.toString(),
                 "-ngl", effectiveGpuLayers.toString(),
+                "--flash-attn", "on",
                 "--cache-type-k", "q8_0",
                 "--cache-type-v", "q8_0",
                 "--alias", "local",
@@ -325,12 +331,26 @@ class GGUFModelClient {
                 activeDraftModelPath = activeDraftPath
                 fileLog("⚡ MTP Speculative Decoding linked: ${File(activeDraftPath!!).name}")
                 val isStandaloneDraft = try {
-                    val f = java.io.RandomAccessFile(activeDraftPath, "r")
-                    f.seek(8)
-                    val tensorCount = java.lang.Integer.reverseBytes(f.readInt())
-                    val kvCount = java.lang.Integer.reverseBytes(f.readInt())
-                    f.close()
-                    kvCount > 10
+                    val draftFile = File(activeDraftPath)
+                    if (draftFile.name.startsWith("mtp-", ignoreCase = true) || draftFile.name.contains("assistant", ignoreCase = true)) {
+                        false
+                    } else {
+                        val f = java.io.RandomAccessFile(activeDraftPath, "r")
+                        val magic = ByteArray(4)
+                        f.readFully(magic)
+                        if (String(magic) == "GGUF") {
+                            f.seek(8)
+                            val buf = ByteArray(16)
+                            f.readFully(buf)
+                            val tensorCount = java.nio.ByteBuffer.wrap(buf, 0, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).long
+                            val kvCount = java.nio.ByteBuffer.wrap(buf, 8, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).long
+                            f.close()
+                            kvCount > 10 && tensorCount > 10
+                        } else {
+                            f.close()
+                            false
+                        }
+                    }
                 } catch (e: Exception) {
                     false
                 }
@@ -363,6 +383,7 @@ class GGUFModelClient {
             serverThread = newThread
             globalServerThread = newThread
             globalLoadedPath = resolvedPath
+            globalLoadedDraftPath = activeDraftPath
             ZramOptimizer.disableOomKiller()
 
             val startTime = System.currentTimeMillis()
@@ -384,19 +405,7 @@ class GGUFModelClient {
                 }
 
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-
-                // If MTP caused an immediate argument error or binary exit within 3.5 seconds, fallback cleanly
-                if (hasDraft && !serverBecameAlive && elapsedSec > 3.5f) {
-                    val logOutput = try { if (logFile.exists()) logFile.readText() else "" } catch (_: Exception) { "" }
-                    if (logOutput.contains("unknown option") || logOutput.contains("error") || !newThread.isAlive) {
-                        fileLog("MTP flag unsupported by binary or failed. Falling back to High-Speed Base Core:\n$logOutput")
-                        try { LlamaServerJNI.stop() } catch (_: Throwable) {}
-                        delay(500)
-                        return@withLock startServerFallback(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
-                    }
-                }
-
-                val progress = (elapsedSec / 15f).coerceIn(0.08f, 0.94f)
+                val progress = (elapsedSec / 25f).coerceIn(0.08f, 0.95f)
                 val statusText = if (serverBecameAlive) {
                     "Loading tensors into RAM (${elapsedSec.toInt()}s)..."
                 } else {
@@ -440,6 +449,7 @@ class GGUFModelClient {
         serverThread = newThread
         globalServerThread = newThread
         globalLoadedPath = resolvedPath
+        globalLoadedDraftPath = null
         ZramOptimizer.disableOomKiller()
 
         val startTime = System.currentTimeMillis()
@@ -484,7 +494,8 @@ class GGUFModelClient {
 
         modelPath = path
 
-        if (isServerReady() && globalLoadedPath == resolvedPath) {
+        val isSameInstance = isServerReady() && globalLoadedPath == resolvedPath && globalLoadedDraftPath == (draftModelPath?.ifBlank { null })
+        if (isSameInstance) {
             isLoaded = true
             onLoaded()
             return
@@ -541,6 +552,9 @@ class GGUFModelClient {
             .put("<end_of_turn>")
             .put("<eos>")
             .put("<|im_end|>")
+            .put("<|endoftext|>")
+            .put("<|eot_id|>")
+            .put("<|start_header_id|>")
             .put("User:")
             .put("<start_of_turn>user")
 
@@ -598,7 +612,7 @@ class GGUFModelClient {
         }
 
         var tokenCount = 0
-        val startTime = System.currentTimeMillis()
+        var firstTokenTime = 0L
         val reader = BufferedReader(InputStreamReader(conn.inputStream))
         var line: String? = null
         var inReasoningMode = false
@@ -626,9 +640,10 @@ class GGUFModelClient {
                             inReasoningMode = true
                             emit("<think>")
                         }
+                        if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
                         tokenCount++
-                        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                        if (elapsedSec > 0.2f) {
+                        val elapsedSec = (System.currentTimeMillis() - firstTokenTime) / 1000f
+                        if (elapsedSec > 0.1f) {
                             onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                         }
                         emit(reasoning)
@@ -639,9 +654,10 @@ class GGUFModelClient {
                             inReasoningMode = false
                             emit("</think>")
                         }
+                        if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
                         tokenCount++
-                        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                        if (elapsedSec > 0.2f) {
+                        val elapsedSec = (System.currentTimeMillis() - firstTokenTime) / 1000f
+                        if (elapsedSec > 0.1f) {
                             onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                         }
                         emit(content)
@@ -669,11 +685,15 @@ class GGUFModelClient {
             }
             globalServerThread?.interrupt()
             globalServerThread = null
-            try { Thread.sleep(800) } catch (_: Exception) {}
+            try { Thread.sleep(400) } catch (_: Exception) {}
         }
         globalLoadedPath = null
+        globalLoadedDraftPath = null
         serverThread = null
         isLoaded = false
+        try {
+            appContext?.stopService(Intent(appContext, ModelEngineService::class.java))
+        } catch (_: Exception) {}
     }
 
     fun release() {
