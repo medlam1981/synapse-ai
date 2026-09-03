@@ -438,55 +438,74 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 onOpenSettings = { showSettings = true }
             )
 
-            // CLI Workspace
-            Box(modifier = Modifier.weight(1f)) {
-                if (uiState.logs.isEmpty() && !uiState.isProcessing) {
-                    CliWelcomeScreen(
-                        onSelectPrompt = { p ->
-                            viewModel.sendCommand(p, context = context)
-                        }
-                    )
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 28.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(uiState.logs, key = { it.id }) { log ->
-                            CliLogMessageView(log = log, isDark = isDark)
-                        }
-                    }
-
-                    // Floating Jump to Latest Button when user manually scrolled away
-                    if (userScrolledAway && uiState.logs.isNotEmpty()) {
-                        Surface(
-                            onClick = {
-                                userScrolledAway = false
-                                coroutineScope.launch {
-                                    listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
-                                }
-                            },
+            // Fixed Central Workspace Chassis (Outer Frame Geometry)
+            // Dedicated structural frame wrapping the entire dynamic interaction zone
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
+                    .clip(RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(16.dp),
+                color = if (isDark) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds()
+                ) {
+                    if (uiState.logs.isEmpty() && !uiState.isProcessing) {
+                        CliWelcomeScreen(
+                            onSelectPrompt = { p ->
+                                viewModel.sendCommand(p, context = context)
+                            }
+                        )
+                    } else {
+                        // Isolated Internal Scroll Engine (Strict Boundary Clipping)
+                        LazyColumn(
+                            state = listState,
                             modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 12.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-                            shadowElevation = 6.dp
+                                .fillMaxSize()
+                                .clipToBounds(),
+                            contentPadding = PaddingValues(start = 10.dp, top = 10.dp, end = 10.dp, bottom = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            items(uiState.logs, key = { it.id }) { log ->
+                                CliLogMessageView(log = log, isDark = isDark)
+                            }
+                        }
+
+                        // Floating Jump to Latest Button inside the Chassis Viewport
+                        if (userScrolledAway && uiState.logs.isNotEmpty()) {
+                            Surface(
+                                onClick = {
+                                    userScrolledAway = false
+                                    coroutineScope.launch {
+                                        listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 12.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                                shadowElevation = 6.dp
                             ) {
-                                Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(12.dp))
-                                Text(
-                                    text = if (uiState.isProcessing) "Live Stream Tail ↓" else "Jump to Latest ↓",
-                                    color = primaryAccent,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(12.dp))
+                                    Text(
+                                        text = if (uiState.isProcessing) "Live Stream Tail ↓" else "Jump to Latest ↓",
+                                        color = primaryAccent,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
                             }
                         }
                     }
@@ -751,7 +770,7 @@ fun ConsolidatedMasterHeader(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
         color = headerBg,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -1781,9 +1800,7 @@ fun CliLogMessageView(
 
 @Composable
 fun CliFormattedBody(raw: String, isDark: Boolean) {
-    val text = raw
-        .replace(Regex("<.*?>", RegexOption.DOT_MATCHES_ALL), "")
-        .trim()
+    val text = StreamDemultiplexer.sanitizeProse(raw).trim()
 
     if (text.isBlank()) return
 

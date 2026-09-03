@@ -213,24 +213,24 @@ object StreamDemultiplexer {
     /**
      * Finds the closing fence ``` starting from fromIndex.
      * Supports newline-preceded ```, start-of-line ```, or immediately following ```.
-     * Also detects if an unclosed block hits an Executive Deployment Confirmation or next code fence.
+     * Also detects if an unclosed block hits an Executive Deployment Confirmation.
      */
     private fun findClosingFence(text: String, fromIndex: Int): Int {
-        var idx = fromIndex
-        val len = text.length
-        while (idx < len) {
-            val fence = text.indexOf("```", idx)
-            if (fence == -1) {
-                // Check if a structural boundary occurred without closing backticks
-                val execIdx = text.indexOf("### Executive Deployment Confirmation", fromIndex)
-                if (execIdx != -1) return execIdx
-                val execIdx2 = text.indexOf("Executive Deployment Confirmation:", fromIndex)
-                if (execIdx2 != -1) return execIdx2
-                return -1
-            }
+        val execIdx1 = text.indexOf("### Executive Deployment Confirmation", fromIndex)
+        val execIdx2 = text.indexOf("Executive Deployment Confirmation:", fromIndex)
+        val execBoundary = when {
+            execIdx1 != -1 && execIdx2 != -1 -> minOf(execIdx1, execIdx2)
+            execIdx1 != -1 -> execIdx1
+            execIdx2 != -1 -> execIdx2
+            else -> -1
+        }
 
-            // Ensure this is a closing fence or boundary
+        val fence = text.indexOf("```", fromIndex)
+        if (fence != -1 && (execBoundary == -1 || fence < execBoundary)) {
             return fence
+        }
+        if (execBoundary != -1) {
+            return execBoundary
         }
         return -1
     }
@@ -241,7 +241,10 @@ object StreamDemultiplexer {
      * HTML elements, brackets) outside an active code fence, auto-routes them into an isolated Code container
      * rather than rendering them as unstyled raw text in the chat bubble.
      *
-     * Also cleanly demarcates "### Executive Deployment Confirmation:" onto its own isolated block.
+     * Features:
+     * - Brace balance tracking: keeps blocks open until braces close.
+     * - Multi-file boundary recognition: detects transitions like styles.css or script.js.
+     * - Clean structural demarcation for Executive Deployment Confirmation.
      */
     fun processProseWithQuarantine(rawChunk: String, hintFilePath: String? = null): List<DemuxBlock> {
         if (rawChunk.isBlank()) return emptyList()
@@ -273,6 +276,7 @@ object StreamDemultiplexer {
             val proseBuffer = StringBuilder()
             val codeBuffer = StringBuilder()
             var inQuarantinedCode = false
+            var openBraces = 0
             var detectedLang = "code"
             var quarantinedPath: String? = hintFilePath
 
@@ -299,6 +303,7 @@ object StreamDemultiplexer {
                 }
                 codeBuffer.clear()
                 inQuarantinedCode = false
+                openBraces = 0
                 detectedLang = "code"
                 quarantinedPath = null
             }
@@ -308,17 +313,21 @@ object StreamDemultiplexer {
                 val trimmed = line.trim()
                 val isCode = isLikelyCodeLine(trimmed)
 
-                // Detect file path hints in comments (e.g. /* styles.css */ or // script.js)
+                // Detect file transition hints in comments (e.g. /* styles.css */ or // script.js)
                 val pathHint = detectPathFromCodeComments(line) ?: ToolExecutor.detectFilePath(line)
                 if (pathHint != null) {
+                    if (inQuarantinedCode && quarantinedPath != null && quarantinedPath != pathHint) {
+                        // Multi-file transition inside prose: close current file and start new file container
+                        flushCode()
+                    }
                     quarantinedPath = pathHint
                 }
 
                 if (isCode) {
                     if (!inQuarantinedCode) {
-                        // Check look-ahead: is this a single isolated line or part of a code block?
+                        // Check look-ahead: is this part of an upcoming code block?
                         val nextLineIsCode = (i + 1 < lines.size) && isLikelyCodeLine(lines[i + 1].trim())
-                        val isMultiProperty = trimmed.contains("{") || trimmed.contains(";") || trimmed.startsWith("<")
+                        val isMultiProperty = trimmed.contains("{") || (trimmed.contains(":") && trimmed.endsWith(";")) || trimmed.startsWith("<")
                         if (nextLineIsCode || isMultiProperty || trimmed.startsWith("/*") || trimmed.startsWith("//")) {
                             flushProse()
                             inQuarantinedCode = true
@@ -327,6 +336,10 @@ object StreamDemultiplexer {
                     }
 
                     if (inQuarantinedCode) {
+                        // Update brace balance
+                        openBraces += trimmed.count { it == '{' }
+                        openBraces = (openBraces - trimmed.count { it == '}' }).coerceAtLeast(0)
+
                         detectedLang = inferLanguageFromLine(trimmed, detectedLang)
                         codeBuffer.append(line).append("\n")
                     } else {
@@ -334,11 +347,17 @@ object StreamDemultiplexer {
                     }
                 } else {
                     if (inQuarantinedCode) {
-                        // Blank lines inside code are permitted
-                        if (trimmed.isEmpty()) {
+                        // If we are inside unbalanced braces (CSS selector, JS block, HTML style), stay in code!
+                        val isInsideBraces = openBraces > 0
+                        val isInsideHtml = detectedLang == "html" && !trimmed.startsWith("#") && !trimmed.startsWith("-") && !trimmed.startsWith("•")
+                        val isCommentOrIndented = trimmed.isEmpty() || line.startsWith("  ") || line.startsWith("\t") || trimmed.startsWith("*")
+
+                        if (isInsideBraces || isInsideHtml || isCommentOrIndented) {
+                            openBraces += trimmed.count { it == '{' }
+                            openBraces = (openBraces - trimmed.count { it == '}' }).coerceAtLeast(0)
                             codeBuffer.append(line).append("\n")
                         } else {
-                            // Non-code line reached: close quarantined code container
+                            // Genuine non-code prose reached: close quarantined code container
                             flushCode()
                             proseBuffer.append(line).append("\n")
                         }
@@ -373,7 +392,29 @@ object StreamDemultiplexer {
         // CSS patterns
         if (trimmed.startsWith(".") && trimmed.contains("{")) return true
         if (trimmed.startsWith("#") && !trimmed.startsWith("# ") && trimmed.contains("{")) return true
-        if (trimmed.startsWith("@media") || trimmed.startsWith("@keyframes") || trimmed.startsWith("@import")) return true
+        if (trimmed.startsWith("@media") || trimmed.startsWith("@keyframes") || trimmed.startsWith("@import") || trimmed.startsWith("@font-face")) return true
+        if (lower.startsWith("body ") && trimmed.contains("{")) return true
+        if (lower.startsWith("html ") && trimmed.contains("{")) return true
+        if (lower.startsWith("nav ") && trimmed.contains("{")) return true
+        if (lower.startsWith("header ") && trimmed.contains("{")) return true
+        if (lower.startsWith("main ") && trimmed.contains("{")) return true
+        if (lower.startsWith("footer ") && trimmed.contains("{")) return true
+        if (lower.startsWith("section ") && trimmed.contains("{")) return true
+        if (lower.startsWith("div ") && trimmed.contains("{")) return true
+        if (lower.startsWith("button ") && trimmed.contains("{")) return true
+        if (lower.startsWith("input ") && trimmed.contains("{")) return true
+        if (lower.startsWith("form ") && trimmed.contains("{")) return true
+        if (lower.startsWith("table ") && trimmed.contains("{")) return true
+        if (lower.startsWith("span ") && trimmed.contains("{")) return true
+        if (lower.startsWith("p ") && trimmed.contains("{")) return true
+        if (lower.startsWith("a ") && trimmed.contains("{")) return true
+        if (trimmed.startsWith("*") && trimmed.contains("{")) return true
+
+        // CSS declarations: property: value;
+        if (trimmed.contains(":") && trimmed.endsWith(";") && !trimmed.startsWith("http") && !trimmed.startsWith("Note:") && !trimmed.startsWith("Step:")) {
+            return true
+        }
+
         if (lower.startsWith("display:") || lower.startsWith("flex:") || lower.startsWith("margin:") ||
             lower.startsWith("padding:") || lower.startsWith("background:") || lower.startsWith("background-color:") ||
             lower.startsWith("color:") || lower.startsWith("font-") || lower.startsWith("border:") ||
@@ -381,11 +422,11 @@ object StreamDemultiplexer {
             lower.startsWith("box-sizing:") || lower.startsWith("align-items:") || lower.startsWith("justify-content:") ||
             lower.startsWith("position:") || lower.startsWith("top:") || lower.startsWith("left:") ||
             lower.startsWith("z-index:") || lower.startsWith("overflow:") || lower.startsWith("cursor:") ||
-            lower.startsWith("box-shadow:") || lower.startsWith("transition:")) return true
+            lower.startsWith("box-shadow:") || lower.startsWith("transition:") || lower.startsWith("gap:")) return true
         if (trimmed == "}" || trimmed == "};" || trimmed == "});" || trimmed == "{") return true
 
         // HTML / XML patterns
-        if (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</") || lower.startsWith("<!doctype"))) return true
+        if (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</") || trimmed.contains(">") || lower.startsWith("<!doctype"))) return true
 
         // JavaScript / TypeScript patterns
         if (lower.startsWith("function ") || lower.startsWith("function(") || lower.startsWith("const ") ||
@@ -400,18 +441,23 @@ object StreamDemultiplexer {
             lower.startsWith("curl ") || lower.startsWith("npm ") || lower.startsWith("git ")) return true
 
         // Code comment banners
-        if (trimmed.startsWith("/*") || trimmed.startsWith("//") || trimmed.startsWith("#!/")) return true
+        if (trimmed.startsWith("/*") || trimmed.startsWith("//") || trimmed.startsWith("#!/") || trimmed.startsWith("<!--")) return true
 
         return false
     }
 
     private fun inferLanguageFromLine(trimmed: String, current: String): String {
         val lower = trimmed.lowercase()
+        // If already recognized as HTML, don't drop to CSS just because of an inline style
+        if (current == "html" && !trimmed.startsWith("/*") && !trimmed.startsWith("// styles.css")) {
+            return "html"
+        }
         return when {
             lower.startsWith("<") -> "html"
             trimmed.startsWith(".") && trimmed.contains("{") -> "css"
             lower.contains("margin:") || lower.contains("padding:") || lower.contains("display:") ||
-            lower.contains("background:") || lower.contains("border:") || lower.contains("flex:") -> "css"
+            lower.contains("background:") || lower.contains("border:") || lower.contains("flex:") ||
+            (trimmed.contains(":") && trimmed.endsWith(";")) -> "css"
             lower.startsWith("function") || lower.startsWith("const ") || lower.startsWith("let ") ||
             lower.startsWith("document.") || lower.startsWith("console.") -> "javascript"
             lower.startsWith("fun ") || lower.startsWith("val ") || lower.startsWith("package ") -> "kotlin"
