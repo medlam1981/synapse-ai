@@ -1,27 +1,46 @@
 package com.synapse.localai.ui
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * UI/UX Architectural Specification: Universal Stripping of Ambient Glows, Halos, and Drop Shadows.
+ * Dual-Theme Tactile Card Elevation (Zero Neon Glows):
  *
- * Zero Perimeter Lighting:
- * Completely stripped of all blue, violet, and neon outer glows, ambient drop shadows,
- * and halo diffusions from every element in the application.
+ * Light Theme (Crisp Pure-White Elevation):
+ * - Ambient drop shadow: Diffuse, natural elevation shadow (rgba(15, 23, 42, 0.08), Y = 2dp, blur 12-16dp)
+ *   giving cards clean floating depth without visible harsh borders or gray muddy tones.
  *
- * Strict Borderless & Flat Separation:
- * Maintains a flat, clean interface. Component separation relies entirely on subtle,
- * solid tonal contrast between the surface and background layers — zero glowing strokes,
- * zero colored borders, and zero luminous drop shadows.
+ * Dark Theme (Tactile Obsidian Depth):
+ * - Ambient drop shadow: Deep, realistic ambient shadow (rgba(0, 0, 0, 0.55), Y = 3dp, blur 14-18dp),
+ *   providing structural physical elevation against the deep obsidian canvas.
+ *
+ * Zero perimeter neon halos, electric cyan bleed, or colored glow outlines.
  */
 @Composable
+fun Modifier.tactileCardElevation(
+    isDark: Boolean,
+    cornerRadius: Dp = 16.dp,
+    elevation: Dp = if (isDark) 3.dp else 2.dp
+): Modifier {
+    val shadowColor = if (isDark) Color(0x8C000000) else Color(0x140F172A)
+    return this.shadow(
+        elevation = elevation,
+        shape = RoundedCornerShape(cornerRadius),
+        clip = false,
+        ambientColor = shadowColor,
+        spotColor = shadowColor
+    )
+}
+
+@Composable
 fun Modifier.tactileGlassGlow(
-    cornerRadius: Dp = 10.dp,
-    elevation: Dp = 0.dp,
+    cornerRadius: Dp = 16.dp,
+    elevation: Dp = 2.dp,
     isDark: Boolean = false,
     shadowColor: Color? = null,
     borderWidth: Dp = 0.dp,
@@ -29,4 +48,4 @@ fun Modifier.tactileGlassGlow(
     coreColor: Color? = null,
     hazeColor: Color? = null,
     ambientColor: Color? = null
-): Modifier = this
+): Modifier = this.tactileCardElevation(isDark = isDark, cornerRadius = cornerRadius, elevation = elevation)

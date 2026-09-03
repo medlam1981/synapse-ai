@@ -254,10 +254,10 @@ class GGUFModelClient {
             val logFile = File(logDir, "native_log.txt")
             try { logFile.delete() } catch (_: Exception) {}
 
-            // 2. Hardware-Matched Resource Allocation (prioritize performance cores, size batches)
+            // 2. Hardware-Matched Resource Allocation (strictly physical performance cores)
             val hw = appContext?.let { DeviceProfile.detect(it) }
-            val optimalThreads = if (hw != null) DeviceProfile.optimalThreads(hw) else (if (threadCount > 0) threadCount else 4)
-            val optimalBatchThreads = if (hw != null) (hw.totalCores.coerceIn(optimalThreads, 8)) else optimalThreads
+            val optimalThreads = if (hw != null) DeviceProfile.optimalThreads(hw) else (if (threadCount in 2..4) threadCount else 4)
+            val optimalBatchThreads = optimalThreads // Pin strictly to physical Performance/Big cores; never thrash little efficiency cores
             val optimalBatch = if (hw != null) DeviceProfile.optimalBatch(hw) else 256
             val optimalUbatch = if (hw != null) DeviceProfile.optimalUbatch(hw) else 128
 
@@ -292,11 +292,14 @@ class GGUFModelClient {
                 "-b", effectiveBatch.toString(),
                 "-ub", effectiveUbatch.toString(),
                 "-t", optimalThreads.toString(),
-                "-tb", optimalBatchThreads.toString(), // Burst prefill on all available cores for ultra-fast thinking
+                "-tb", optimalBatchThreads.toString(), // Strictly physical Performance cores
                 "-ngl", effectiveGpuLayers.toString(),
                 "--flash-attn", "on",
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,
+                "--cache-reuse", "64", // Strict KV prefix cache reuse across conversational turns
+                "--slots", "1",
+                "--slot-save-path", "/sdcard/Medlam-Ai/slots",
                 "--alias", "local",
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString()
@@ -664,6 +667,8 @@ class GGUFModelClient {
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)
             .put("cache_prompt", true)
+            .put("slot_id", 0)
+            .put("id_slot", 0)
             .put("stop", stopArray)
 
         val bodyBytes = body.toString().toByteArray()

@@ -6,8 +6,8 @@ import androidx.compose.ui.graphics.Color
 // 1. Dark Theme Palette (Modern Cyber Obsidian)
 // =========================================================================
 val ObsidianBackground = Color(0xFF0B0F17) // Deep space obsidian canvas
-val ObsidianSurface = Color(0xFF111827) // Elevated slate-navy surface
-val ObsidianSurfaceTranslucent = Color(0xFF111827) // Solid elevated slate-navy surface
+val ObsidianSurface = Color(0xFF161E2E) // Elevated charcoal slate (#161E2E)
+val ObsidianSurfaceTranslucent = Color(0xFF161E2E) // Elevated charcoal slate
 val ObsidianOnSurface = Color(0xFFF8FAFC) // Crisp white primary labels
 val ObsidianOnSurfaceVariant = Color(0xFF94A3B8) // Cool slate secondary telemetry
 val ObsidianPrimary = Color(0xFF38BDF8) // Modern vibrant sky azure
@@ -20,8 +20,8 @@ val ObsidianError = Color(0xFFEF4444)
 // =========================================================================
 // 2. Light Theme Palette (Modern Porcelain Minimalist)
 // =========================================================================
-val PorcelainBackground = Color(0xFFF4F6F9) // Clean, airy porcelain canvas
-val PorcelainSurface = Color(0xFFFFFFFF) // Pure elevated white surfaces
+val PorcelainBackground = Color(0xFFF8FAFC) // Crisp, subtle off-white canvas (#F8FAFC)
+val PorcelainSurface = Color(0xFFFFFFFF) // Pure elevated white surfaces (#FFFFFF)
 val PorcelainSurfaceElevated = Color(0xFFFFFFFF)
 val PorcelainOnSurface = Color(0xFF0F172A) // High-contrast deep slate
 val PorcelainOnSurfaceVariant = Color(0xFF475569) // Muted charcoal telemetry

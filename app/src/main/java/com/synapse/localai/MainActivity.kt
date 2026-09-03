@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import com.synapse.localai.ui.SyntaxHighlighter
 import com.synapse.localai.ui.tactileGlassGlow
+import com.synapse.localai.ui.tactileCardElevation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -338,7 +339,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val cyanAccent = indigoAccent
     val primaryAccent = MaterialTheme.colorScheme.primary
     val secondaryAccent = MaterialTheme.colorScheme.secondary
-    val inputBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
+    val inputBg = MaterialTheme.colorScheme.surfaceContainer
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -445,9 +446,10 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
+                    .tactileCardElevation(isDark, cornerRadius = 16.dp)
                     .clip(RoundedCornerShape(16.dp)),
                 shape = RoundedCornerShape(16.dp),
-                color = if (isDark) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surfaceContainerLow,
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Box(
@@ -517,7 +519,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .imePadding(),
-                color = surfaceColor
+                color = MaterialTheme.colorScheme.background
             ) {
                 Column(
                     modifier = Modifier
@@ -745,19 +747,17 @@ fun ConsolidatedMasterHeader(
     onOpenSettings: () -> Unit
 ) {
     var stats by remember { mutableStateOf(SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)) }
-    var currentTime by remember { mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())) }
 
     LaunchedEffect(Unit) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             while (true) {
                 stats = getSystemStats(context)
-                currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                 kotlinx.coroutines.delay(2000)
             }
         }
     }
 
-    val headerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
+    val headerBg = MaterialTheme.colorScheme.surfaceContainer
     val subCardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceVariant
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -770,7 +770,8 @@ fun ConsolidatedMasterHeader(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp)
+            .tactileCardElevation(isDark, cornerRadius = 16.dp),
         color = headerBg,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -925,33 +926,34 @@ fun ConsolidatedMasterHeader(
             }
 
             // -------------------------------------------------------------
-            // 3. BOTTOM ROW: Decompressed hardware telemetry dashboard
-            // Showing: Battery, RAM, Storage, Thermals, Engine Flag, Task Counter, and Clock
-            // Adaptive horizontal spacing (11-12dp gap) + subtle micro-dividers + proportional scaling
+            // 3. BOTTOM ROW: Compact hardware telemetry ribbon (7 indicators, single row)
+            // Showing: Battery % • RAM (GB) • Storage (GB) • Temperature (°C) • Auth Key (🔑) • MTP Acceleration (⚡ MTP) • Task Counter (TSK #)
+            // Deprecated: Clock permanently removed. Storage suffix stripped of " HD".
+            // Tight horizontal spacing (6-8dp gap), scaled-down icon glyphs (13-14dp) and typography (11sp).
             // -------------------------------------------------------------
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 2.dp, vertical = 3.dp),
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(11.dp)
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                // 1. Battery
+                // 1. Battery %
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
                         imageVector = if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull,
                         contentDescription = "Battery",
                         tint = if (stats.isCharging) primaryAccent else textDim,
-                        modifier = Modifier.size(11.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = if (stats.isCharging) "⚡${stats.battery}%" else "${stats.battery}%",
                         color = textBright,
-                        fontSize = 8.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -962,21 +964,21 @@ fun ConsolidatedMasterHeader(
                 // Micro-divider
                 Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
 
-                // 2. RAM
+                // 2. RAM (GB)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Memory,
                         contentDescription = "RAM",
                         tint = primaryAccent,
-                        modifier = Modifier.size(11.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = stats.ramFree,
                         color = textBright,
-                        fontSize = 8.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -987,21 +989,21 @@ fun ConsolidatedMasterHeader(
                 // Micro-divider
                 Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
 
-                // 3. Storage
+                // 3. Storage (GB) - Stripped of " HD" suffix
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Storage,
                         contentDescription = "Storage",
                         tint = primaryAccent,
-                        modifier = Modifier.size(11.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = "${stats.storageFree} HD",
+                        text = stats.storageFree,
                         color = textBright,
-                        fontSize = 8.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -1012,21 +1014,21 @@ fun ConsolidatedMasterHeader(
                 // Micro-divider
                 Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
 
-                // 4. Thermals
+                // 4. Temperature (°C)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Thermostat,
                         contentDescription = "Thermals",
                         tint = if (stats.cpuTempInt > 55) MaterialTheme.colorScheme.error else primaryAccent,
-                        modifier = Modifier.size(11.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = stats.cpuTemp,
                         color = textBright,
-                        fontSize = 8.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -1037,21 +1039,21 @@ fun ConsolidatedMasterHeader(
                 // Micro-divider
                 Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
 
-                // 5. Engine Flag / MTP Status
+                // 5. Auth Key (🔑)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.VpnKey,
-                        contentDescription = "Engine",
+                        contentDescription = "Auth Key",
                         tint = secondaryAccent,
-                        modifier = Modifier.size(10.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = if (isCloudMode) "CLOUD" else if (hasMtp) "⚡ MTP" else "LOCAL",
+                        text = if (isCloudMode) (if (uiState.config.geminiApiKeys.isNotBlank()) "AUTH" else "NO KEY") else "LOCAL",
                         color = secondaryAccent,
-                        fontSize = 8.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -1062,47 +1064,47 @@ fun ConsolidatedMasterHeader(
                 // Micro-divider
                 Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
 
-                // 6. Task Counter
+                // 6. MTP Acceleration (⚡ MTP)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Bolt,
+                        contentDescription = "MTP Acceleration",
+                        tint = if (hasMtp) primaryAccent else textDim,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = if (hasMtp) "MTP" else "OFF",
+                        color = if (hasMtp) primaryAccent else textDim,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 7. Task Counter (TSK #)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Text(
                         text = "TSK",
                         color = primaryAccent,
-                        fontSize = 8.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
                         text = "$totalTasks",
                         color = textBright,
-                        fontSize = 8.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-
-                // Micro-divider
-                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
-
-                // 7. Session Clock
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Schedule,
-                        contentDescription = "Clock",
-                        tint = primaryAccent,
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Text(
-                        text = currentTime,
-                        color = textBright,
-                        fontSize = 8.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -1604,9 +1606,10 @@ fun CliLogMessageView(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 3.dp),
+                .padding(vertical = 3.dp)
+                .tactileCardElevation(isDark, cornerRadius = 16.dp),
             shape = RoundedCornerShape(16.dp),
-            color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
+            color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, borderColor)
         ) {
             Row(
@@ -1659,13 +1662,14 @@ fun CliLogMessageView(
             it is StreamDemultiplexer.DemuxBlock.Prose && isArabic(it.text)
         }
 
-        val cadreBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
-        val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+        val cadreBg = MaterialTheme.colorScheme.surfaceContainer
+        val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest
 
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp),
+                .padding(vertical = 4.dp)
+                .tactileCardElevation(isDark, cornerRadius = 16.dp),
             shape = RoundedCornerShape(16.dp),
             color = cadreBg,
             border = BorderStroke(1.dp, borderColor)

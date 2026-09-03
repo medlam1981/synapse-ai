@@ -21,23 +21,23 @@ import androidx.core.view.WindowCompat
 // =========================================================================
 val ColorScheme.surfaceContainerLowest: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF0B0F17) else Color(0xFFF4F6F9)
+    get() = if (isSystemInDarkTheme()) Color(0xFF0B0F17) else Color(0xFFF8FAFC)
 
 val ColorScheme.surfaceContainerLow: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF111827) else Color(0xFFFFFFFF)
+    get() = if (isSystemInDarkTheme()) Color(0xFF161E2E) else Color(0xFFFFFFFF)
 
 val ColorScheme.surfaceContainer: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF162032) else Color(0xFFFFFFFF)
+    get() = if (isSystemInDarkTheme()) Color(0xFF161E2E) else Color(0xFFFFFFFF)
 
 val ColorScheme.surfaceContainerHigh: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF1F2B3E) else Color(0xFFEDF2F7)
+    get() = if (isSystemInDarkTheme()) Color(0xFF1E283A) else Color(0xFFEDF2F7)
 
 val ColorScheme.surfaceContainerHighest: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF29384E) else Color(0xFFE2E8F0)
+    get() = if (isSystemInDarkTheme()) Color(0xFF263346) else Color(0xFFE2E8F0)
 
 // =========================================================================
 // 1. Dark Theme Palette (Modern Cyber Obsidian)

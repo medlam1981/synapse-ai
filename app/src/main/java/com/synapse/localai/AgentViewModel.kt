@@ -702,10 +702,23 @@ The file execution engine automatically parses this block and writes the file di
 """.trimIndent()
     }
 
+    @Volatile
+    private var cachedStaticPrefix: String? = null
+    @Volatile
+    private var cachedPrefixKey: String = ""
+
     private fun buildSystemPrompt(context: Context? = null): String {
         val config = _uiState.value.config
         val actualContext = context ?: MainActivity.instance
         
+        val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
+        val customPrompt = config.systemPrompt.trim()
+        val currentKey = "${activePersonas.sorted().joinToString(",")}|$customPrompt"
+
+        if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) {
+            return cachedStaticPrefix!!
+        }
+
         // 1. Distilled Epistemic Mind (hardware, memory snapshot, user preferences)
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
 
@@ -716,25 +729,24 @@ The file execution engine automatically parses this block and writes the file di
         // 3. Operational Toolchains Description
         val toolsDesc = getToolsDescription()
 
-        // 4. Background Task Section
-        val taskContext = taskMemory?.getContextForAI() ?: ""
-        val taskSection = if (taskContext.isNotBlank()) "\n\n$taskContext" else ""
-
-        // 5. Reasoning & Code Containment Guidelines
+        // 4. Reasoning & Code Containment Guidelines
         val thoughtGuideline = """
 ## Execution & Reasoning Guidelines:
 1. Preliminary Planning & Reasoning: Always formulate your internal thought process, task breakdown, architectural plan, or tool strategy inside <think>...</think> tags before generating content or executing tools.
-2. Clean Separation: Never place internal thoughts, planning overviews, or reasoning inside markdown code blocks (e.g., never use ```markdown or ```thought for planning).
-3. Strict Code Fence Containment: Only use triple-backtick code fences (```lang) for actual executable code or configuration files (html, css, js, python, bash, json, etc.). All generated code must be parsed and isolated exclusively inside code fences. Raw code syntax, script logic, and HTML tags must NEVER leak or render as regular prose text.
+2. Clean Separation: Never place internal thoughts, planning overviews, or reasoning inside markdown code blocks.
+3. Strict Code Fence Containment: Only use triple-backtick code fences (```lang) for actual executable code or configuration files. Raw code syntax, script logic, and HTML tags must NEVER leak or render as regular prose text.
 4. Post-Execution Summary Hygiene & Elimination of Code Echoing:
    - When generating code files for storage (e.g., /sdcard/Medlam-Ai/...), deliver each file within its dedicated fenced code block.
    - DO NOT repeat, quote, or echo generated code snippets in the conversational summary response following the code blocks.
    - Conclude exclusively with a high-level executive summary: features implemented, API endpoints used, and confirmation of file paths.
 """.trimIndent()
 
-        val customPrompt = config.systemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
+        val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
 
-        return "$livingMind\n\n$activePersonasMarkdown\n\n$toolsDesc\n\n$thoughtGuideline$customPrompt$taskSection"
+        val compiled = "$livingMind\n\n$activePersonasMarkdown\n\n$toolsDesc\n\n$thoughtGuideline$customPromptSection"
+        cachedPrefixKey = currentKey
+        cachedStaticPrefix = compiled
+        return compiled
     }
 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
@@ -922,15 +934,13 @@ The file execution engine automatically parses this block and writes the file di
                             }
                         }
 
-                        stream.collect { chunk ->
-                            responseSb.append(chunk)
-                            val rawText = responseSb.toString()
-                            val demuxed = StreamDemultiplexer.demux(rawText)
+                        var lastUiUpdateTime = 0L
+                        var pendingUiUpdate = false
 
-                            // Synchronous Live Writing directly into physical disk buffer in real time
+                        val pushUiUpdate = { rawText: String ->
+                            val demuxed = StreamDemultiplexer.demux(rawText)
                             liveDiskStreamer.onChunk(rawText)
 
-                            // Granular Real-Time Phase Reflection (Dynamic Activity Bar Tracking)
                             val hasCodeBlock = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code }
                             val isCodeStreaming = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code && !it.isClosed }
                             val detectedPath = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.Code>().lastOrNull()?.filePath ?: ToolExecutor.detectFilePath(rawText)
@@ -976,6 +986,23 @@ The file execution engine automatically parses this block and writes the file di
                                     }
                                 )
                             }
+                        }
+
+                        stream.collect { chunk ->
+                            responseSb.append(chunk)
+                            val now = System.currentTimeMillis()
+                            // Decouple incoming tokens from UI rendering: buffer/throttle UI recomposition to 20 FPS (50ms)
+                            if (now - lastUiUpdateTime >= 50L) {
+                                lastUiUpdateTime = now
+                                pushUiUpdate(responseSb.toString())
+                                pendingUiUpdate = false
+                            } else {
+                                pendingUiUpdate = true
+                            }
+                        }
+
+                        if (pendingUiUpdate) {
+                            pushUiUpdate(responseSb.toString())
                         }
                     } catch (e: Exception) {
                         streamInterrupted = true

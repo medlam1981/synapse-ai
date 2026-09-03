@@ -73,6 +73,6 @@ object DeviceProfile {
      * over efficiency clusters to maximize token generation speed without thrashing.
      */
     fun optimalThreads(hw: HardwareProfile): Int {
-        return hw.performanceCores.coerceIn(2, 6)
+        return hw.performanceCores.coerceIn(2, 4)
     }
 }
