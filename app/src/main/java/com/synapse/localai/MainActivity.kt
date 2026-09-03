@@ -217,8 +217,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SynapseAITheme {
-                val isDark = isSystemInDarkTheme()
-                val bgColor = if (isDark) Color(0xFF070A0F) else Color(0xFFF4F6F9)
+                val bgColor = MaterialTheme.colorScheme.surface
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -335,7 +334,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val cyanAccent = indigoAccent
     val primaryAccent = MaterialTheme.colorScheme.primary
     val secondaryAccent = MaterialTheme.colorScheme.secondary
-    val inputBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.65f else 0.85f)
+    val inputBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -539,8 +538,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
                         val isModelReady = uiState.localModelLoaded && !isModelLoading
 
-                        val beaconGreen = Color(0xFF10B981) // High-Tech Neural Core Green
-                        val offlineDotColor = if (isDark) Color(0xFF64748B) else Color(0xFF94A3B8)
+                        val beaconGreen = MaterialTheme.colorScheme.primary
+                        val offlineDotColor = MaterialTheme.colorScheme.outline
 
                         // Breathing animation for Loading / Initializing phase
                         val beaconTransition = rememberInfiniteTransition(label = "beaconPulseTransition")
@@ -565,7 +564,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.55f else 0.45f),
+                            color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark)
@@ -729,7 +728,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         "Idle / Ready"
                     }
 
-                    val dotColor = if (isBusy) primaryAccent else Color(0xFF10B981)
+                    val dotColor = if (isBusy) primaryAccent else MaterialTheme.colorScheme.primary
                     val textColor = if (isBusy) primaryAccent else textDim
 
                     Surface(
@@ -738,7 +737,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp)
                             .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
                         shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isBusy) 0.5f else 0.3f)
+                        color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isBusy) 0.8f else 0.5f) else MaterialTheme.colorScheme.surfaceContainerLowest
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -917,7 +916,7 @@ fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState
         }
     }
 
-    val capsuleBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    val capsuleBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
     val capsuleBorder = MaterialTheme.colorScheme.outlineVariant
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1203,9 +1202,9 @@ fun CliCodeBlockContainer(
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
-    val containerBg = if (isDark) Color(0xFF0D1117) else Color(0xFFF6F8FA)
-    val topBarBg = if (isDark) Color(0xFF161B22) else Color(0xFFEAEEF2)
-    val borderColor = if (isDark) Color(0xFF30363D) else Color(0xFFD0D7DE)
+    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surfaceContainerLowest
+    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerHigh
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val primaryColor = MaterialTheme.colorScheme.primary
 
@@ -1711,6 +1710,9 @@ fun CliWelcomeScreen(
     val surfaceColor = MaterialTheme.colorScheme.surface
     val borderColor = MaterialTheme.colorScheme.outlineVariant
 
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
+
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.Center
@@ -1729,8 +1731,8 @@ fun CliWelcomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 5.dp)
-                    .tactileGlassGlow(cornerRadius = 8.dp, isDark = isSystemInDarkTheme()),
-                color = surfaceColor,
+                    .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
+                color = cardBg,
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Row(
@@ -1761,16 +1763,20 @@ fun SidebarContent(
     val isDark = isSystemInDarkTheme()
     val sessions by viewModel.chatSessions.collectAsState()
     val activeSessionId by viewModel.currentSessionId.collectAsState()
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val borderColor = MaterialTheme.colorScheme.outlineVariant
-    val textBright = MaterialTheme.colorScheme.onSurface
-    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
-    val indigoAccent = MaterialTheme.colorScheme.primary
-    val cyanAccent = indigoAccent
+
+    val drawerBg = MaterialTheme.colorScheme.surfaceContainerLow
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val primary = MaterialTheme.colorScheme.primary
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+    val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
+    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
+    val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+    val errorColor = MaterialTheme.colorScheme.error
 
     ModalDrawerSheet(
-        drawerContainerColor = surfaceColor,
-        drawerContentColor = textBright,
+        drawerContainerColor = drawerBg,
+        drawerContentColor = onSurface,
         modifier = Modifier.width(300.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -1781,9 +1787,9 @@ fun SidebarContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("SESSION ARCHIVE", color = cyanAccent, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                Text("SESSION ARCHIVE", color = primary, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                 IconButton(onClick = onCloseDrawer) {
-                    Icon(Icons.Outlined.Close, "Close", tint = textDim, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Outlined.Close, "Close", tint = onSurfaceVariant, modifier = Modifier.size(18.dp))
                 }
             }
 
@@ -1794,22 +1800,25 @@ fun SidebarContent(
                     onCloseDrawer()
                 },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = borderColor.copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(6.dp)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = primaryContainer,
+                    contentColor = onPrimaryContainer
+                ),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                Text("+ New Session", color = cyanAccent, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                Text("+ New Session", color = onPrimaryContainer, fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(10.dp))
-            Divider(color = borderColor, thickness = 0.5.dp)
+            Divider(color = dividerColor, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(10.dp))
 
             if (sessions.isEmpty()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("No archived sessions", color = textDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    Text("No archived sessions", color = onSurfaceVariant, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                 }
             } else {
-                LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(sessions, key = { it.id }) { s ->
                         val selected = s.id == activeSessionId
                         val isSessionArabic = isArabic(s.title)
@@ -1818,34 +1827,35 @@ fun SidebarContent(
                                 viewModel.switchSession(s.id)
                                 onCloseDrawer()
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = if (selected) cyanAccent.copy(alpha = if (isDark) 0.15f else 0.08f) else Color.Transparent,
-                            shape = RoundedCornerShape(6.dp),
-                            border = if (selected) BorderStroke(0.5.dp, cyanAccent.copy(alpha = 0.5f)) else null
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark, elevation = if (selected) 4.dp else 2.dp),
+                            color = if (selected) primaryContainer else surfaceContainer,
+                            shape = RoundedCornerShape(8.dp)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = s.title,
-                                        color = if (selected) cyanAccent else textBright,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selected) onPrimaryContainer else onSurface,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                         fontFamily = if (isSessionArabic) FontFamily.SansSerif else FontFamily.Monospace,
                                         maxLines = 1
                                     )
                                     Text(
                                         text = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(s.updatedAt)),
-                                        color = textDim,
-                                        fontSize = 8.5.sp,
+                                        color = if (selected) onPrimaryContainer.copy(alpha = 0.75f) else onSurfaceVariant,
+                                        fontSize = 9.sp,
                                         fontFamily = FontFamily.Monospace
                                     )
                                 }
-                                IconButton(onClick = { viewModel.deleteSession(s.id) }, modifier = Modifier.size(20.dp)) {
-                                    Icon(Icons.Outlined.DeleteOutline, "Del", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                                IconButton(onClick = { viewModel.deleteSession(s.id) }, modifier = Modifier.size(22.dp)) {
+                                    Icon(Icons.Outlined.DeleteOutline, "Del", tint = if (selected) onPrimaryContainer.copy(alpha = 0.8f) else errorColor, modifier = Modifier.size(15.dp))
                                 }
                             }
                         }
@@ -1853,22 +1863,28 @@ fun SidebarContent(
                 }
             }
 
-            Divider(color = borderColor, thickness = 0.5.dp)
+            Divider(color = dividerColor, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(10.dp))
 
-            Row(
+            Surface(
+                onClick = {
+                    onOpenSettings()
+                    onCloseDrawer()
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable {
-                        onOpenSettings()
-                        onCloseDrawer()
-                    }
-                    .padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark, elevation = 2.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = surfaceContainer
             ) {
-                Icon(Icons.Outlined.Settings, "Settings", tint = cyanAccent, modifier = Modifier.size(18.dp))
-                Text("System Settings", color = textBright, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Outlined.Settings, "Settings", tint = primary, modifier = Modifier.size(18.dp))
+                    Text("System Settings", color = onSurface, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                }
             }
         }
     }

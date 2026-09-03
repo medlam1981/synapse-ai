@@ -3,6 +3,7 @@ package com.synapse.localai.ui.theme
 import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -16,13 +17,42 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+// =========================================================================
+// Universal Semantic Material 3 Container Extensions for Dynamic Color
+// =========================================================================
+val ColorScheme.surfaceContainerLowest: Color
+    @Composable
+    get() = if (isSystemInDarkTheme()) surface.copy(alpha = 0.85f) else Color(0xFFFFFFFF)
+
+val ColorScheme.surfaceContainerLow: Color
+    @Composable
+    get() = if (isSystemInDarkTheme()) surfaceVariant.copy(alpha = 0.40f) else Color(0xFFF8FAFC)
+
+val ColorScheme.surfaceContainer: Color
+    @Composable
+    get() = if (isSystemInDarkTheme()) surfaceVariant.copy(alpha = 0.60f) else Color(0xFFF1F5F9)
+
+val ColorScheme.surfaceContainerHigh: Color
+    @Composable
+    get() = if (isSystemInDarkTheme()) surfaceVariant.copy(alpha = 0.80f) else Color(0xFFE2E8F0)
+
+val ColorScheme.surfaceContainerHighest: Color
+    @Composable
+    get() = if (isSystemInDarkTheme()) surfaceVariant else Color(0xFFCBD5E1)
+
 private val DarkColorScheme = darkColorScheme(
     primary = DarkPrimary,
     secondary = DarkSecondary,
     tertiary = DarkAccent,
-    background = DarkBackground,
-    surface = DarkSurface,
-    surfaceVariant = DarkSurfaceVariant,
+    background = Color(0xFF0A0E14),
+    surface = Color(0xFF0F141C),
+    surfaceVariant = Color(0xFF1B222D),
+    primaryContainer = Color(0xFF312E81),
+    onPrimaryContainer = Color(0xFFE0E7FF),
+    secondaryContainer = Color(0xFF4C1D95),
+    onSecondaryContainer = Color(0xFFEDE9FE),
+    tertiaryContainer = Color(0xFF1E1B4B),
+    onTertiaryContainer = Color(0xFFE0E7FF),
     onPrimary = Color(0xFF0A0E14),
     onSecondary = Color(0xFF0A0E14),
     onTertiary = Color(0xFF0A0E14),
@@ -38,15 +68,21 @@ private val LightColorScheme = lightColorScheme(
     primary = LightPrimary,
     secondary = LightSecondary,
     tertiary = LightAccent,
-    background = LightBackground,
-    surface = LightSurface,
-    surfaceVariant = LightSurfaceVariant,
+    background = Color(0xFFF8FAFC),
+    surface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFFE2E8F0),
+    primaryContainer = Color(0xFFE0E7FF),
+    onPrimaryContainer = Color(0xFF312E81),
+    secondaryContainer = Color(0xFFEDE9FE),
+    onSecondaryContainer = Color(0xFF4C1D95),
+    tertiaryContainer = Color(0xFFE0E7FF),
+    onTertiaryContainer = Color(0xFF1E1B4B),
     onPrimary = Color.White,
     onSecondary = Color.White,
     onTertiary = Color.White,
-    onBackground = LightOnSurface,
-    onSurface = LightOnSurface,
-    onSurfaceVariant = LightOnSurfaceVariant,
+    onBackground = Color(0xFF0F172A),
+    onSurface = Color(0xFF0F172A),
+    onSurfaceVariant = Color(0xFF475569),
     outline = LightOutline,
     outlineVariant = LightOutlineVariant,
     error = LightError

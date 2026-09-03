@@ -1,25 +1,26 @@
 package com.synapse.localai
 
-import java.io.File
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,13 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.synapse.localai.ui.theme.*
 import com.synapse.localai.ui.tactileGlassGlow
-
-// Signature Soft Mint / Emerald Palette
-private val EmeraldMint = Color(0xFF10B981)
-private val EmeraldMintDark = Color(0xFF059669)
-private val EmeraldMintLight = Color(0xFF34D399)
-private val EmeraldMintSubtle = Color(0xFF10B981).copy(alpha = 0.12f)
-private val EmeraldMintBorder = Color(0xFF10B981).copy(alpha = 0.45f)
+import java.io.File
 
 private fun formatSize(bytes: Long): String {
     val mb = bytes / (1024.0 * 1024.0)
@@ -80,12 +75,22 @@ fun SettingsScreenContent(
     config: AgentConfig,
     context: Context
 ) {
+    val isDark = isSystemInDarkTheme()
     val coroutineScope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
     var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
     var personas by remember { mutableStateOf<List<String>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     var isScanningPersonas by remember { mutableStateOf(false) }
+
+    // Dynamic Material 3 Color Tokens
+    val primary = MaterialTheme.colorScheme.primary
+    val onPrimary = MaterialTheme.colorScheme.onPrimary
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+    val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
+    val surfaceContainerLow = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
     
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
@@ -104,7 +109,7 @@ fun SettingsScreenContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(surfaceColor)
     ) {
         Spacer(modifier = Modifier.statusBarsPadding())
 
@@ -114,11 +119,10 @@ fun SettingsScreenContent(
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(EmeraldMint.copy(alpha = 0.08f), Color.Transparent)
+                        colors = listOf(primary.copy(alpha = 0.08f), Color.Transparent)
                     )
                 )
-                .background(MaterialTheme.colorScheme.surface)
-                .border(BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant))
+                .background(surfaceColor)
                 .padding(horizontal = 20.dp, vertical = 10.dp)
         ) {
             Row(
@@ -137,7 +141,7 @@ fun SettingsScreenContent(
                     )
                     Text(
                         "CONFIGURATION CORE • AUTO-SAVED",
-                        color = EmeraldMint,
+                        color = primary,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp,
@@ -155,7 +159,7 @@ fun SettingsScreenContent(
                     Icon(
                         imageVector = Icons.Filled.ArrowForward,
                         contentDescription = "Back",
-                        tint = EmeraldMint
+                        tint = primary
                     )
                 }
             }
@@ -173,7 +177,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "1. COGNITIVE ENGINE",
-                titleColor = EmeraldMint,
+                titleColor = primary,
                 statusText = uiState.activeModelType?.name ?: "OFFLINE"
             ) {
                 Column(
@@ -194,12 +198,13 @@ fun SettingsScreenContent(
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isGemini) EmeraldMint else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isGemini) primary else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (isGemini) onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("Gemini Cloud", color = if (isGemini) Color.White else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Gemini Cloud", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         Button(
                             onClick = {
@@ -208,12 +213,13 @@ fun SettingsScreenContent(
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isGguf) EmeraldMint else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isGguf) primary else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (isGguf) onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("Local GGUF", color = if (isGguf) Color.White else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Local GGUF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -233,7 +239,7 @@ fun SettingsScreenContent(
                                 visualTransformation = if (geminiKeysVisible) VisualTransformation.None else PasswordVisualTransformation(),
                                 trailingIcon = {
                                     IconButton(onClick = { geminiKeysVisible = !geminiKeysVisible }) {
-                                        Icon(if (geminiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null, tint = EmeraldMint)
+                                        Icon(if (geminiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null, tint = primary)
                                     }
                                 }
                             )
@@ -258,8 +264,7 @@ fun SettingsScreenContent(
                                                 viewModel.saveConfig(context, newConfig)
                                             },
                                         shape = RoundedCornerShape(8.dp),
-                                        color = if (isSelected) EmeraldMintSubtle else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                        border = BorderStroke(0.5.dp, if (isSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant)
+                                        color = if (isSelected) primaryContainer else surfaceContainer
                                     ) {
                                         Row(
                                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -272,11 +277,11 @@ fun SettingsScreenContent(
                                                     val newConfig = config.copy(geminiModelName = mId)
                                                     viewModel.saveConfig(context, newConfig)
                                                 },
-                                                colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
+                                                colors = RadioButtonDefaults.colors(selectedColor = primary)
                                             )
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text(mLabel, color = if (isSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                                Text(mDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                                                Text(mLabel, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                Text(mDesc, color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
                                             }
                                         }
                                     }
@@ -299,8 +304,8 @@ fun SettingsScreenContent(
                                         viewModel.saveConfig(context, newConfig)
                                     },
                                     colors = SwitchDefaults.colors(
-                                        checkedThumbColor = EmeraldMint,
-                                        checkedTrackColor = EmeraldMint.copy(alpha = 0.4f)
+                                        checkedThumbColor = primary,
+                                        checkedTrackColor = primaryContainer
                                     )
                                 )
                             }
@@ -314,7 +319,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "OPERATIONAL PERSONAS (.MD)",
-                titleColor = EmeraldMint,
+                titleColor = primary,
                 statusText = "${uiState.activePersonas.size} ACTIVE"
             ) {
                 val activePersonas = uiState.activePersonas
@@ -327,8 +332,7 @@ fun SettingsScreenContent(
                     // External Storage Path Badge with Inline Manual Re-Scan Button
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                        color = surfaceContainer
                     ) {
                         Row(
                             modifier = Modifier
@@ -337,7 +341,7 @@ fun SettingsScreenContent(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = EmeraldMint, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = primary, modifier = Modifier.size(16.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "/sdcard/Medlam-Ai/personas/",
@@ -370,13 +374,13 @@ fun SettingsScreenContent(
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(14.dp),
                                         strokeWidth = 2.dp,
-                                        color = EmeraldMint
+                                        color = primary
                                     )
                                 } else {
                                     Icon(
                                         Icons.Default.Refresh,
                                         contentDescription = "Re-index Personas",
-                                        tint = EmeraldMint,
+                                        tint = primary,
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
@@ -387,8 +391,7 @@ fun SettingsScreenContent(
                     // Active Stacking Overview Banner
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = EmeraldMintSubtle,
-                        border = BorderStroke(0.5.dp, EmeraldMintBorder)
+                        color = primaryContainer
                     ) {
                         Column(
                             modifier = Modifier
@@ -403,7 +406,7 @@ fun SettingsScreenContent(
                             ) {
                                 Text(
                                     text = "ACTIVE ROLE COMPOSITION (${activePersonas.size} COMBINED):",
-                                    color = EmeraldMint,
+                                    color = onPrimaryContainer,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace,
@@ -417,12 +420,11 @@ fun SettingsScreenContent(
                                 activePersonas.forEach { pName ->
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
-                                        color = EmeraldMint.copy(alpha = 0.2f),
-                                        border = BorderStroke(0.5.dp, EmeraldMint)
+                                        color = primary.copy(alpha = 0.2f)
                                     ) {
                                         Text(
                                             text = "✓ $pName",
-                                            color = EmeraldMint,
+                                            color = onPrimaryContainer,
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
                                             fontFamily = FontFamily.Monospace,
@@ -458,8 +460,7 @@ fun SettingsScreenContent(
                                         viewModel.togglePersona(pName, context)
                                     },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isChecked) EmeraldMintSubtle else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                border = BorderStroke(0.5.dp, if (isChecked) EmeraldMint else MaterialTheme.colorScheme.outlineVariant)
+                                color = if (isChecked) primaryContainer.copy(alpha = 0.5f) else surfaceContainer
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -472,8 +473,8 @@ fun SettingsScreenContent(
                                         checked = isChecked,
                                         onCheckedChange = { viewModel.togglePersona(pName, context) },
                                         colors = CheckboxDefaults.colors(
-                                            checkedColor = EmeraldMint,
-                                            checkmarkColor = Color.White
+                                            checkedColor = primary,
+                                            checkmarkColor = onPrimary
                                         )
                                     )
                                     Column(modifier = Modifier.weight(1f)) {
@@ -483,7 +484,7 @@ fun SettingsScreenContent(
                                         ) {
                                             Text(
                                                 text = pName,
-                                                color = if (isChecked) EmeraldMint else MaterialTheme.colorScheme.onSurface,
+                                                color = if (isChecked) primary else MaterialTheme.colorScheme.onSurface,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 fontFamily = FontFamily.Monospace
@@ -491,11 +492,11 @@ fun SettingsScreenContent(
                                             if (isChecked) {
                                                 Surface(
                                                     shape = RoundedCornerShape(3.dp),
-                                                    color = EmeraldMint.copy(alpha = 0.15f)
+                                                    color = primary.copy(alpha = 0.15f)
                                                 ) {
                                                     Text(
                                                         text = "ACTIVE",
-                                                        color = EmeraldMint,
+                                                        color = primary,
                                                         fontSize = 8.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
@@ -522,11 +523,11 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "2. LOCAL NEURAL CORE",
-                titleColor = EmeraldMint,
+                titleColor = primary,
                 statusDot = when {
-                    uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> EmeraldMint
+                    uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> primary
                     uiState.localModelLoading -> Color.Yellow
-                    else -> Color.Red
+                    else -> MaterialTheme.colorScheme.error
                 },
                 statusText = if (uiState.localModelLoading) "LOADING..." else if (uiState.localModelLoaded) "LOADED" else "OFFLINE"
             ) {
@@ -540,8 +541,7 @@ fun SettingsScreenContent(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .border(BorderStroke(0.5.dp, EmeraldMintBorder), RoundedCornerShape(10.dp))
+                                .background(surfaceContainer)
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -552,14 +552,14 @@ fun SettingsScreenContent(
                             ) {
                                 Text(
                                     text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
-                                    color = EmeraldMint,
+                                    color = primary,
                                     fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
                                     text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
-                                    color = EmeraldMint,
+                                    color = primary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace
@@ -571,14 +571,14 @@ fun SettingsScreenContent(
                                     .fillMaxWidth()
                                     .height(8.dp)
                                     .clip(RoundedCornerShape(4.dp)),
-                                color = EmeraldMint,
+                                color = primary,
                                 trackColor = MaterialTheme.colorScheme.outlineVariant
                             )
                         }
                     }
 
                     if (isScanning) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = EmeraldMint)
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = primary)
                     }
 
                     if (models.isEmpty() && !isScanning) {
@@ -595,8 +595,7 @@ fun SettingsScreenContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) EmeraldMintSubtle else Color.Transparent)
-                                    .border(0.5.dp, if (isSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) primaryContainer else surfaceContainer)
                                     .clickable {
                                         val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
                                         val newConfig = config.copy(
@@ -620,12 +619,12 @@ fun SettingsScreenContent(
                                         )
                                         viewModel.saveConfig(context, newConfig)
                                     },
-                                    colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
+                                    colors = RadioButtonDefaults.colors(selectedColor = primary)
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Column {
-                                    Text(file.name, color = if (isSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
-                                    Text(formatSize(file.length()) + " • " + file.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                    Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                    Text(formatSize(file.length()) + " • " + file.parent, color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                                 }
                             }
                         }
@@ -641,8 +640,7 @@ fun SettingsScreenContent(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (isStandalone) EmeraldMintSubtle else Color.Transparent)
-                                .border(0.5.dp, if (isStandalone) EmeraldMint else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                .background(if (isStandalone) primaryContainer else surfaceContainer)
                             .clickable {
                                 val newConfig = config.copy(draftModelPath = "")
                                 viewModel.saveConfig(context, newConfig)
@@ -656,12 +654,12 @@ fun SettingsScreenContent(
                                     val newConfig = config.copy(draftModelPath = "")
                                     viewModel.saveConfig(context, newConfig)
                                 },
-                                colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
+                                colors = RadioButtonDefaults.colors(selectedColor = primary)
                             )
                             Spacer(Modifier.width(8.dp))
                             Column {
-                                Text("Standalone Execution (No MTP)", color = if (isStandalone) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Standard autoregressive generation without companion draft", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                Text("Standalone Execution (No MTP)", color = if (isStandalone) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Standard autoregressive generation without companion draft", color = if (isStandalone) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                             }
                         }
 
@@ -672,8 +670,7 @@ fun SettingsScreenContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isMtpSelected) EmeraldMintSubtle else Color.Transparent)
-                                    .border(0.5.dp, if (isMtpSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                    .background(if (isMtpSelected) primaryContainer else surfaceContainer)
                                     .clickable {
                                         val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
                                         viewModel.saveConfig(context, newConfig)
@@ -687,12 +684,12 @@ fun SettingsScreenContent(
                                         val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
                                         viewModel.saveConfig(context, newConfig)
                                     },
-                                    colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
+                                    colors = RadioButtonDefaults.colors(selectedColor = primary)
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Column {
-                                    Text(mtpFile.name, color = if (isMtpSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text(formatSize(mtpFile.length()) + " • " + mtpFile.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                    Text(mtpFile.name, color = if (isMtpSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(formatSize(mtpFile.length()) + " • " + mtpFile.parent, color = if (isMtpSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                                 }
                             }
                         }
@@ -718,8 +715,8 @@ fun SettingsScreenContent(
                                     viewModel.saveConfig(context, newConfig)
                                 },
                                 colors = SwitchDefaults.colors(
-                                    checkedThumbColor = EmeraldMint,
-                                    checkedTrackColor = EmeraldMint.copy(alpha = 0.4f)
+                                    checkedThumbColor = primary,
+                                    checkedTrackColor = primaryContainer
                                 )
                             )
                         }
@@ -731,7 +728,7 @@ fun SettingsScreenContent(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("GPU Offloaded Layers (ngl)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("$gpuLayersState Layers", color = EmeraldMint, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Text("$gpuLayersState Layers", color = primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                             }
 
                             Slider(
@@ -743,14 +740,14 @@ fun SettingsScreenContent(
                                 },
                                 valueRange = 0f..33f,
                                 steps = 32,
-                                colors = SliderDefaults.colors(thumbColor = EmeraldMint, activeTrackColor = EmeraldMint)
+                                colors = SliderDefaults.colors(thumbColor = primary, activeTrackColor = primary)
                             )
                         }
 
                         Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
 
-                        // Bottom Row: Centered single [Re-Scan Models] outline button
-                        OutlinedButton(
+                        // Bottom Row: Centered single [Re-Scan Models] button
+                        Button(
                             onClick = {
                                 isScanning = true
                                 coroutineScope.launch {
@@ -765,21 +762,23 @@ fun SettingsScreenContent(
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(0.5.dp, EmeraldMintBorder),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = primaryContainer,
+                                contentColor = onPrimaryContainer
+                            )
                         ) {
                             if (isScanning) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(16.dp),
                                     strokeWidth = 2.dp,
-                                    color = EmeraldMint
+                                    color = onPrimaryContainer
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text("Scanning Storage...", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Scanning Storage...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             } else {
-                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = EmeraldMint)
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = onPrimaryContainer)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Re-Scan Models", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Re-Scan Models", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -791,7 +790,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "3. INFERENCE PARAMETERS",
-                titleColor = EmeraldMint
+                titleColor = primary
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -814,12 +813,11 @@ fun SettingsScreenContent(
                                         viewModel.saveConfig(context, newConfig)
                                     },
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (isSelected) EmeraldMint.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
-                                    border = BorderStroke(0.5.dp, if (isSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant)
+                                    color = if (isSelected) primaryContainer else surfaceContainer
                                 ) {
                                     Text(
                                         text = label,
-                                        color = if (isSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace,
@@ -876,7 +874,7 @@ fun SettingsScreenContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Temperature", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = EmeraldMint, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                         Slider(
                             value = temperatureState,
@@ -886,7 +884,7 @@ fun SettingsScreenContent(
                                 viewModel.saveConfig(context, newConfig)
                             },
                             valueRange = 0f..1.5f,
-                            colors = SliderDefaults.colors(thumbColor = EmeraldMint, activeTrackColor = EmeraldMint)
+                            colors = SliderDefaults.colors(thumbColor = primary, activeTrackColor = primary)
                         )
                     }
                 }
@@ -897,7 +895,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "4. SYSTEM INTERFACE",
-                titleColor = EmeraldMint
+                titleColor = primary
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -909,14 +907,14 @@ fun SettingsScreenContent(
                         isActive = uiState.isAccessibilityActive,
                         onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                     )
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
                     ServiceToggle(
                         title = "Neural Keyboard",
                         description = "AI text injection.",
                         isActive = uiState.isKeyboardActive,
                         onClick = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
                     )
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
                     ServiceToggle(
                         title = "Real-time Perceptor",
                         description = "Monitor notifications.",
@@ -927,12 +925,15 @@ fun SettingsScreenContent(
                     Button(
                         onClick = { viewModel.updateServiceStatus(context) },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = primaryContainer,
+                            contentColor = onPrimaryContainer
+                        ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.Sync, null, modifier = Modifier.size(16.dp), tint = EmeraldMint)
+                        Icon(Icons.Default.Sync, null, modifier = Modifier.size(16.dp), tint = onPrimaryContainer)
                         Spacer(Modifier.width(8.dp))
-                        Text("REFRESH STATUS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("REFRESH STATUS", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -967,13 +968,12 @@ private fun ServiceToggle(
 @Composable
 private fun StatusBadge(isActive: Boolean) {
     Surface(
-        color = if (isActive) EmeraldMint.copy(alpha = 0.15f) else MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
-        shape = RoundedCornerShape(4.dp),
-        border = BorderStroke(0.5.dp, if (isActive) EmeraldMint else MaterialTheme.colorScheme.error)
+        color = if (isActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(4.dp)
     ) {
         Text(
             text = if (isActive) "ACTIVE" else "OFF",
-            color = if (isActive) EmeraldMint else MaterialTheme.colorScheme.error,
+            color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onErrorContainer,
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -984,19 +984,21 @@ private fun StatusBadge(isActive: Boolean) {
 @Composable
 fun SettingsCard(
     title: String,
-    titleColor: Color = EmeraldMint,
+    titleColor: Color = MaterialTheme.colorScheme.primary,
     statusDot: Color? = null,
     statusText: String? = null,
     isCollapsible: Boolean = false,
     content: @Composable () -> Unit
 ) {
     var expanded by remember { mutableStateOf(true) }
+    val isDark = isSystemInDarkTheme()
+    val cardColor = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isSystemInDarkTheme()),
-        color = MaterialTheme.colorScheme.surface,
+            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark),
+        color = cardColor,
         shape = RoundedCornerShape(12.dp)
     ) {
         Column(
@@ -1037,7 +1039,7 @@ fun SettingsCard(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = statusText,
-                        color = EmeraldMint,
+                        color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -1061,11 +1063,11 @@ fun SettingsCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = EmeraldMint,
+    focusedBorderColor = MaterialTheme.colorScheme.primary,
     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
     focusedTextColor = MaterialTheme.colorScheme.onSurface,
     unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-    cursorColor = EmeraldMint,
-    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+    cursorColor = MaterialTheme.colorScheme.primary,
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.3f),
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.15f)
 )
