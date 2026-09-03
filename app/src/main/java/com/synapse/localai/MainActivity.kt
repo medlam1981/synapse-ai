@@ -825,86 +825,86 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     )
                                 }
 
-                                // Right: Internalized Inline Action Controls (Clean shared surface, subtle diffused touch glow)
+                                // Right: Internalized Inline Action Controls (Unified 30dp footprint, shared surface, zero overflow)
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(1.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
                                     // 1. File Attachment Action
-                                    IconButton(
-                                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                        modifier = Modifier.size(34.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .clickable { filePickerLauncher.launch(arrayOf("*/*")) },
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Outlined.AttachFile,
                                             contentDescription = "Attach",
                                             tint = if (selectedFileUri != null) cyanAccent else textDim,
-                                            modifier = Modifier.size(17.dp)
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
 
                                     // 2. Microphone / Voice Input Action
-                                    IconButton(
-                                        onClick = {
-                                            isRecording = true
-                                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
-                                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...")
-                                            }
-                                            try { speechLauncher.launch(intent) } catch (_: Exception) { isRecording = false }
-                                        },
-                                        modifier = Modifier.size(34.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                isRecording = true
+                                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
+                                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...")
+                                                }
+                                                try { speechLauncher.launch(intent) } catch (_: Exception) { isRecording = false }
+                                            },
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic,
                                             contentDescription = "Mic",
-                                            tint = if (isRecording) MaterialTheme.colorScheme.error else textDim,
-                                            modifier = Modifier.size(17.dp)
+                                            tint = if (isRecording) Color(0xFFEF4444) else textDim,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
 
-                                    // 3. Send / Stop Action
-                                    IconButton(
-                                        onClick = {
-                                            if (uiState.isProcessing) {
-                                                viewModel.stopAgent()
-                                            } else if (canSend) {
-                                                val cmd = textInput
-                                                textInput = ""
-                                                focusManager.clearFocus()
-                                                viewModel.sendCommand(cmd, selectedFileUri, context)
-                                                selectedFileUri = null
-                                            }
-                                        },
-                                        enabled = uiState.isProcessing || canSend,
+                                    // 3. Minimalist Red Square Stop Glyph / Idle Send Arrow Action
+                                    Box(
                                         modifier = Modifier
-                                            .size(34.dp)
-                                            .then(
-                                                if (canSend || uiState.isProcessing) {
-                                                    Modifier.background(
-                                                        color = if (uiState.isProcessing) {
-                                                            MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
-                                                        } else {
-                                                            cyanAccent.copy(alpha = 0.15f)
-                                                        },
-                                                        shape = CircleShape
-                                                    )
-                                                } else Modifier
-                                            )
-                                    ) {
-                                        Icon(
-                                            imageVector = if (uiState.isProcessing) Icons.Default.Stop else Icons.Default.ArrowUpward,
-                                            contentDescription = "Send",
-                                            tint = if (uiState.isProcessing) {
-                                                MaterialTheme.colorScheme.error
-                                            } else if (canSend) {
-                                                cyanAccent
-                                            } else {
-                                                textDim.copy(alpha = 0.35f)
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .clickable(enabled = uiState.isProcessing || canSend) {
+                                                if (uiState.isProcessing) {
+                                                    viewModel.stopAgent()
+                                                } else if (canSend) {
+                                                    val cmd = textInput
+                                                    textInput = ""
+                                                    focusManager.clearFocus()
+                                                    viewModel.sendCommand(cmd, selectedFileUri, context)
+                                                    selectedFileUri = null
+                                                }
                                             },
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (uiState.isProcessing) {
+                                            // Minimalist Red Square Stop Glyph (⏹) anchored directly on shared surface
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(11.dp)
+                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .background(Color(0xFFEF4444))
+                                            )
+                                        } else {
+                                            // Clean Send Arrow Icon (↑)
+                                            Icon(
+                                                imageVector = Icons.Default.ArrowUpward,
+                                                contentDescription = "Send",
+                                                tint = if (canSend) cyanAccent else textDim.copy(alpha = 0.35f),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1121,20 +1121,30 @@ fun CliThoughtContainer(
         label = "alpha"
     )
 
-    val surfaceColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+    // Crisp, clean surface canvas without muddy translucent frosting
+    val containerBg = if (isDark) {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLowest
+    }
     val primaryColor = MaterialTheme.colorScheme.primary
-    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
+    val textHeading = MaterialTheme.colorScheme.onSurfaceVariant
+    val textBody = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp)
-            .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
-        shape = RoundedCornerShape(8.dp),
-        color = surfaceColor
+            .padding(vertical = 4.dp)
+            .tactileGlassGlow(cornerRadius = 10.dp, isDark = isDark, elevation = 3.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = containerBg
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            // Header Row: Expand / Collapse Toggle
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1158,8 +1168,8 @@ fun CliThoughtContainer(
                         } else {
                             "Thought process (${thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size} tokens)"
                         },
-                        color = if (isThinking) primaryColor else textDim,
-                        fontSize = 10.sp,
+                        color = if (isThinking) primaryColor else textHeading,
+                        fontSize = 10.5.sp,
                         fontFamily = FontFamily.SansSerif,
                         fontWeight = if (isThinking) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
@@ -1178,33 +1188,25 @@ fun CliThoughtContainer(
 
                 Text(
                     text = if (isExpanded) "Hide ▴" else "Show ▾",
-                    color = textDim,
-                    fontSize = 9.sp,
+                    color = textHeading,
+                    fontSize = 9.5.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium
                 )
             }
 
+            // Expanded reasoning text sits directly on the clean canvas without nested underlays
             AnimatedVisibility(visible = isExpanded) {
-                Column(
+                Text(
+                    text = if (thinkingText.isNotBlank()) thinkingText else "Formulating architecture and reasoning progression...",
+                    color = textBody,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    lineHeight = 16.5.sp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 6.dp)
-                ) {
-                    Divider(
-                        modifier = Modifier.padding(bottom = 6.dp),
-                        thickness = 0.5.dp,
-                        color = borderColor
-                    )
-                    Text(
-                        text = if (thinkingText.isNotBlank()) thinkingText else "Formulating architecture and reasoning progression...",
-                        color = textDim,
-                        fontSize = 10.5.sp,
-                        fontFamily = FontFamily.SansSerif,
-                        lineHeight = 15.sp,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                        .padding(top = 8.dp, bottom = 2.dp)
+                )
             }
         }
     }
