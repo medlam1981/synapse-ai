@@ -711,53 +711,57 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         .fillMaxWidth()
                         .navigationBarsPadding()
                 ) {
-                    // 4. Docked Real-Time Activity Monitor (Impenetrable Lower Boundary)
-                    AnimatedVisibility(
-                        visible = uiState.isProcessing && uiState.activeStatusDetail.isNotBlank(),
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically()
-                    ) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "docked_activity_pulse")
-                        val pulseAlpha by infiniteTransition.animateFloat(
-                            initialValue = 0.35f,
-                            targetValue = 1.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(750, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "docked_pulse_alpha"
-                        )
+                    // 4. Docked Real-Time Dynamic Activity Bar (Impenetrable Lower Boundary & Visual Floor)
+                    val infiniteTransition = rememberInfiniteTransition(label = "docked_activity_pulse")
+                    val pulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1.0f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(750, easing = LinearEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "docked_pulse_alpha"
+                    )
 
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 2.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            border = BorderStroke(0.5.dp, primaryAccent.copy(alpha = 0.35f))
+                    val isBusy = uiState.isProcessing
+                    val statusText = if (isBusy) {
+                        uiState.activeStatusDetail.ifBlank { "Thinking & Planning..." }
+                    } else {
+                        "Idle / Ready"
+                    }
+
+                    val dotColor = if (isBusy) primaryAccent else Color(0xFF10B981)
+                    val textColor = if (isBusy) primaryAccent else textDim
+
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isBusy) 0.5f else 0.3f),
+                        border = BorderStroke(0.5.dp, if (isBusy) primaryAccent.copy(alpha = 0.4f) else borderColor.copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .alpha(pulseAlpha)
-                                        .clip(CircleShape)
-                                        .background(primaryAccent)
-                                )
-                                Text(
-                                    text = uiState.activeStatusDetail,
-                                    color = primaryAccent,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .then(if (isBusy) Modifier.alpha(pulseAlpha) else Modifier)
+                                    .clip(CircleShape)
+                                    .background(dotColor)
+                            )
+                            Text(
+                                text = statusText,
+                                color = textColor,
+                                fontSize = 9.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
 

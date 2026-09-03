@@ -266,13 +266,13 @@ class GGUFModelClient {
             val baseName = modelFile.nameWithoutExtension.lowercase()
             val isQwen = baseName.contains("qwen")
 
-            // Conservative context length for heavy / BF16 models to prevent OOM
+            // Uncapped Generation Horizon: ensure ample 8192 headroom for reasoning and synthesis
             val maxSafeCtx = when {
-                modelSizeMb > 3000L -> 2048
-                modelSizeMb > 2000L -> 4096
+                modelSizeMb > 4500L -> 2048
+                modelSizeMb > 3500L -> 4096
                 else -> 8192
             }
-            val resolvedCtx = contextLength.coerceIn(2048, maxSafeCtx)
+            val resolvedCtx = if (contextLength >= 4096) contextLength.coerceAtMost(maxSafeCtx) else 8192
             val effectiveBatch = if (isLargeModel) minOf(optimalBatch, 128) else (if (resolvedCtx >= 16384) minOf(optimalBatch, 512) else optimalBatch)
             val effectiveUbatch = if (isLargeModel) minOf(optimalUbatch, 64) else (if (resolvedCtx >= 16384) minOf(optimalUbatch, 128) else optimalUbatch)
             val effectiveGpuLayers = if (isLargeModel || isQwen) 0 else gpuLayers
@@ -280,6 +280,7 @@ class GGUFModelClient {
             val baseArgs = mutableListOf(
                 "-m", resolvedPath,
                 "-c", resolvedCtx.toString(),
+                "-n", "-1", // Unconstrained token generation at engine level
                 "--parallel", "1",
                 "--cont-batching",
                 "--no-warmup",
@@ -558,12 +559,14 @@ class GGUFModelClient {
             .put("User:")
             .put("<start_of_turn>user")
 
+        val targetMaxTokens = if (maxTokens > 0) maxTokens else -1
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
             .put("stream", true)
-            .put("n_predict", if (maxTokens > 0) maxTokens else -1)
+            .put("n_predict", targetMaxTokens)
+            .put("max_tokens", targetMaxTokens)
             .put("cache_prompt", true)
             .put("stop", stopArray)
 

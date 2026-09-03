@@ -114,7 +114,7 @@ data class AgentUiState(
     val isRootAvailable: Boolean = false,
     val streamInterruptMsg: String? = null,
     val tokensPerSecond: Float = 0f,
-    val activeStatusDetail: String = "",
+    val activeStatusDetail: String = "Idle / Ready",
     val resumptionNotice: String? = null,
     val activeWorkspacePath: String? = null
 )
@@ -298,8 +298,8 @@ class AgentViewModel : ViewModel() {
             val prefs = prefs(context)
             val savedPath = prefs.getString("local_model_path", null)
             
-            var savedContext = prefs.getInt("context_length", 1024)
-            if (savedContext > 4096 || savedContext < 512) savedContext = 1024
+            var savedContext = prefs.getInt("context_length", 8192)
+            if (savedContext < 4096) savedContext = 8192
 
             var savedThreads = prefs.getInt("thread_count", 2)
             if (savedThreads < 1) savedThreads = 2
@@ -375,6 +375,10 @@ class AgentViewModel : ViewModel() {
                 showApiKeyTracker = prefs.getBoolean("show_api_key_tracker", true)
             )
             _uiState.update { it.copy(config = config, totalKeys = activeGeminiKeyCount) }
+            prefs.edit()
+                .putInt("context_length", config.contextLength)
+                .putInt("max_tokens", -1)
+                .apply()
 
             consolidateWorkspaceDirectories()
 
@@ -525,9 +529,9 @@ class AgentViewModel : ViewModel() {
                         val client = GGUFModelClient().apply {
                             serverHost = config.serverHost
                             serverPort = config.serverPort
-                            contextLength = config.contextLength
+                            contextLength = if (config.contextLength >= 4096) config.contextLength else 8192
                             threadCount = config.threadCount
-                            maxTokens = config.maxTokens
+                            maxTokens = -1
                             temperature = config.temperature
                             draftModelPath = config.draftModelPath.ifBlank { null }
                             gpuLayers = config.gpuLayers
@@ -900,25 +904,24 @@ The file execution engine automatically parses this block and writes the file di
                             val rawText = responseSb.toString()
                             val parsed = parseThoughtAndContent(rawText)
 
-                            // Granular Real-Time Phase Reflection
+                            // Granular Real-Time Phase Reflection (Dynamic Activity Bar Tracking)
                             val isCodeStreaming = isExecutableCodeStreaming(parsed.content)
-                            val isWritingFile = rawText.contains("<invoke name=\"write_to_file\"")
-                            val isWebSearching = rawText.contains("<invoke name=\"web_search\"")
+                            val detectedPath = ToolExecutor.detectFilePath(rawText)
+                            val isWritingFile = rawText.contains("<invoke name=\"write_to_file\"") || (detectedPath != null && isCodeStreaming)
                             val isToolInvoking = rawText.contains("<invoke")
 
                             val statusDetail = when {
                                 parsed.isThinking -> "Thinking & Planning..."
-                                isWebSearching -> "Searching the web in background..."
                                 isWritingFile -> {
-                                    val path = ToolExecutor.detectFilePath(rawText) ?: "target file"
-                                    "Writing target file: $path..."
+                                    val path = detectedPath ?: "/sdcard/Medlam-Ai/..."
+                                    "Writing to $path..."
                                 }
                                 isToolInvoking -> {
-                                    val toolName = Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1) ?: "tool"
-                                    "Executing device tool: $toolName..."
+                                    val toolName = Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1)
+                                    if (toolName != null) "Executing Tool / Task ($toolName)..." else "Executing Tool / Task..."
                                 }
-                                isCodeStreaming -> "Drafting code..."
-                                parsed.content.isNotBlank() -> "Synthesizing final output..."
+                                isCodeStreaming || parsed.content.contains("```") -> "Drafting Code & Architecture..."
+                                parsed.content.isNotBlank() -> "Drafting Code & Architecture..."
                                 else -> "Thinking & Planning..."
                             }
 
@@ -1043,7 +1046,7 @@ The file execution engine automatically parses this block and writes the file di
             } catch (e: Exception) {
                 addLog(LogEntry(sender = "SYSTEM", text = "Mission Error: ${e.message}", isError = true))
             } finally {
-                _uiState.update { it.copy(isProcessing = false, currentPhase = AgentActionPhase.IDLE, activeStatusDetail = "", streamInterruptMsg = null) }
+                _uiState.update { it.copy(isProcessing = false, currentPhase = AgentActionPhase.IDLE, activeStatusDetail = "Idle / Ready", streamInterruptMsg = null) }
                 if (actualContext != null) saveConversation(actualContext)
                 updateTaskState()
                 processNextQueuedCommand(context)
@@ -1159,6 +1162,8 @@ The file execution engine automatically parses this block and writes the file di
                 ToolExecutor.extractAndWriteFiles(response)
             }
             if (writtenFiles.isNotEmpty()) {
+                val primaryPath = writtenFiles.first()
+                _uiState.update { it.copy(activeStatusDetail = "Writing to $primaryPath...") }
                 writtenFiles.forEach { path ->
                     addSystemLog("File written: $path")
                 }
@@ -1191,6 +1196,7 @@ The file execution engine automatically parses this block and writes the file di
             iRegex.findAll(block).forEach { m ->
                 toolsInvoked = true
                 val action = m.groupValues[1].trim()
+                _uiState.update { it.copy(activeStatusDetail = "Executing Tool / Task ($action)...") }
                 val params = mutableMapOf<String, String>()
                 pRegex.findAll(m.groupValues[2]).forEach { p -> 
                     params[p.groupValues[1].trim()] = p.groupValues[2].trim() 
