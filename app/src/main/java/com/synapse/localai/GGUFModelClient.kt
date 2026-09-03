@@ -306,7 +306,7 @@ class GGUFModelClient {
             // 3. Auto detect MTP (strictly enforce model family matching)
             var activeDraftPath = draftModelPath
             if (activeDraftPath.isNullOrBlank()) {
-                val matched = ModelScanner.findMatchingMtpModel(resolvedPath)
+                val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
                 if (matched != null && matched.exists()) {
                     activeDraftPath = matched.absolutePath
                 }

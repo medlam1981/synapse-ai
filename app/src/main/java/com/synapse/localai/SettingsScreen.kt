@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -40,19 +42,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.synapse.localai.ui.theme.*
 
-private val SCAN_DIRS = listOf(
-    "/sdcard/Medlam-Ai/models",
-    "/sdcard/Medlam-Ai/Models",
-    "/sdcard/Medlam-Ai",
-    "/sdcard/Models",
-    "/sdcard/Download",
-    "/storage/emulated/0/Medlam-Ai/models",
-    "/storage/emulated/0/Medlam-Ai/Models",
-    "/storage/emulated/0/Medlam-Ai",
-    "/storage/emulated/0/Models",
-    "/storage/emulated/0/Download",
-    "/storage/emulated/0/Documents"
-)
+// Signature Soft Mint / Emerald Palette
+private val EmeraldMint = Color(0xFF10B981)
+private val EmeraldMintDark = Color(0xFF059669)
+private val EmeraldMintLight = Color(0xFF34D399)
+private val EmeraldMintSubtle = Color(0xFF10B981).copy(alpha = 0.12f)
+private val EmeraldMintBorder = Color(0xFF10B981).copy(alpha = 0.45f)
 
 private fun formatSize(bytes: Long): String {
     val mb = bytes / (1024.0 * 1024.0)
@@ -86,7 +81,9 @@ fun SettingsScreenContent(
     val coroutineScope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
     var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
+    var personas by remember { mutableStateOf<List<String>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
+    var isScanningPersonas by remember { mutableStateOf(false) }
     
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
@@ -96,12 +93,10 @@ fun SettingsScreenContent(
     var gpuLayersState by remember(config.gpuLayers) { mutableStateOf(config.gpuLayers) }
 
     LaunchedEffect(Unit) {
-        isScanning = true
-        withContext(Dispatchers.IO) {
-            models = ModelScanner.scanBaseModels()
-            mtpModels = ModelScanner.scanMtpModels()
-        }
-        isScanning = false
+        // Zero-Overhead: Read exclusively from cached manifests (NO automatic filesystem sweep on resume)
+        models = ModelScanner.getBaseModels(context, forceRescan = false)
+        mtpModels = ModelScanner.getMtpModels(context, forceRescan = false)
+        personas = PersonaManager.getPersonas(context, forceRescan = false)
     }
 
     Column(
@@ -117,7 +112,7 @@ fun SettingsScreenContent(
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f), Color.Transparent)
+                        colors = listOf(EmeraldMint.copy(alpha = 0.08f), Color.Transparent)
                     )
                 )
                 .background(MaterialTheme.colorScheme.surface)
@@ -140,7 +135,7 @@ fun SettingsScreenContent(
                     )
                     Text(
                         "CONFIGURATION CORE • AUTO-SAVED",
-                        color = MaterialTheme.colorScheme.primary,
+                        color = EmeraldMint,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp,
@@ -158,7 +153,7 @@ fun SettingsScreenContent(
                     Icon(
                         imageVector = Icons.Filled.ArrowForward,
                         contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = EmeraldMint
                     )
                 }
             }
@@ -176,7 +171,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "1. COGNITIVE ENGINE",
-                titleColor = NeonCyan,
+                titleColor = EmeraldMint,
                 statusText = uiState.activeModelType?.name ?: "OFFLINE"
             ) {
                 Column(
@@ -197,12 +192,12 @@ fun SettingsScreenContent(
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isGemini) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isGemini) EmeraldMint else MaterialTheme.colorScheme.surfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("Gemini", color = if (isGemini) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Gemini Cloud", color = if (isGemini) Color.White else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         Button(
                             onClick = {
@@ -211,12 +206,12 @@ fun SettingsScreenContent(
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isGguf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = if (isGguf) EmeraldMint else MaterialTheme.colorScheme.surfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
-                            Text("Local GGUF", color = if (isGguf) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Local GGUF", color = if (isGguf) Color.White else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -236,23 +231,55 @@ fun SettingsScreenContent(
                                 visualTransformation = if (geminiKeysVisible) VisualTransformation.None else PasswordVisualTransformation(),
                                 trailingIcon = {
                                     IconButton(onClick = { geminiKeysVisible = !geminiKeysVisible }) {
-                                        Icon(if (geminiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                                        Icon(if (geminiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null, tint = EmeraldMint)
                                     }
                                 }
                             )
 
-                            OutlinedTextField(
-                                value = config.geminiModelName,
-                                onValueChange = {
-                                    val newConfig = config.copy(geminiModelName = it)
-                                    viewModel.saveConfig(context, newConfig)
-                                },
-                                label = { Text("Gemini Model Name") },
-                                placeholder = { Text("gemini-1.5-flash") },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = settingsFieldColors(),
-                                textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            )
+                            // Cloud Model Selection Matrix
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("CLOUD MODEL SELECTION:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                val cloudModels = listOf(
+                                    Triple("gemini-2.0-flash", "Gemini 2.0 Flash", "Ultra-fast multimodal, real-time reasoning"),
+                                    Triple("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Cost-efficient lightweight stream"),
+                                    Triple("gemini-1.5-pro", "Gemini 1.5 Pro", "Complex architecture & long context"),
+                                    Triple("gemini-1.5-flash", "Gemini 1.5 Flash", "High-speed balanced reasoning")
+                                )
+                                cloudModels.forEach { (mId, mLabel, mDesc) ->
+                                    val isSelected = config.geminiModelName == mId
+                                    Surface(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                val newConfig = config.copy(geminiModelName = mId)
+                                                viewModel.saveConfig(context, newConfig)
+                                            },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSelected) EmeraldMintSubtle else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                        border = BorderStroke(0.5.dp, if (isSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            RadioButton(
+                                                selected = isSelected,
+                                                onClick = {
+                                                    val newConfig = config.copy(geminiModelName = mId)
+                                                    viewModel.saveConfig(context, newConfig)
+                                                },
+                                                colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(mLabel, color = if (isSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                Text(mDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -268,8 +295,220 @@ fun SettingsScreenContent(
                                     onCheckedChange = {
                                         val newConfig = config.copy(showApiKeyTracker = it)
                                         viewModel.saveConfig(context, newConfig)
-                                    }
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = EmeraldMint,
+                                        checkedTrackColor = EmeraldMint.copy(alpha = 0.4f)
+                                    )
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // CARD: OPERATIONAL PERSONAS (.MD MULTI-PROFILE)
+            // ==========================================
+            SettingsCard(
+                title = "OPERATIONAL PERSONAS (.MD)",
+                titleColor = EmeraldMint,
+                statusText = "${uiState.activePersonas.size} ACTIVE"
+            ) {
+                val activePersonas = uiState.activePersonas
+                val currentPersonas = personas.ifEmpty { listOf("coding.md", "chat.md", "android_controller.md") }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // External Storage Path Badge with Inline Manual Re-Scan Button
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = EmeraldMint, modifier = Modifier.size(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "/sdcard/Medlam-Ai/personas/",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Public shared storage • Plain .md profiles • Multi-select composition",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 9.sp
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    isScanningPersonas = true
+                                    coroutineScope.launch {
+                                        val refreshed = withContext(Dispatchers.IO) {
+                                            viewModel.rescanPersonas(context)
+                                        }
+                                        personas = refreshed
+                                        isScanningPersonas = false
+                                        Toast.makeText(context, "Discovered ${refreshed.size} personas in storage", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                if (isScanningPersonas) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = EmeraldMint
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "Re-index Personas",
+                                        tint = EmeraldMint,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Active Stacking Overview Banner
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = EmeraldMintSubtle,
+                        border = BorderStroke(0.5.dp, EmeraldMintBorder)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "ACTIVE ROLE COMPOSITION (${activePersonas.size} COMBINED):",
+                                    color = EmeraldMint,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                activePersonas.forEach { pName ->
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = EmeraldMint.copy(alpha = 0.2f),
+                                        border = BorderStroke(0.5.dp, EmeraldMint)
+                                    ) {
+                                        Text(
+                                            text = "✓ $pName",
+                                            color = EmeraldMint,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Multi-Select Checklist Matrix
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "AVAILABLE PERSONAS (TOGGLE TO COMPOSE ROLES):",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+
+                        currentPersonas.forEach { pName ->
+                            val isChecked = activePersonas.contains(pName)
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        viewModel.togglePersona(pName, context)
+                                    },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isChecked) EmeraldMintSubtle else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                border = BorderStroke(0.5.dp, if (isChecked) EmeraldMint else MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = isChecked,
+                                        onCheckedChange = { viewModel.togglePersona(pName, context) },
+                                        colors = CheckboxDefaults.colors(
+                                            checkedColor = EmeraldMint,
+                                            checkmarkColor = Color.White
+                                        )
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = pName,
+                                                color = if (isChecked) EmeraldMint else MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            if (isChecked) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(3.dp),
+                                                    color = EmeraldMint.copy(alpha = 0.15f)
+                                                ) {
+                                                    Text(
+                                                        text = "ACTIVE",
+                                                        color = EmeraldMint,
+                                                        fontSize = 8.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Text(
+                                            text = PersonaManager.getPersonaDescription(pName),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 9.5.sp,
+                                            lineHeight = 13.sp
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -281,9 +520,9 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "2. LOCAL NEURAL CORE",
-                titleColor = Color(0xFF0284C7),
+                titleColor = EmeraldMint,
                 statusDot = when {
-                    uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> Color.Green
+                    uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> EmeraldMint
                     uiState.localModelLoading -> Color.Yellow
                     else -> Color.Red
                 },
@@ -300,7 +539,7 @@ fun SettingsScreenContent(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .border(BorderStroke(0.5.dp, Color(0xFF0284C7).copy(alpha = 0.6f)), RoundedCornerShape(10.dp))
+                                .border(BorderStroke(0.5.dp, EmeraldMintBorder), RoundedCornerShape(10.dp))
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -311,14 +550,14 @@ fun SettingsScreenContent(
                             ) {
                                 Text(
                                     text = uiState.loadingStatusText.ifBlank { "Loading Neural Core..." },
-                                    color = Color(0xFF0284C7),
+                                    color = EmeraldMint,
                                     fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
                                     text = "${((uiState.loadingProgress ?: 0f) * 100).toInt()}%",
-                                    color = Color(0xFF00D4FF),
+                                    color = EmeraldMint,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace
@@ -330,14 +569,14 @@ fun SettingsScreenContent(
                                     .fillMaxWidth()
                                     .height(8.dp)
                                     .clip(RoundedCornerShape(4.dp)),
-                                color = Color(0xFF0284C7),
+                                color = EmeraldMint,
                                 trackColor = MaterialTheme.colorScheme.outlineVariant
                             )
                         }
                     }
 
                     if (isScanning) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color(0xFF0284C7))
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = EmeraldMint)
                     }
 
                     if (models.isEmpty() && !isScanning) {
@@ -354,10 +593,10 @@ fun SettingsScreenContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                    .border(0.5.dp, if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) EmeraldMintSubtle else Color.Transparent)
+                                    .border(0.5.dp, if (isSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                                     .clickable {
-                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath)
+                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
                                             draftModelPath = matchedMtp?.absolutePath ?: "",
@@ -371,18 +610,19 @@ fun SettingsScreenContent(
                                 RadioButton(
                                     selected = isSelected,
                                     onClick = {
-                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath)
+                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
                                             draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
-                                    }
+                                    },
+                                    colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Column {
-                                    Text(file.name, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                    Text(file.name, color = if (isSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                                     Text(formatSize(file.length()) + " • " + file.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                                 }
                             }
@@ -399,13 +639,13 @@ fun SettingsScreenContent(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (isStandalone) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                .border(0.5.dp, if (isStandalone) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                .clickable {
-                                    val newConfig = config.copy(draftModelPath = "")
-                                    viewModel.saveConfig(context, newConfig)
-                                }
-                                .padding(10.dp),
+                                .background(if (isStandalone) EmeraldMintSubtle else Color.Transparent)
+                                .border(0.5.dp, if (isStandalone) EmeraldMint else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                            .clickable {
+                                val newConfig = config.copy(draftModelPath = "")
+                                viewModel.saveConfig(context, newConfig)
+                            }
+                            .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -413,11 +653,12 @@ fun SettingsScreenContent(
                                 onClick = {
                                     val newConfig = config.copy(draftModelPath = "")
                                     viewModel.saveConfig(context, newConfig)
-                                }
+                                },
+                                colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
                             )
                             Spacer(Modifier.width(8.dp))
                             Column {
-                                Text("Standalone Execution (No MTP)", color = if (isStandalone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Standalone Execution (No MTP)", color = if (isStandalone) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 Text("Standard autoregressive generation without companion draft", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                             }
                         }
@@ -429,8 +670,8 @@ fun SettingsScreenContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isMtpSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                    .border(0.5.dp, if (isMtpSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                    .background(if (isMtpSelected) EmeraldMintSubtle else Color.Transparent)
+                                    .border(0.5.dp, if (isMtpSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                                     .clickable {
                                         val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
                                         viewModel.saveConfig(context, newConfig)
@@ -443,140 +684,98 @@ fun SettingsScreenContent(
                                     onClick = {
                                         val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
                                         viewModel.saveConfig(context, newConfig)
-                                    }
+                                    },
+                                    colors = RadioButtonDefaults.colors(selectedColor = EmeraldMint)
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Column {
-                                    Text("⚡ MTP: ${mtpFile.name}", color = if (isMtpSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(mtpFile.name, color = if (isMtpSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     Text(formatSize(mtpFile.length()) + " • " + mtpFile.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                                 }
                             }
                         }
-
-                        // Option 3: Custom Draft Model Path
-                        var customDraftText by remember(config.draftModelPath) { mutableStateOf(config.draftModelPath) }
-                        OutlinedTextField(
-                            value = customDraftText,
-                            onValueChange = {
-                                customDraftText = it
-                                val newConfig = config.copy(draftModelPath = it.trim())
-                                viewModel.saveConfig(context, newConfig)
-                            },
-                            label = { Text("Manual Draft / MTP File Path") },
-                            placeholder = { Text("/sdcard/Medlam-Ai/mtp/your-model.gguf") },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = settingsFieldColors(),
-                            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        )
                     }
 
-                    // ========================================================
-                    // REVAMPED SUB-CARD: GPU LAYERS, MMAP & RE-SCAN ACTION
-                    // ========================================================
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                    // Hardware Offloading Controls (GPU Layers & MMAP)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("HARDWARE OFFLOADING & ACCELERATION:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            // Top Row: mmap Direct Memory Switch
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Memory-Mapped Files (mmap)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Direct disk paging to optimize RAM footprint", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                            }
+                            Switch(
+                                checked = config.useMmap,
+                                onCheckedChange = {
+                                    val newConfig = config.copy(useMmap = it)
+                                    viewModel.saveConfig(context, newConfig)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = EmeraldMint,
+                                    checkedTrackColor = EmeraldMint.copy(alpha = 0.4f)
+                                )
+                            )
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                                    Text(
-                                        "mmap Direct Memory",
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        "Direct memory mapping for instant loading",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 10.5.sp,
-                                        lineHeight = 14.sp
-                                    )
-                                }
-                                Switch(
-                                    checked = config.useMmap,
-                                    onCheckedChange = {
-                                        val newConfig = config.copy(useMmap = it)
-                                        viewModel.saveConfig(context, newConfig)
-                                    },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = NeonCyan, checkedTrackColor = NeonCyan.copy(alpha = 0.5f))
-                                )
+                                Text("GPU Offloaded Layers (ngl)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("$gpuLayersState Layers", color = EmeraldMint, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                             }
 
-                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-
-                            // Middle Row: GPU Offload Layers Slider with Active Count Badge
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "GPU Offload Layers",
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    val badgeText = when (gpuLayersState) {
-                                        0 -> "[ 0 / 33 (CPU Only) ]"
-                                        33 -> "[ 33 / 33 (Full GPU) ]"
-                                        else -> "[ $gpuLayersState / 33 (Hybrid) ]"
-                                    }
-                                    Text(
-                                        text = badgeText,
-                                        color = if (gpuLayersState > 0) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-
-                                Slider(
-                                    value = gpuLayersState.toFloat(),
-                                    onValueChange = { gpuLayersState = it.toInt() },
-                                    onValueChangeFinished = {
-                                        val newConfig = config.copy(gpuLayers = gpuLayersState)
-                                        viewModel.saveConfig(context, newConfig)
-                                    },
-                                    valueRange = 0f..33f,
-                                    steps = 32,
-                                    colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary)
-                                )
-                            }
-
-                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-
-                            // Bottom Row: Centered single [Re-Scan Models] outline button
-                            OutlinedButton(
-                                onClick = {
-                                    isScanning = true
-                                    coroutineScope.launch {
-                                        withContext(Dispatchers.IO) {
-                                            models = ModelScanner.scanBaseModels()
-                                            mtpModels = ModelScanner.scanMtpModels()
-                                        }
-                                        isScanning = false
-                                    }
+                            Slider(
+                                value = gpuLayersState.toFloat(),
+                                onValueChange = { gpuLayersState = it.toInt() },
+                                onValueChangeFinished = {
+                                    val newConfig = config.copy(gpuLayers = gpuLayersState)
+                                    viewModel.saveConfig(context, newConfig)
                                 },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
-                            ) {
-                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                valueRange = 0f..33f,
+                                steps = 32,
+                                colors = SliderDefaults.colors(thumbColor = EmeraldMint, activeTrackColor = EmeraldMint)
+                            )
+                        }
+
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
+
+                        // Bottom Row: Centered single [Re-Scan Models] outline button
+                        OutlinedButton(
+                            onClick = {
+                                isScanning = true
+                                coroutineScope.launch {
+                                    val (freshBase, freshMtp) = withContext(Dispatchers.IO) {
+                                        viewModel.rescanModels(context)
+                                    }
+                                    models = freshBase
+                                    mtpModels = freshMtp
+                                    isScanning = false
+                                    Toast.makeText(context, "Discovered ${freshBase.size} models, ${freshMtp.size} MTP drafts", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(0.5.dp, EmeraldMintBorder),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                        ) {
+                            if (isScanning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = EmeraldMint
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Scanning Storage...", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = EmeraldMint)
                                 Spacer(Modifier.width(8.dp))
                                 Text("Re-Scan Models", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
@@ -590,7 +789,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "3. INFERENCE PARAMETERS",
-                titleColor = Color(0xFF0070F3)
+                titleColor = EmeraldMint
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -613,12 +812,12 @@ fun SettingsScreenContent(
                                         viewModel.saveConfig(context, newConfig)
                                     },
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
-                                    border = BorderStroke(0.5.dp, if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+                                    color = if (isSelected) EmeraldMint.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(0.5.dp, if (isSelected) EmeraldMint else MaterialTheme.colorScheme.outlineVariant)
                                 ) {
                                     Text(
                                         text = label,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        color = if (isSelected) EmeraldMint else MaterialTheme.colorScheme.onSurface,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace,
@@ -675,7 +874,7 @@ fun SettingsScreenContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Temperature", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = EmeraldMint, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                         Slider(
                             value = temperatureState,
@@ -685,7 +884,7 @@ fun SettingsScreenContent(
                                 viewModel.saveConfig(context, newConfig)
                             },
                             valueRange = 0f..1.5f,
-                            colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary)
+                            colors = SliderDefaults.colors(thumbColor = EmeraldMint, activeTrackColor = EmeraldMint)
                         )
                     }
                 }
@@ -696,7 +895,7 @@ fun SettingsScreenContent(
             // ==========================================
             SettingsCard(
                 title = "4. SYSTEM INTERFACE",
-                titleColor = NeonCyan
+                titleColor = EmeraldMint
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -729,7 +928,7 @@ fun SettingsScreenContent(
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.Sync, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Default.Sync, null, modifier = Modifier.size(16.dp), tint = EmeraldMint)
                         Spacer(Modifier.width(8.dp))
                         Text("REFRESH STATUS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -766,13 +965,13 @@ private fun ServiceToggle(
 @Composable
 private fun StatusBadge(isActive: Boolean) {
     Surface(
-        color = if (isActive) Color(0xFF238636).copy(alpha = 0.2f) else MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
+        color = if (isActive) EmeraldMint.copy(alpha = 0.15f) else MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
         shape = RoundedCornerShape(4.dp),
-        border = BorderStroke(0.5.dp, if (isActive) Color(0xFF238636) else MaterialTheme.colorScheme.error)
+        border = BorderStroke(0.5.dp, if (isActive) EmeraldMint else MaterialTheme.colorScheme.error)
     ) {
         Text(
             text = if (isActive) "ACTIVE" else "OFF",
-            color = if (isActive) Color(0xFF3FB950) else MaterialTheme.colorScheme.error,
+            color = if (isActive) EmeraldMint else MaterialTheme.colorScheme.error,
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -783,7 +982,7 @@ private fun StatusBadge(isActive: Boolean) {
 @Composable
 fun SettingsCard(
     title: String,
-    titleColor: Color,
+    titleColor: Color = EmeraldMint,
     statusDot: Color? = null,
     statusText: String? = null,
     isCollapsible: Boolean = false,
@@ -795,7 +994,7 @@ fun SettingsCard(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -809,6 +1008,7 @@ fun SettingsCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
+                    modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -825,15 +1025,20 @@ fun SettingsCard(
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 if (statusText != null) {
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = statusText,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = EmeraldMint,
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
                 }
             }
@@ -853,11 +1058,11 @@ fun SettingsCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = MaterialTheme.colorScheme.primary,
+    focusedBorderColor = EmeraldMint,
     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
     focusedTextColor = MaterialTheme.colorScheme.onSurface,
     unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-    cursorColor = MaterialTheme.colorScheme.primary,
+    cursorColor = EmeraldMint,
     focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
 )

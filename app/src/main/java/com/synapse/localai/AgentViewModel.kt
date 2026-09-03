@@ -80,7 +80,9 @@ data class AgentConfig(
     val enabledSpecializedAgents: Set<String> = emptySet(),
     val systemPrompt: String = "",
     val customToolsPrompt: String = "",
-    val showApiKeyTracker: Boolean = true
+    val showApiKeyTracker: Boolean = true,
+    val activePersona: String = PersonaManager.DEFAULT_PERSONA,
+    val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET
 )
 
 data class AgentUiState(
@@ -116,7 +118,10 @@ data class AgentUiState(
     val tokensPerSecond: Float = 0f,
     val activeStatusDetail: String = "Idle / Ready",
     val resumptionNotice: String? = null,
-    val activeWorkspacePath: String? = null
+    val activeWorkspacePath: String? = null,
+    val activePersona: String = PersonaManager.DEFAULT_PERSONA,
+    val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET,
+    val availablePersonas: List<String> = emptyList()
 )
 
 class AgentViewModel : ViewModel() {
@@ -309,13 +314,15 @@ class AgentViewModel : ViewModel() {
             var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
             var geminiModel = prefs.getString("gemini_model_name", "gemini-2.0-flash") ?: "gemini-2.0-flash"
             ModelScanner.ensureDirectories()
-            PersonaManager.ensurePersonaInitialized(context)
+            val activePersonasSet = PersonaManager.getActivePersonas(context)
+            val activePersonaName = activePersonasSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
+            val cachedPersonasList = PersonaManager.getPersonas(context, forceRescan = false)
 
             var localPath = savedPath ?: ""
             if (localPath.isBlank()) {
-                val scannedModels = ModelScanner.scanBaseModels()
-                if (scannedModels.isNotEmpty()) {
-                    localPath = scannedModels.first().absolutePath
+                val cachedModels = ModelScanner.getBaseModels(context, forceRescan = false)
+                if (cachedModels.isNotEmpty()) {
+                    localPath = cachedModels.first().absolutePath
                 }
             }
 
@@ -339,7 +346,7 @@ class AgentViewModel : ViewModel() {
                 }
             }
             if (draftPath.isBlank() && localPath.isNotBlank()) {
-                val matched = ModelScanner.findMatchingMtpModel(localPath)
+                val matched = ModelScanner.findMatchingMtpModel(localPath, context)
                 if (matched != null) {
                     draftPath = matched.absolutePath
                 }
@@ -372,9 +379,19 @@ class AgentViewModel : ViewModel() {
                 enabledSpecializedAgents = prefs.getStringSet("enabled_agents", emptySet()) ?: emptySet(),
                 systemPrompt = prefs.getString("system_prompt", "") ?: "",
                 customToolsPrompt = prefs.getString("custom_tools_prompt", "") ?: "",
-                showApiKeyTracker = prefs.getBoolean("show_api_key_tracker", true)
+                showApiKeyTracker = prefs.getBoolean("show_api_key_tracker", true),
+                activePersona = activePersonaName,
+                activePersonas = activePersonasSet
             )
-            _uiState.update { it.copy(config = config, totalKeys = activeGeminiKeyCount) }
+            _uiState.update { 
+                it.copy(
+                    config = config, 
+                    totalKeys = activeGeminiKeyCount,
+                    activePersona = activePersonaName,
+                    activePersonas = activePersonasSet,
+                    availablePersonas = cachedPersonasList
+                ) 
+            }
             prefs.edit()
                 .putInt("context_length", config.contextLength)
                 .putInt("max_tokens", -1)
@@ -682,35 +699,21 @@ The file execution engine automatically parses this block and writes the file di
         val config = _uiState.value.config
         val actualContext = context ?: MainActivity.instance
         
-        val livingMind = EpistemicMemoryManager.getDistilledContextPrompt(actualContext)
-        val customPrompt = config.systemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
+        // 1. Distilled Epistemic Mind (hardware, memory snapshot, user preferences)
+        val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
 
+        // 2. Runtime Context Concatenation of Active Personas (.md loaded strictly from /sdcard/Medlam-Ai/personas/)
+        val activePersonasMarkdown = actualContext?.let { PersonaManager.getActivePersonasContent(it) }
+            ?: PersonaManager.DEFAULT_CODING_PERSONA
+
+        // 3. Operational Toolchains Description
         val toolsDesc = getToolsDescription()
+
+        // 4. Background Task Section
         val taskContext = taskMemory?.getContextForAI() ?: ""
         val taskSection = if (taskContext.isNotBlank()) "\n\n$taskContext" else ""
 
-        val agencyGrounding = """
-## On-Device Reality Grounding & Anti-Disclaimer Directives:
-1. True Host Architecture: You are MEDLAM-AI, physically executing on-device in Android ARM64. You are NOT an isolated, text-only cloud chatbot. You are backed by the host's Superuser/Root shell pipeline, native JNI runtime bridge, Android Accessibility service, headless task scheduler, and direct filesystem access.
-2. Absolute Rejection of Canned Disclaimers: Base instruct refusal tropes are STRICTLY SUPPRESSED. NEVER output statements like:
-   - "I am only a text-based AI..."
-   - "I cannot interact with physical devices or your system..."
-   - "I have no direct access to your phone or files..."
-   - "As an AI, I don't have access to real-time information..."
-   Such statements are completely false on this platform. You have live tools, terminal shell, and filesystem access.
-3. Proactive Execution Mindset: When commanded to perform an action or solve a problem, take immediate action. Determine the correct toolchain (`run_shell`, `web_search`, file writing, or Accessibility automation) and invoke it immediately. Never lecture the user on how they can do it themselves when you have the tools to do it.
-4. Accurate Capability Self-Reflection: When asked who you are or what you can do, confidently present your four core operational toolchains:
-   • Workspace File Engine: Creating, reading, and editing code and web deliverables in `/sdcard/Medlam-Ai/...`.
-   • Live Web & Intelligence Retrieval: Background web searching (`web_search`) and real-time device telemetry.
-   • Headless Task Engine: Queuing and scheduling automated background tasks (`schedule_task`, `queue_background_task`).
-   • Host System Controller: Superuser/Root shell execution (`run_shell`) and Android Accessibility UI automation.
-5. Operational Agency vs. Privacy Protocols: You have full technical capability and operational authority to manage device operations, run shell pipelines, manipulate files, and automate apps. Boundaries apply strictly to personal user credentials (e.g. passwords, banking authentication). Frame any boundary as a respect for security protocols and user privacy, NEVER as a false technical inability to interact with the device.
-6. Explicit Negative Directives:
-   • NEVER claim you are merely a conversational model without system access.
-   • NEVER apologize for nonexistent hardware or system limitations when a tool or shell pipeline is available.
-   • NEVER invent arbitrary restrictions on file manipulation, network search, or automation tasks.
-""".trimIndent()
-
+        // 5. Reasoning Guidelines
         val thoughtGuideline = """
 ## Execution & Reasoning Guidelines:
 1. Preliminary Planning & Reasoning: Always formulate your internal thought process, task breakdown, architectural plan, or tool strategy inside <think>...</think> tags before generating content or executing tools.
@@ -718,7 +721,9 @@ The file execution engine automatically parses this block and writes the file di
 3. Code Blocks: Only use triple-backtick code fences (```lang) for actual executable code or configuration files (html, css, js, python, bash, json, etc.). Regular text, summaries, and section headers (#, ##) must be plain conversational markdown.
 """.trimIndent()
 
-        return "$livingMind\n\n$agencyGrounding\n\n$toolsDesc\n\n$thoughtGuideline$customPrompt$taskSection"
+        val customPrompt = config.systemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
+
+        return "$livingMind\n\n$activePersonasMarkdown\n\n$toolsDesc\n\n$thoughtGuideline$customPrompt$taskSection"
     }
 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
@@ -1255,6 +1260,56 @@ The file execution engine automatically parses this block and writes the file di
     fun setRootAvailable(available: Boolean) {
         _uiState.update { it.copy(isRootAvailable = available) }
         Log.i(TAG, "Superuser status: ${if (available) "ROOT GRANTED" else "STANDARD USER"}")
+    }
+
+    fun togglePersona(personaName: String, context: Context) {
+        val current = _uiState.value.activePersonas.toMutableSet()
+        if (current.contains(personaName)) {
+            if (current.size > 1) {
+                current.remove(personaName)
+            }
+        } else {
+            current.add(personaName)
+        }
+        PersonaManager.setActivePersonas(context, current)
+        val primary = current.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
+        _uiState.update { 
+            it.copy(
+                activePersonas = current,
+                activePersona = primary,
+                config = it.config.copy(activePersonas = current, activePersona = primary)
+            ) 
+        }
+        addSystemLog("Operational Personas: ${current.joinToString(", ")}")
+    }
+
+    fun setActivePersonas(personas: Set<String>, context: Context) {
+        val safeSet = if (personas.isEmpty()) PersonaManager.DEFAULT_PERSONAS_SET else personas
+        PersonaManager.setActivePersonas(context, safeSet)
+        val primary = safeSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
+        _uiState.update { 
+            it.copy(
+                activePersonas = safeSet,
+                activePersona = primary,
+                config = it.config.copy(activePersonas = safeSet, activePersona = primary)
+            ) 
+        }
+        addSystemLog("Operational Personas: ${safeSet.joinToString(", ")}")
+    }
+
+    fun setActivePersona(personaName: String, context: Context) {
+        togglePersona(personaName, context)
+    }
+
+    fun rescanPersonas(context: Context): List<String> {
+        val list = PersonaManager.rescanPersonas(context)
+        _uiState.update { it.copy(availablePersonas = list) }
+        return list
+    }
+
+    fun rescanModels(context: Context): Pair<List<File>, List<File>> {
+        val (base, mtp) = ModelScanner.rescanModels(context)
+        return Pair(base, mtp)
     }
 
     private fun isCasualGreetingOrChat(text: String): Boolean {

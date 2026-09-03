@@ -1,13 +1,32 @@
 package com.synapse.localai
 
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import java.io.File
 
+/**
+ * Zero-Overhead Asset Discovery & Model Cache
+ * 
+ * 1. Deprecation of Automatic Background Scanning:
+ *    Auto-polling and directory observers are eliminated.
+ *    Model discovery occurs strictly on explicit user request (Re-Scan button).
+ * 
+ * 2. Persistent Cached Manifest:
+ *    Discovered models are cached in-memory and persisted in SharedPreferences.
+ *    App operations read exclusively from the cached registry.
+ */
 object ModelScanner {
-    // Primary dirs (lowercase canonical)
-    const val MODELS_DIR  = "/sdcard/Medlam-Ai/models"
-    const val MTP_DIR     = "/sdcard/Medlam-Ai/mtp"
-    const val PERSONA_DIR = "/sdcard/Medlam-Ai/persona"
-    const val ROOT_DIR    = "/sdcard/Medlam-Ai"
+    private const val TAG = "ModelScanner"
+
+    // Primary dirs (canonical)
+    const val MODELS_DIR   = "/sdcard/Medlam-Ai/models"
+    const val MTP_DIR      = "/sdcard/Medlam-Ai/mtp"
+    const val PERSONAS_DIR = "/sdcard/Medlam-Ai/personas"
+    const val ROOT_DIR     = "/sdcard/Medlam-Ai"
+
+    const val PREF_CACHED_BASE = "cached_base_models_manifest"
+    const val PREF_CACHED_MTP  = "cached_mtp_models_manifest"
 
     // All case variants to search (case-insensitive FS support)
     private val MODELS_DIRS = listOf(
@@ -32,21 +51,106 @@ object ModelScanner {
         "/storage/emulated/0/Download"
     )
 
+    // In-memory manifests for zero RAM and storage overhead
+    @Volatile
+    private var cachedBaseModels: List<File>? = null
+
+    @Volatile
+    private var cachedMtpModels: List<File>? = null
+
+    private fun getPrefs(context: Context): SharedPreferences {
+        return context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+    }
+
     fun ensureDirectories() {
         try {
             File(ROOT_DIR).mkdirs()
             File(MODELS_DIR).mkdirs()
             File(MTP_DIR).mkdirs()
-            File(PERSONA_DIR).mkdirs()
-            PersonaManager.ensurePersonaInitialized()
+            File(PERSONAS_DIR).mkdirs()
+            PersonaManager.ensureDefaultPersonas()
         } catch (_: Exception) {}
     }
 
-    fun scanBaseModels(): List<File> {
+    /**
+     * Retrieves base models from cache without triggering disk I/O.
+     * Only scans if cache is completely uninitialized.
+     */
+    fun getBaseModels(context: Context? = null, forceRescan: Boolean = false): List<File> {
+        if (!forceRescan) {
+            cachedBaseModels?.let { return it }
+
+            if (context != null) {
+                val prefs = getPrefs(context)
+                val stored = prefs.getStringSet(PREF_CACHED_BASE, null)
+                if (!stored.isNullOrEmpty()) {
+                    val list = stored.map { File(it) }.filter { it.exists() }
+                    if (list.isNotEmpty()) {
+                        cachedBaseModels = list
+                        return list
+                    }
+                }
+            }
+        }
+
+        return rescanModels(context).first
+    }
+
+    /**
+     * Retrieves MTP draft models from cache without triggering disk I/O.
+     */
+    fun getMtpModels(context: Context? = null, forceRescan: Boolean = false): List<File> {
+        if (!forceRescan) {
+            cachedMtpModels?.let { return it }
+
+            if (context != null) {
+                val prefs = getPrefs(context)
+                val stored = prefs.getStringSet(PREF_CACHED_MTP, null)
+                if (!stored.isNullOrEmpty()) {
+                    val list = stored.map { File(it) }.filter { it.exists() }
+                    if (list.isNotEmpty()) {
+                        cachedMtpModels = list
+                        return list
+                    }
+                }
+            }
+        }
+
+        return rescanModels(context).second
+    }
+
+    /**
+     * Explicit On-Demand Re-Scanning:
+     * Scans storage strictly when manually triggered by the user in Settings.
+     * Updates in-memory cache and persists the manifests to SharedPreferences.
+     */
+    fun rescanModels(context: Context? = null): Pair<List<File>, List<File>> {
         ensureDirectories()
+        val baseList = scanBaseModelsFromDisk()
+        val mtpList = scanMtpModelsFromDisk()
+
+        cachedBaseModels = baseList
+        cachedMtpModels = mtpList
+
+        if (context != null) {
+            val prefs = getPrefs(context)
+            prefs.edit()
+                .putStringSet(PREF_CACHED_BASE, baseList.map { it.absolutePath }.toSet())
+                .putStringSet(PREF_CACHED_MTP, mtpList.map { it.absolutePath }.toSet())
+                .apply()
+        }
+
+        Log.i(TAG, "Explicit model rescan completed: ${baseList.size} base, ${mtpList.size} MTP")
+        return Pair(baseList, mtpList)
+    }
+
+    // Compatibility wrappers for existing code
+    fun scanBaseModels(): List<File> = getBaseModels(forceRescan = false)
+    fun scanMtpModels(): List<File> = getMtpModels(forceRescan = false)
+
+    private fun scanBaseModelsFromDisk(): List<File> {
         val found = mutableListOf<File>()
 
-        // Search all case variants of models dir
         for (path in MODELS_DIRS) {
             val dir = File(path)
             if (dir.exists() && dir.isDirectory) {
@@ -56,7 +160,6 @@ object ModelScanner {
             }
         }
 
-        // Fallback to legacy directories if primary is empty
         if (found.isEmpty()) {
             LEGACY_DIRS.forEach { path ->
                 val dir = File(path)
@@ -67,6 +170,7 @@ object ModelScanner {
                 }
             }
         }
+
         return found.distinctBy { it.name }
             .sortedWith(
                 compareByDescending<File> { it.name.contains("gemma", ignoreCase = true) }
@@ -74,11 +178,9 @@ object ModelScanner {
             )
     }
 
-    fun scanMtpModels(): List<File> {
-        ensureDirectories()
+    private fun scanMtpModelsFromDisk(): List<File> {
         val found = mutableListOf<File>()
 
-        // Search all case variants of mtp dir
         for (path in MTP_DIRS) {
             val dir = File(path)
             if (dir.exists() && dir.isDirectory) {
@@ -90,7 +192,6 @@ object ModelScanner {
 
         if (found.isNotEmpty()) return found.distinctBy { it.name }
 
-        // Also check if any mtp files exist in /models dirs
         val fallback = mutableListOf<File>()
         for (path in MODELS_DIRS) {
             val dir = File(path)
@@ -107,31 +208,22 @@ object ModelScanner {
 
     /**
      * Smart Auto-Pairing Logic:
-     * When a base model is selected, find the best matching MTP draft model.
-     *
-     * Matching strategy (priority order):
-     *  1. Same model family tokens (e.g. "e2b", "12b", "gemma", "4") in MTP filename
-     *  2. Highest token overlap score
-     *  3. First available MTP candidate if no specific match
-     *
-     * Exclusions: standalone auxiliary assistant/bf16 blocks that lack full draft context.
-     * NOTE: For the E2B model, mtp-gemma-4-E2B files ARE valid draft models and must NOT be excluded.
+     * When a base model is selected, find the best matching MTP draft model
+     * from the CACHED manifest (zero disk sweep).
      */
-    fun findMatchingMtpModel(baseModelPath: String): File? {
+    fun findMatchingMtpModel(baseModelPath: String, context: Context? = null): File? {
         if (baseModelPath.isBlank()) return null
-        val mtpFiles = scanMtpModels()
+        val mtpFiles = getMtpModels(context, forceRescan = false)
         if (mtpFiles.isEmpty()) return null
 
         val baseFile = File(baseModelPath)
         val baseName = baseFile.nameWithoutExtension.lowercase()
 
-        // Extract meaningful tokens from base model name
         val baseTokens = baseName
             .split("-", "_", ".")
             .filter { it.length > 1 }
             .map { it.lowercase() }
 
-        // Determine base model family: "gemma", "qwen", "llama", "phi", etc.
         val baseFamily = when {
             baseName.contains("gemma") -> "gemma"
             baseName.contains("qwen") -> "qwen"
@@ -141,7 +233,6 @@ object ModelScanner {
             else -> ""
         }
 
-        // Determine candidate files matching the same architecture/family
         val candidateFiles = mtpFiles.filter { file ->
             val name = file.name.lowercase()
             val isAssistantBlock = name.contains("assistant")
@@ -152,7 +243,6 @@ object ModelScanner {
 
         if (candidateFiles.isEmpty()) return null
 
-        // Score each candidate by token overlap with base model (excluding generic precision tags like bf16)
         data class Scored(val file: File, val score: Int)
 
         val scored = candidateFiles.map { mtpFile ->
@@ -167,7 +257,6 @@ object ModelScanner {
                 .thenByDescending { it.file.name.contains("bf16", ignoreCase = true) }
         )
 
-        // Only return if there is an actual positive score and family match
         return scored.firstOrNull { it.score > 0 }?.file
     }
 }
