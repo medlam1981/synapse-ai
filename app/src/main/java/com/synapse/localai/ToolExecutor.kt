@@ -92,30 +92,37 @@ object ToolExecutor {
         private var currentWriter: BufferedWriter? = null
         private var pendingFilePath: String? = null
         private var lastWrittenOffset = 0
+        private var lastProcessedOffset = 0
         private val writtenFiles = mutableListOf<String>()
 
         @Synchronized
         fun onChunk(fullAccumulatedText: String) {
             if (!inCodeBlock) {
-                // Check recent lines for explicit file path annotations
-                val lines = fullAccumulatedText.lines()
-                for (line in lines.takeLast(6)) {
-                    val path = detectFilePath(line)
-                    if (path != null) {
-                        pendingFilePath = path
-                    }
-                }
-
-                // Detect start of code block: look for ```
-                val lastBackticks = fullAccumulatedText.lastIndexOf("```")
-                if (lastBackticks != -1) {
-                    val afterBacktick = fullAccumulatedText.substring(lastBackticks + 3)
+                // Look for opening fence strictly AFTER the last processed/closed block
+                val nextOpening = fullAccumulatedText.indexOf("```", lastProcessedOffset)
+                if (nextOpening != -1) {
+                    val afterBacktick = fullAccumulatedText.substring(nextOpening + 3)
                     val newlineIdx = afterBacktick.indexOf('\n')
                     if (newlineIdx != -1) {
-                        // Opening line complete! e.g. ```html\n
+                        // Opening fence header is complete (e.g. ```html\n)
                         val lang = afterBacktick.substring(0, newlineIdx).trim().lowercase()
-                        val codeStart = lastBackticks + 3 + newlineIdx + 1
+                        
+                        // If it's an internal thought/reasoning block, skip past it
+                        if (lang in setOf("thought", "thinking", "reasoning")) {
+                            lastProcessedOffset = nextOpening + 3 + newlineIdx + 1
+                            return
+                        }
 
+                        // Check lines between lastProcessedOffset and nextOpening for file path annotation
+                        val precedingText = fullAccumulatedText.substring(lastProcessedOffset, nextOpening)
+                        for (line in precedingText.lines().takeLast(6)) {
+                            val path = detectFilePath(line)
+                            if (path != null) {
+                                pendingFilePath = path
+                            }
+                        }
+
+                        val codeStart = nextOpening + 3 + newlineIdx + 1
                         val target = pendingFilePath ?: defaultPathForLanguage(lang, "")
                         val resolved = resolvePath(target, baseDir)
 
@@ -130,6 +137,7 @@ object ToolExecutor {
                             currentFile = targetFile
                             inCodeBlock = true
                             lastWrittenOffset = codeStart
+                            lastProcessedOffset = codeStart
 
                             if (!writtenFiles.contains(targetFile.absolutePath)) {
                                 writtenFiles.add(targetFile.absolutePath)
@@ -143,8 +151,16 @@ object ToolExecutor {
                     }
                 }
             } else {
-                // Inside active code block: check if closing ``` has arrived
-                val closingBackticks = fullAccumulatedText.indexOf("```", lastWrittenOffset)
+                // Inside active code block: check if closing delimiter (\n```) has arrived
+                val newlineFence = fullAccumulatedText.indexOf("\n```", lastWrittenOffset)
+                val closingBackticks = if (newlineFence != -1) {
+                    newlineFence + 1 // points to first '`'
+                } else if (fullAccumulatedText.startsWith("```", lastWrittenOffset)) {
+                    lastWrittenOffset
+                } else {
+                    -1
+                }
+
                 if (closingBackticks != -1) {
                     // Closing ``` found: write final code characters up to the closing fence
                     val finalChunk = fullAccumulatedText.substring(lastWrittenOffset, closingBackticks)
@@ -153,7 +169,7 @@ object ToolExecutor {
                         currentWriter?.flush()
                         currentWriter?.close()
                         currentFos?.close()
-                        Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & saved: ${currentFile?.absolutePath}")
+                        Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & saved (${currentFile?.length()} bytes): ${currentFile?.absolutePath}")
                     } catch (e: Exception) {
                         Log.e(TAG, "Error closing stream: ${e.message}")
                     } finally {
@@ -162,17 +178,21 @@ object ToolExecutor {
                         currentFile = null
                         inCodeBlock = false
                         pendingFilePath = null
-                        lastWrittenOffset = closingBackticks + 3
+                        // Move lastProcessedOffset past closing ```
+                        val afterClosing = fullAccumulatedText.indexOf('\n', closingBackticks + 3)
+                        lastProcessedOffset = if (afterClosing != -1) afterClosing + 1 else closingBackticks + 3
+                        lastWrittenOffset = lastProcessedOffset
                     }
                 } else {
-                    // Still generating code: stream tokens to disk, preserving 3-char margin
-                    val safeEnd = (fullAccumulatedText.length - 3).coerceAtLeast(lastWrittenOffset)
+                    // Still generating code: stream tokens safely to disk, leaving a 4-char buffer for "\n```"
+                    val safeEnd = (fullAccumulatedText.length - 4).coerceAtLeast(lastWrittenOffset)
                     if (safeEnd > lastWrittenOffset) {
                         val chunk = fullAccumulatedText.substring(lastWrittenOffset, safeEnd)
                         try {
                             currentWriter?.write(chunk)
                             currentWriter?.flush()
                             lastWrittenOffset = safeEnd
+                            lastProcessedOffset = safeEnd
                         } catch (e: Exception) {
                             Log.e(TAG, "Error writing stream chunk: ${e.message}")
                         }
@@ -182,17 +202,36 @@ object ToolExecutor {
         }
 
         @Synchronized
-        fun closeAll(): List<String> {
+        fun closeAll(finalFullText: String = ""): List<String> {
             try {
-                currentWriter?.flush()
-                currentWriter?.close()
-                currentFos?.close()
-            } catch (_: Exception) {}
-            currentWriter = null
-            currentFos = null
-            currentFile = null
-            inCodeBlock = false
-            pendingFilePath = null
+                if (inCodeBlock && currentWriter != null) {
+                    // Stream completed before explicit closing fence: flush all remaining code
+                    if (finalFullText.length > lastWrittenOffset) {
+                        val remainder = finalFullText.substring(lastWrittenOffset)
+                        val fenceIdx = remainder.indexOf("```")
+                        val finalCode = if (fenceIdx != -1) remainder.substring(0, fenceIdx) else remainder
+                        if (finalCode.isNotEmpty()) {
+                            currentWriter?.write(finalCode)
+                        }
+                    }
+                    currentWriter?.flush()
+                    currentWriter?.close()
+                    currentFos?.close()
+                    Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & closed remaining on closeAll: ${currentFile?.absolutePath}")
+                } else {
+                    currentWriter?.flush()
+                    currentWriter?.close()
+                    currentFos?.close()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing all streams: ${e.message}")
+            } finally {
+                currentWriter = null
+                currentFos = null
+                currentFile = null
+                inCodeBlock = false
+                pendingFilePath = null
+            }
             return writtenFiles.toList()
         }
     }
@@ -224,16 +263,19 @@ object ToolExecutor {
             val trimmed = line.trim()
             if (trimmed.isEmpty()) continue
 
+            val lower = trimmed.lowercase()
             // Detect raw code leaks
-            val isCodeLeak = (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</"))) ||
-                             trimmed.startsWith("function ") || trimmed.startsWith("const ") ||
-                             trimmed.startsWith("var ") || trimmed.startsWith("let ") ||
-                             trimmed.startsWith("import ") || trimmed.startsWith("export ") ||
-                             trimmed.startsWith("class ") || trimmed.startsWith("def ") ||
+            val isCodeLeak = (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</") || lower.startsWith("<!doctype"))) ||
+                             lower.startsWith("function ") || lower.startsWith("function(") ||
+                             lower.startsWith("const ") || lower.startsWith("var ") || lower.startsWith("let ") ||
+                             lower.startsWith("import ") || lower.startsWith("export ") ||
+                             lower.startsWith("class ") || lower.startsWith("def ") ||
+                             lower.startsWith("return ") ||
                              (trimmed.contains("{") && trimmed.contains("}")) ||
-                             trimmed.contains("margin:") || trimmed.contains("padding:") ||
-                             trimmed.contains("color:") || trimmed.contains("display:") ||
-                             trimmed.contains("background:")
+                             lower.contains("margin:") || lower.contains("padding:") ||
+                             lower.contains("color:") || lower.contains("display:") ||
+                             lower.contains("background:") || lower.contains("font-size:") ||
+                             trimmed.startsWith("```")
 
             if (!isCodeLeak) {
                 sanitizedAfterLines.add(line)
@@ -288,8 +330,12 @@ object ToolExecutor {
                 }
 
                 if (line.trimStart().startsWith("```")) {
+                    val lang = line.trim().removePrefix("```").lowercase().trim()
+                    if (lang in setOf("thought", "thinking", "reasoning")) {
+                        continue
+                    }
                     inCodeBlock = true
-                    codeLanguage = line.trim().removePrefix("```").lowercase().trim()
+                    codeLanguage = lang
                     codeSb.clear()
                     rawSb.clear()
                     rawSb.appendLine(line)
@@ -323,6 +369,21 @@ object ToolExecutor {
             }
         }
 
+        // Catch any trailing unclosed code block:
+        if (inCodeBlock && codeSb.isNotBlank()) {
+            val code = codeSb.toString().trim()
+            val lang = codeLanguage.ifBlank { "text" }
+            val targetPath = pendingFilePath ?: defaultPathForLanguage(lang, code)
+            blocks.add(
+                ExtractedCodeBlock(
+                    language = lang,
+                    code = code,
+                    targetPath = targetPath,
+                    rawMatch = rawSb.toString()
+                )
+            )
+        }
+
         return blocks
     }
 
@@ -336,6 +397,18 @@ object ToolExecutor {
         for (block in blocks) {
             val ext = block.targetPath.substringAfterLast('.').lowercase()
             if (ext in CODE_EXTENSIONS && isLikelyCode(block.code, ext)) {
+                val resolved = resolvePath(block.targetPath, BASE_DIR)
+                val existingFile = File(resolved)
+                // Integrity check: If file already exists and was streamed with more or equal content,
+                // do NOT truncate or overwrite with an echoed snippet!
+                if (existingFile.exists() && existingFile.length() >= block.code.length) {
+                    Log.i(TAG, "Skipping re-write: existing file is complete (${existingFile.length()} >= ${block.code.length})")
+                    if (!writtenFiles.contains(existingFile.absolutePath)) {
+                        writtenFiles.add(existingFile.absolutePath)
+                    }
+                    continue
+                }
+
                 val written = writeFile(block.targetPath, block.code)
                 if (written != null && !writtenFiles.contains(written)) {
                     writtenFiles.add(written)

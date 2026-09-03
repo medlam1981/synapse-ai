@@ -720,12 +720,16 @@ The file execution engine automatically parses this block and writes the file di
         val taskContext = taskMemory?.getContextForAI() ?: ""
         val taskSection = if (taskContext.isNotBlank()) "\n\n$taskContext" else ""
 
-        // 5. Reasoning Guidelines
+        // 5. Reasoning & Code Containment Guidelines
         val thoughtGuideline = """
 ## Execution & Reasoning Guidelines:
 1. Preliminary Planning & Reasoning: Always formulate your internal thought process, task breakdown, architectural plan, or tool strategy inside <think>...</think> tags before generating content or executing tools.
 2. Clean Separation: Never place internal thoughts, planning overviews, or reasoning inside markdown code blocks (e.g., never use ```markdown or ```thought for planning).
-3. Code Blocks: Only use triple-backtick code fences (```lang) for actual executable code or configuration files (html, css, js, python, bash, json, etc.). Regular text, summaries, and section headers (#, ##) must be plain conversational markdown.
+3. Strict Code Fence Containment: Only use triple-backtick code fences (```lang) for actual executable code or configuration files (html, css, js, python, bash, json, etc.). All generated code must be parsed and isolated exclusively inside code fences. Raw code syntax, script logic, and HTML tags must NEVER leak or render as regular prose text.
+4. Post-Execution Summary Hygiene & Elimination of Code Echoing:
+   - When generating code files for storage (e.g., /sdcard/Medlam-Ai/...), deliver each file within its dedicated fenced code block.
+   - DO NOT repeat, quote, or echo generated code snippets in the conversational summary response following the code blocks.
+   - Conclude exclusively with a high-level executive summary: features implemented, API endpoints used, and confirmation of file paths.
 """.trimIndent()
 
         val customPrompt = config.systemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
@@ -979,11 +983,11 @@ The file execution engine automatically parses this block and writes the file di
                         _uiState.update { it.copy(streamInterruptMsg = interruptMsg) }
                     }
 
-                    // Finalize and auto-flush any in-flight file streaming
-                    val writtenFilesFromStream = liveDiskStreamer.closeAll()
-
                     val fullResponse = responseSb.toString()
                     val parsedFull = parseThoughtAndContent(fullResponse)
+
+                    // Finalize and auto-flush any in-flight file streaming with full synthesis
+                    val writtenFilesFromStream = liveDiskStreamer.closeAll(parsedFull.content)
                     val cleanedFullReply = parsedFull.content.trim()
 
                     if (cleanedFullReply.isNotBlank() || parsedFull.thought.isNotBlank() || fullResponse.contains("<invoke")) {

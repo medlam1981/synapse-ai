@@ -758,31 +758,32 @@ fun ConsolidatedMasterHeader(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             // -------------------------------------------------------------
-            // 1. TOP ROW: Drawer Toggle, Centered Title + Status, Settings
+            // 1. TOP ROW: Left-Aligned [Menu Icon] MEDLAM-AI AGENT [Status Badge] ──── [Settings Gear] (Right)
             // -------------------------------------------------------------
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left: Drawer toggle button
-                IconButton(
-                    onClick = onOpenDrawer,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Widgets,
-                        contentDescription = "Menu",
-                        tint = primaryAccent,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-
-                // Center: Centered MEDLAM-AI AGENT title with its status badge (IDLE / RUNNING)
+                // Left Anchor: Drawer toggle button + MEDLAM-AI AGENT title + status badge
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    IconButton(
+                        onClick = onOpenDrawer,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Widgets,
+                            contentDescription = "Menu",
+                            tint = primaryAccent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
                     Text(
                         text = "MEDLAM-AI AGENT",
                         color = textBright,
@@ -798,7 +799,7 @@ fun ConsolidatedMasterHeader(
                         color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
@@ -819,7 +820,7 @@ fun ConsolidatedMasterHeader(
                     }
                 }
 
-                // Right: Settings gear icon
+                // Right: Settings gear icon anchored flush to far right
                 IconButton(
                     onClick = onOpenSettings,
                     modifier = Modifier.size(28.dp)
@@ -828,13 +829,13 @@ fun ConsolidatedMasterHeader(
                         imageVector = Icons.Outlined.Settings,
                         contentDescription = "Settings",
                         tint = textDim,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
             // -------------------------------------------------------------
-            // 2. MIDDLE ROW: Compact inline spec chip (Base Model & Companion MTP)
+            // 2. MIDDLE ROW: Centered active model chip (Base Model & Companion MTP)
             // (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16)
             // -------------------------------------------------------------
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
@@ -900,117 +901,189 @@ fun ConsolidatedMasterHeader(
             }
 
             // -------------------------------------------------------------
-            // 3. BOTTOM ROW: Compact hardware telemetry bar
-            // Showing: Battery, RAM, Storage, Thermals, MTP status, Task counter, and Session Clock
+            // 3. BOTTOM ROW: Decompressed hardware telemetry dashboard
+            // Showing: Battery, RAM, Storage, Thermals, Engine Flag, Task Counter, and Clock
+            // Adaptive horizontal spacing (11-12dp gap) + subtle micro-dividers + proportional scaling
             // -------------------------------------------------------------
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 2.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(11.dp)
             ) {
-                // Left Metrics: Battery, RAM, Storage, Thermals, MTP status
-                Row(
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    // Battery
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Icon(
-                            if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull,
-                            null,
-                            tint = if (stats.isCharging) primaryAccent else textDim,
-                            modifier = Modifier.size(10.dp)
-                        )
-                        Text(
-                            text = if (stats.isCharging) "⚡${stats.battery}%" else "${stats.battery}%",
-                            color = textBright,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-
-                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
-
-                    // RAM
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Icon(Icons.Filled.Memory, null, tint = primaryAccent, modifier = Modifier.size(10.dp))
-                        Text(stats.ramFree, color = textBright, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
-                    }
-
-                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
-
-                    // Storage
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Icon(Icons.Filled.Storage, null, tint = primaryAccent, modifier = Modifier.size(10.dp))
-                        Text("${stats.storageFree} HD", color = textBright, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
-                    }
-
-                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
-
-                    // Thermals
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Icon(Icons.Filled.Thermostat, null, tint = if (stats.cpuTempInt > 55) MaterialTheme.colorScheme.error else primaryAccent, modifier = Modifier.size(10.dp))
-                        Text(stats.cpuTemp, color = textBright, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
-                    }
-
-                    // MTP / Engine Status
-                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Icon(Icons.Filled.VpnKey, null, tint = secondaryAccent, modifier = Modifier.size(9.dp))
-                        Text(
-                            text = if (isCloudMode) "CLOUD" else if (hasMtp) "⚡ MTP" else "LOCAL",
-                            color = secondaryAccent,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                // Right Metrics: Task counter + Session Clock
+                // 1. Battery
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Task Counter
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (totalTasks > 0) primaryAccent.copy(alpha = 0.15f) else subCardBg
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text("tsk", color = primaryAccent, fontSize = 7.5.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                            Text("$totalTasks", color = textBright, fontSize = 7.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                        }
-                    }
+                    Icon(
+                        imageVector = if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull,
+                        contentDescription = "Battery",
+                        tint = if (stats.isCharging) primaryAccent else textDim,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = if (stats.isCharging) "⚡${stats.battery}%" else "${stats.battery}%",
+                        color = textBright,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
 
-                    // Session Clock
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = subCardBg
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Icon(Icons.Outlined.Schedule, null, tint = primaryAccent, modifier = Modifier.size(8.dp))
-                            Text(currentTime, color = textBright, fontSize = 7.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                        }
-                    }
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 2. RAM
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Memory,
+                        contentDescription = "RAM",
+                        tint = primaryAccent,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = stats.ramFree,
+                        color = textBright,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 3. Storage
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Storage,
+                        contentDescription = "Storage",
+                        tint = primaryAccent,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = "${stats.storageFree} HD",
+                        color = textBright,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 4. Thermals
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Thermostat,
+                        contentDescription = "Thermals",
+                        tint = if (stats.cpuTempInt > 55) MaterialTheme.colorScheme.error else primaryAccent,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = stats.cpuTemp,
+                        color = textBright,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 5. Engine Flag / MTP Status
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.VpnKey,
+                        contentDescription = "Engine",
+                        tint = secondaryAccent,
+                        modifier = Modifier.size(10.dp)
+                    )
+                    Text(
+                        text = if (isCloudMode) "CLOUD" else if (hasMtp) "⚡ MTP" else "LOCAL",
+                        color = secondaryAccent,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 6. Task Counter
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "TSK",
+                        color = primaryAccent,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "$totalTasks",
+                        color = textBright,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+
+                // Micro-divider
+                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
+
+                // 7. Session Clock
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Schedule,
+                        contentDescription = "Clock",
+                        tint = primaryAccent,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = currentTime,
+                        color = textBright,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
                 }
             }
         }
@@ -1197,8 +1270,9 @@ fun CliCodeBlockContainer(
                         }
 
                         if (!filePath.isNullOrBlank()) {
+                            val displayPath = if (filePath.startsWith("file:")) filePath else "file: $filePath"
                             Text(
-                                text = filePath,
+                                text = displayPath,
                                 color = textDim,
                                 fontSize = 9.sp,
                                 fontFamily = FontFamily.Monospace,
@@ -1308,17 +1382,11 @@ val EXECUTABLE_LANGUAGES = setOf(
 
 fun isExecutableCode(lang: String, detectedPath: String?): Boolean {
     val cleanLang = lang.lowercase().trim()
-    if (cleanLang in setOf("markdown", "md", "text", "txt", "plain", "plaintext", "thought", "thinking", "reasoning", "plan", "notes")) {
+    // Strict Code Fence Containment: All generated source code must be parsed and isolated exclusively inside the interactive code block widget.
+    if (cleanLang in setOf("thought", "thinking", "reasoning")) {
         return false
     }
-    if (cleanLang in EXECUTABLE_LANGUAGES) {
-        return true
-    }
-    if (detectedPath != null) {
-        val ext = detectedPath.substringAfterLast('.', "").lowercase()
-        return ext in EXECUTABLE_LANGUAGES
-    }
-    return false
+    return true
 }
 
 fun filterCodeLeaksFromText(text: String): String {
@@ -1330,15 +1398,17 @@ fun filterCodeLeaksFromText(text: String): String {
             sanitized.add(line)
             continue
         }
-        val isCodeLeak = (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</"))) ||
-                         trimmed.startsWith("function ") || trimmed.startsWith("const ") ||
-                         trimmed.startsWith("var ") || trimmed.startsWith("let ") ||
-                         trimmed.startsWith("import ") || trimmed.startsWith("export ") ||
-                         trimmed.startsWith("class ") || trimmed.startsWith("def ") ||
+        val lower = trimmed.lowercase()
+        val isCodeLeak = (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</") || lower.startsWith("<!doctype"))) ||
+                         lower.startsWith("function ") || lower.startsWith("function(") ||
+                         lower.startsWith("const ") || lower.startsWith("var ") || lower.startsWith("let ") ||
+                         lower.startsWith("import ") || lower.startsWith("export ") ||
+                         lower.startsWith("class ") || lower.startsWith("def ") ||
+                         lower.startsWith("return ") ||
                          (trimmed.contains("{") && trimmed.contains("}")) ||
-                         trimmed.contains("margin:") || trimmed.contains("padding:") ||
-                         trimmed.contains("color:") || trimmed.contains("display:") ||
-                         trimmed.contains("background:")
+                         lower.contains("margin:") || lower.contains("padding:") ||
+                         lower.contains("color:") || lower.contains("display:") ||
+                         lower.contains("background:") || lower.contains("font-size:")
 
         if (!isCodeLeak) {
             sanitized.add(line)
@@ -1355,9 +1425,15 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
     for (match in codeRegex.findAll(text)) {
         if (match.range.first > currentIndex) {
             val textPart = text.substring(currentIndex, match.range.first).trim()
-            val cleanTextPart = filterCodeLeaksFromText(textPart)
-            if (cleanTextPart.isNotEmpty()) {
-                segments.add(MessageSegment.Text(cleanTextPart))
+            val lowerPart = textPart.lowercase()
+            if (lowerPart.startsWith("<!doctype html") || lowerPart.startsWith("<html")) {
+                val detected = ToolExecutor.detectFilePath(textPart) ?: ToolExecutor.defaultPathForLanguage("html", textPart)
+                segments.add(MessageSegment.Code(language = "html", code = textPart, filePath = detected))
+            } else {
+                val cleanTextPart = filterCodeLeaksFromText(textPart)
+                if (cleanTextPart.isNotEmpty()) {
+                    segments.add(MessageSegment.Text(cleanTextPart))
+                }
             }
         }
 
@@ -1367,7 +1443,7 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
         var detectedPath: String? = null
         if (match.range.first > 0) {
             val precedingText = text.substring(0, match.range.first)
-            val lines = precedingText.lines().takeLast(3)
+            val lines = precedingText.lines().takeLast(6)
             for (line in lines) {
                 val p = ToolExecutor.detectFilePath(line)
                 if (p != null) {
@@ -1376,11 +1452,23 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
                 }
             }
         }
+        if (detectedPath == null) {
+            val codeLines = code.lines().take(3)
+            for (cLine in codeLines) {
+                val p = ToolExecutor.detectFilePath(cLine)
+                if (p != null) {
+                    detectedPath = p
+                    break
+                }
+            }
+        }
+        if (detectedPath == null && lang.isNotBlank()) {
+            detectedPath = ToolExecutor.defaultPathForLanguage(lang, code)
+        }
 
         if (isExecutableCode(lang, detectedPath)) {
             segments.add(MessageSegment.Code(language = lang.ifBlank { "code" }, code = code, filePath = detectedPath))
         } else {
-            // Natural prose typography: markdown, planning, notes, and general text render as standard conversational text
             segments.add(MessageSegment.Text(code))
         }
         currentIndex = match.range.last + 1
@@ -1398,8 +1486,9 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
             val afterBackticks = remainder.substring(unclosedStart + 3)
             val langLine = afterBackticks.substringBefore('\n').trim()
             val codeContent = if (afterBackticks.contains('\n')) afterBackticks.substringAfter('\n') else ""
-            if (isExecutableCode(langLine, null)) {
-                segments.add(MessageSegment.Code(language = langLine.ifBlank { "code" }, code = codeContent, filePath = null))
+            val detected = if (langLine.isNotBlank()) ToolExecutor.defaultPathForLanguage(langLine, codeContent) else null
+            if (isExecutableCode(langLine, detected)) {
+                segments.add(MessageSegment.Code(language = langLine.ifBlank { "code" }, code = codeContent, filePath = detected))
             } else {
                 val fullText = (cleanBeforeCode + "\n" + codeContent).trim()
                 if (fullText.isNotEmpty()) {
@@ -1408,9 +1497,15 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
             }
         } else {
             val remainingText = remainder.trim()
-            val cleanRemaining = filterCodeLeaksFromText(remainingText)
-            if (cleanRemaining.isNotEmpty()) {
-                segments.add(MessageSegment.Text(cleanRemaining))
+            val lowerRemaining = remainingText.lowercase()
+            if (lowerRemaining.startsWith("<!doctype html") || lowerRemaining.startsWith("<html")) {
+                val detected = ToolExecutor.detectFilePath(remainingText) ?: ToolExecutor.defaultPathForLanguage("html", remainingText)
+                segments.add(MessageSegment.Code(language = "html", code = remainingText, filePath = detected))
+            } else {
+                val cleanRemaining = filterCodeLeaksFromText(remainingText)
+                if (cleanRemaining.isNotEmpty()) {
+                    segments.add(MessageSegment.Text(cleanRemaining))
+                }
             }
         }
     }
