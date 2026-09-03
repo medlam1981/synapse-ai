@@ -191,6 +191,21 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         }
     }
 
+    fun cleanupEmptySessions(exceptSessionId: String? = null) {
+        val db = writableDatabase
+        try {
+            val whereClause = if (exceptSessionId.isNullOrBlank()) {
+                "$COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES)"
+            } else {
+                "$COL_SESSION_ID != ? AND $COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES)"
+            }
+            val whereArgs = if (exceptSessionId.isNullOrBlank()) null else arrayOf(exceptSessionId)
+            db.delete(TABLE_SESSIONS, whereClause, whereArgs)
+        } catch (e: Exception) {
+            Log.e(TAG, "cleanupEmptySessions error: ${e.message}")
+        }
+    }
+
     fun getMessagesForSession(sessionId: String): List<ChatMessageEntity> {
         val list = mutableListOf<ChatMessageEntity>()
         val db = readableDatabase

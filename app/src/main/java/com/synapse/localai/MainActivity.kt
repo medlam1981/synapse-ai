@@ -576,7 +576,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
             Box(modifier = Modifier.weight(1f)) {
                 if (uiState.logs.isEmpty() && !uiState.isProcessing) {
                     CliWelcomeScreen(
-                        resumptionNotice = uiState.resumptionNotice,
                         onSelectPrompt = { p ->
                             viewModel.sendCommand(p, context = context)
                         }
@@ -588,37 +587,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 28.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        if (!uiState.resumptionNotice.isNullOrBlank()) {
-                            item(key = "resumption_banner") {
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.12f else 0.08f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = uiState.resumptionNotice ?: "",
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            fontSize = 11.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        IconButton(
-                                            onClick = { viewModel.dismissResumptionNotice() },
-                                            modifier = Modifier.size(20.dp)
-                                        ) {
-                                            Icon(Icons.Default.Close, "Dismiss", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         items(uiState.logs, key = { it.id }) { log ->
                             CliLogMessageView(log = log, isDark = isDark)
                         }
@@ -1631,10 +1599,8 @@ fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
 
 @Composable
 fun CliWelcomeScreen(
-    resumptionNotice: String? = null,
     onSelectPrompt: (String) -> Unit
 ) {
-    val isDark = isSystemInDarkTheme()
     val cyanAccent = MaterialTheme.colorScheme.primary
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1648,78 +1614,6 @@ fun CliWelcomeScreen(
         Text("MEDLAM-AI AGENT", color = cyanAccent, fontSize = 16.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
         Text("Autonomous On-Device Agent & Chat CLI", color = textDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
         Spacer(modifier = Modifier.height(16.dp))
-
-        if (!resumptionNotice.isNullOrBlank()) {
-            Surface(
-                onClick = { onSelectPrompt("Continue and finalize the active project files") },
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                color = cyanAccent.copy(alpha = if (isDark) 0.12f else 0.08f),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, cyanAccent.copy(alpha = 0.5f))
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "⚡ RESUMED WORKSPACE STATE",
-                            color = cyanAccent,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = cyanAccent.copy(alpha = 0.2f)
-                        ) {
-                            Text(
-                                text = "CHECKPOINT RESTORED",
-                                color = cyanAccent,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = resumptionNotice,
-                        color = textBright,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.SansSerif,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = cyanAccent.copy(alpha = 0.25f),
-                            border = BorderStroke(0.5.dp, cyanAccent)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    "Continue Mission",
-                                    color = cyanAccent,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                Icon(Icons.Default.ArrowForward, null, tint = cyanAccent, modifier = Modifier.size(12.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         listOf(
             "Create a responsive modern web dashboard in /sdcard/Medlam-Ai/webapp",
@@ -1803,34 +1697,49 @@ fun SidebarContent(
             Divider(color = borderColor, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(10.dp))
 
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(sessions, key = { it.id }) { s ->
-                    val selected = s.id == activeSessionId
-                    val isSessionArabic = isArabic(s.title)
-                    Surface(
-                        onClick = {
-                            viewModel.switchSession(s.id)
-                            onCloseDrawer()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        color = if (selected) borderColor.copy(alpha = 0.6f) else Color.Transparent,
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+            if (sessions.isEmpty()) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("No archived sessions", color = textDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(sessions, key = { it.id }) { s ->
+                        val selected = s.id == activeSessionId
+                        val isSessionArabic = isArabic(s.title)
+                        Surface(
+                            onClick = {
+                                viewModel.switchSession(s.id)
+                                onCloseDrawer()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = if (selected) cyanAccent.copy(alpha = if (isDark) 0.15f else 0.08f) else Color.Transparent,
+                            shape = RoundedCornerShape(6.dp),
+                            border = if (selected) BorderStroke(0.5.dp, cyanAccent.copy(alpha = 0.5f)) else null
                         ) {
-                            Text(
-                                text = s.title,
-                                color = if (selected) cyanAccent else textDim,
-                                fontSize = 10.5.sp,
-                                fontFamily = if (isSessionArabic) FontFamily.SansSerif else FontFamily.Monospace,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = { viewModel.deleteSession(s.id) }, modifier = Modifier.size(20.dp)) {
-                                Icon(Icons.Outlined.DeleteOutline, "Del", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = s.title,
+                                        color = if (selected) cyanAccent else textBright,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        fontFamily = if (isSessionArabic) FontFamily.SansSerif else FontFamily.Monospace,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(s.updatedAt)),
+                                        color = textDim,
+                                        fontSize = 8.5.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                                IconButton(onClick = { viewModel.deleteSession(s.id) }, modifier = Modifier.size(20.dp)) {
+                                    Icon(Icons.Outlined.DeleteOutline, "Del", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                                }
                             }
                         }
                     }

@@ -373,24 +373,15 @@ class AgentViewModel : ViewModel() {
             if (chatDb == null) {
                 chatDb = ChatDatabaseHelper(context)
             }
+            chatDb?.cleanupEmptySessions()
             refreshSessions()
-            val existingSessions = chatDb?.getAllSessions() ?: emptyList()
-            val checkpoint = EpistemicMemoryManager.loadCheckpoint(context)
-            val resumptionNotice = EpistemicMemoryManager.getResumptionNotice(context)
-            val recentPath = checkpoint?.recentPaths?.firstOrNull()
 
-            if (checkpoint != null && checkpoint.sessionId.isNotBlank() && chatDb?.getSession(checkpoint.sessionId) != null) {
-                switchSession(checkpoint.sessionId)
-            } else if (existingSessions.isNotEmpty()) {
-                val latest = existingSessions.first()
-                switchSession(latest.id)
-            } else {
-                startNewSession()
-            }
-
+            // Pristine Default Workspace: Every cold launch always lands on a fresh, clean slate
+            startNewSession()
             _uiState.update { it.copy(
-                resumptionNotice = resumptionNotice,
-                activeWorkspacePath = recentPath
+                logs = emptyList(),
+                resumptionNotice = null,
+                activeWorkspacePath = null
             ) }
 
             loadWorkflows(prefs)
@@ -709,14 +700,6 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                 )
             )
             refreshSessions()
-            EpistemicMemoryManager.updateWorkingStep(
-                context = actualContext,
-                sessionId = sid,
-                sessionTitle = currentSessionTitle.value,
-                intent = command,
-                phase = "STARTING",
-                newPath = detectedInitialPath
-            )
         }
         val lowerCmd = command.lowercase().trim()
         val isBackgroundRequest = lowerCmd.contains("in background") || lowerCmd.contains("فالخلفية") || 
@@ -992,22 +975,13 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                                     refreshSessions()
 
                                     val detectedPath = ToolExecutor.detectFilePath(fullResponse)
-                                    EpistemicMemoryManager.updateWorkingStep(
-                                        context = actualContext,
-                                        sessionId = sid,
-                                        sessionTitle = currentSessionTitle.value,
-                                        intent = command,
-                                        phase = "COMPLETED",
-                                        newPath = detectedPath
-                                    )
                                     EpistemicMemoryManager.recordInteraction(
                                         context = actualContext,
                                         userPrompt = command,
                                         agentResponse = fullResponse,
                                         touchedPath = detectedPath
                                     )
-                                    val newNotice = EpistemicMemoryManager.getResumptionNotice(actualContext)
-                                    _uiState.update { it.copy(resumptionNotice = newNotice, activeWorkspacePath = detectedPath ?: it.activeWorkspacePath) }
+                                    _uiState.update { it.copy(activeWorkspacePath = detectedPath ?: it.activeWorkspacePath) }
                                 }
                                 keepGoing = false
                             }
@@ -1137,14 +1111,6 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
             if (writtenFiles.isNotEmpty()) {
                 writtenFiles.forEach { path ->
                     addSystemLog("File written: $path")
-                    EpistemicMemoryManager.updateWorkingStep(
-                        context = MainActivity.instance,
-                        sessionId = currentSessionId.value,
-                        sessionTitle = currentSessionTitle.value,
-                        intent = currentSessionTitle.value,
-                        phase = "WRITING_FILE",
-                        newPath = path
-                    )
                 }
             }
         } catch (e: Exception) {
@@ -1262,6 +1228,8 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
         try {
             val rootDir = File("/sdcard/Medlam-Ai")
             if (!rootDir.exists()) rootDir.mkdirs()
+            val oldCheckpoint = File("/sdcard/Medlam-Ai/memory/agent_checkpoint.json")
+            if (oldCheckpoint.exists()) oldCheckpoint.delete()
         } catch (_: Exception) {}
     }
 
@@ -1276,9 +1244,10 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
         val newId = UUID.randomUUID().toString()
         currentSessionId.value = newId
         currentSessionTitle.value = "New Session"
-        _uiState.update { it.copy(logs = emptyList()) }
+        _uiState.update { it.copy(logs = emptyList(), resumptionNotice = null, activeWorkspacePath = null) }
         conversationHistory.clear()
         viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.cleanupEmptySessions(exceptSessionId = newId)
             chatDb?.insertSession(
                 ChatSessionEntity(
                     id = newId,
@@ -1309,7 +1278,8 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
             }
             currentSessionId.value = session.id
             currentSessionTitle.value = session.title
-            _uiState.update { it.copy(logs = restoredLogs) }
+            val sessionPath = messages.reversed().firstNotNullOfOrNull { ToolExecutor.detectFilePath(it.text) }
+            _uiState.update { it.copy(logs = restoredLogs, resumptionNotice = null, activeWorkspacePath = sessionPath) }
             synchronized(conversationHistory) {
                 conversationHistory.clear()
                 restoredLogs.takeLast(MAX_HISTORY_MESSAGES).forEach { l ->
