@@ -11,7 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.ui.draw.alpha
@@ -356,9 +356,49 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         viewModel.loadConfig(context)
     }
 
-    LaunchedEffect(uiState.logs.size, uiState.streamVersion, uiState.isProcessing, uiState.activeStatusDetail) {
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) {
+                true
+            } else {
+                val lastVisible = visibleItems.last()
+                val isLastIndex = lastVisible.index >= layoutInfo.totalItemsCount - 1
+                val lastItemBottom = lastVisible.offset + lastVisible.size
+                val viewportEnd = layoutInfo.viewportEndOffset
+                isLastIndex && (lastItemBottom <= viewportEnd + 140)
+            }
+        }
+    }
+
+    var userScrolledAway by remember { mutableStateOf(false) }
+
+    // User-Aware Scroll State: release auto-scroll lock on manual scroll up, re-engage on scroll to bottom
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            if (!isAtBottom) {
+                userScrolledAway = true
+            }
+        } else {
+            if (isAtBottom) {
+                userScrolledAway = false
+            }
+        }
+    }
+
+    // New prompt sent -> re-engage lock and scroll smoothly to newest message bottom
+    LaunchedEffect(uiState.logs.size) {
+        userScrolledAway = false
         if (uiState.logs.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.logs.size - 1)
+            listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
+        }
+    }
+
+    // Kinetic Stream-Tracking: instantaneous, zero-jitter tracking of live streaming tail
+    LaunchedEffect(uiState.streamVersion, uiState.isProcessing, uiState.activeStatusDetail) {
+        if (!userScrolledAway && !listState.isScrollInProgress && uiState.logs.isNotEmpty()) {
+            listState.scrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
         }
     }
 
@@ -541,24 +581,51 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 24.dp),
+                        contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 28.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(uiState.logs, key = { it.id }) { log ->
-                            val isLastLog = log.id == uiState.logs.lastOrNull()?.id
-                            val isLiveOngoing = uiState.isProcessing && isLastLog && log.sender == "AGENT"
-                            CliLogMessageView(
-                                log = log,
-                                isDark = isDark,
-                                isLiveOngoing = isLiveOngoing,
-                                statusDetail = uiState.activeStatusDetail
-                            )
+                            CliLogMessageView(log = log, isDark = isDark)
+                        }
+                    }
+
+                    // Floating Jump to Latest Button when user manually scrolled away
+                    if (userScrolledAway && uiState.logs.isNotEmpty()) {
+                        Surface(
+                            onClick = {
+                                userScrolledAway = false
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
+                                }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 12.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                            border = BorderStroke(0.5.dp, primaryAccent.copy(alpha = 0.6f)),
+                            shadowElevation = 6.dp
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(12.dp))
+                                Text(
+                                    text = if (uiState.isProcessing) "Live Stream Tail ↓" else "Jump to Latest ↓",
+                                    color = primaryAccent,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            // Bottom Input Bar
+            // Bottom Dock: Docked Real-Time Activity Monitor + Floating Message Input Capsule
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -566,13 +633,68 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 color = surfaceColor,
                 border = BorderStroke(0.5.dp, borderColor)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // 4. Docked Real-Time Activity Monitor (Impenetrable Lower Boundary)
+                    AnimatedVisibility(
+                        visible = uiState.isProcessing && uiState.activeStatusDetail.isNotBlank(),
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
+                        val infiniteTransition = rememberInfiniteTransition(label = "docked_activity_pulse")
+                        val pulseAlpha by infiniteTransition.animateFloat(
+                            initialValue = 0.35f,
+                            targetValue = 1.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(750, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "docked_pulse_alpha"
+                        )
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(0.5.dp, primaryAccent.copy(alpha = 0.35f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .alpha(pulseAlpha)
+                                        .clip(CircleShape)
+                                        .background(primaryAccent)
+                                )
+                                Text(
+                                    text = uiState.activeStatusDetail,
+                                    color = primaryAccent,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+
+                    // Floating Message Input Capsule Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val inputIsArabic = isArabic(textInput)
                     CompositionLocalProvider(
@@ -684,6 +806,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 modifier = Modifier.size(18.dp)
                             )
                         }
+                    }
                     }
                 }
             }
@@ -1211,9 +1334,7 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
 @Composable
 fun CliLogMessageView(
     log: LogEntry, 
-    isDark: Boolean,
-    isLiveOngoing: Boolean = false,
-    statusDetail: String = ""
+    isDark: Boolean
 ) {
     val clipboard = LocalClipboardManager.current
     val isUser = log.sender == "USER"
@@ -1320,54 +1441,6 @@ fun CliLogMessageView(
                                 )
                             }
                         }
-                    }
-                }
-            }
-
-            // 4. Persistent Dynamic Activity Line:
-            // Anchored directly below active thinking block, or continuously repositioned at the absolute bottom edge
-            // of ongoing response as live operational boundary.
-            if (isLiveOngoing && statusDetail.isNotBlank()) {
-                val infiniteTransition = rememberInfiniteTransition(label = "activity_pulse")
-                val pulseAlpha by infiniteTransition.animateFloat(
-                    initialValue = 0.35f,
-                    targetValue = 1.0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(750, easing = LinearEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "pulse_alpha"
-                )
-
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .alpha(pulseAlpha)
-                                .clip(CircleShape)
-                                .background(primaryAccent)
-                        )
-                        Text(
-                            text = statusDetail,
-                            color = primaryAccent,
-                            fontSize = 9.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
             }
