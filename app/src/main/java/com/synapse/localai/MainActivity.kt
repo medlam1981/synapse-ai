@@ -335,7 +335,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val cyanAccent = indigoAccent
     val primaryAccent = MaterialTheme.colorScheme.primary
     val secondaryAccent = MaterialTheme.colorScheme.secondary
-    val inputBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    val inputBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.65f else 0.85f)
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -429,8 +429,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
             // Top Header: Spacious Navigation Bar with Heavyweight Typography
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = surfaceColor,
-                border = BorderStroke(0.5.dp, borderColor)
+                color = surfaceColor
             ) {
                 Column(
                     modifier = Modifier
@@ -451,7 +450,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 onClick = { coroutineScope.launch { drawerState.open() } },
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                border = BorderStroke(0.5.dp, borderColor),
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
@@ -679,7 +677,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 .padding(bottom = 12.dp),
                             shape = RoundedCornerShape(16.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-                            border = BorderStroke(0.5.dp, primaryAccent.copy(alpha = 0.6f)),
                             shadowElevation = 6.dp
                         ) {
                             Row(
@@ -706,8 +703,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .imePadding(),
-                color = surfaceColor,
-                border = BorderStroke(0.5.dp, borderColor)
+                color = surfaceColor
             ) {
                 Column(
                     modifier = Modifier
@@ -832,12 +828,12 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
                         modifier = Modifier
                             .size(38.dp)
-                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp),
+                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.dp),
                         shape = CircleShape,
-                        color = if (selectedFileUri != null) cyanAccent.copy(alpha = 0.2f) else borderColor.copy(alpha = 0.5f)
+                        color = if (selectedFileUri != null) indigoAccent.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.7f else 0.9f)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Outlined.AttachFile, "Attach", tint = if (selectedFileUri != null) cyanAccent else textDim, modifier = Modifier.size(17.dp))
+                            Icon(Icons.Outlined.AttachFile, "Attach", tint = if (selectedFileUri != null) indigoAccent else textDim, modifier = Modifier.size(17.dp))
                         }
                     }
 
@@ -853,9 +849,9 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         },
                         modifier = Modifier
                             .size(38.dp)
-                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp),
+                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.dp),
                         shape = CircleShape,
-                        color = if (isRecording) Color.Red.copy(alpha = 0.2f) else borderColor.copy(alpha = 0.5f)
+                        color = if (isRecording) Color.Red.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.7f else 0.9f)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic, "Mic", tint = if (isRecording) Color.Red else textDim, modifier = Modifier.size(17.dp))
@@ -877,9 +873,9 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         },
                         modifier = Modifier
                             .size(38.dp)
-                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp),
+                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.dp),
                         shape = CircleShape,
-                        color = if (uiState.isProcessing) Color.Red else if (canSend) cyanAccent else borderColor.copy(alpha = 0.5f),
+                        color = if (uiState.isProcessing) Color.Red else if (canSend) indigoAccent else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.7f else 0.9f),
                         enabled = uiState.isProcessing || canSend
                     ) {
                         Box(contentAlignment = Alignment.Center) {
@@ -1024,8 +1020,7 @@ fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState
             ) {
                 Surface(
                     shape = RoundedCornerShape(5.dp),
-                    color = if (totalTasks > 0) primaryAccent.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(0.5.dp, if (totalTasks > 0) primaryAccent else capsuleBorder)
+                    color = if (totalTasks > 0) primaryAccent.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
@@ -1055,8 +1050,7 @@ fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState
 
                 Surface(
                     shape = RoundedCornerShape(5.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(0.5.dp, capsuleBorder)
+                    color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
@@ -1245,8 +1239,7 @@ fun CliCodeBlockContainer(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
-                            color = primaryColor.copy(alpha = 0.15f),
-                            border = BorderStroke(0.5.dp, primaryColor.copy(alpha = 0.3f))
+                            color = primaryColor.copy(alpha = 0.15f)
                         ) {
                             Text(
                                 text = language.uppercase().ifBlank { "CODE" },
