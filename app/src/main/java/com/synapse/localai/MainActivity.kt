@@ -16,6 +16,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import com.synapse.localai.ui.SyntaxHighlighter
 import com.synapse.localai.ui.tactileGlassGlow
@@ -530,7 +531,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
+                            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
@@ -562,11 +563,11 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                                .heightIn(min = 40.dp, max = 96.dp)
-                                .tactileGlassGlow(cornerRadius = 20.dp, isDark = isDark, borderWidth = 0.dp),
+                                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                                .heightIn(min = 42.dp, max = 96.dp)
+                                .tactileGlassGlow(cornerRadius = 16.dp, isDark = isDark, borderWidth = 0.dp),
                             color = inputBg,
-                            shape = RoundedCornerShape(20.dp),
+                            shape = RoundedCornerShape(16.dp),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Row(
@@ -746,11 +747,13 @@ fun ConsolidatedMasterHeader(
 
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
 
-    // Solid Master Header Card docked at top of viewport
+    // Solid Master Header Card docked at top of viewport along the unified 12.dp horizontal grid rail
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp),
         color = headerBg,
-        shape = RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp),
+        shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
@@ -1129,7 +1132,7 @@ fun CliThoughtContainer(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(12.dp),
         color = containerBg,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -1138,7 +1141,7 @@ fun CliThoughtContainer(
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = topBarBg,
-                shape = RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp),
+                shape = RoundedCornerShape(topStart = 11.dp, topEnd = 11.dp),
                 border = BorderStroke(1.dp, borderColor.copy(alpha = 0.4f))
             ) {
                 Row(
@@ -1253,7 +1256,7 @@ fun CliCodeBlockContainer(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(12.dp),
         color = containerBg,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -1262,7 +1265,7 @@ fun CliCodeBlockContainer(
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = topBarBg,
-                shape = RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp),
+                shape = RoundedCornerShape(topStart = 11.dp, topEnd = 11.dp),
                 border = BorderStroke(1.dp, borderColor.copy(alpha = 0.4f))
             ) {
                 Row(
@@ -1380,7 +1383,7 @@ fun CliCodeBlockContainer(
                 }
             }
 
-            // Contained Monospace Viewport: Strictly enclosed within horizontally scrollable container
+            // Contained Monospace Viewport: Strictly enclosed and horizontally locked within container
             AnimatedVisibility(visible = isExpanded) {
                 val highlighted = remember(code, language, isDark) {
                     SyntaxHighlighter.highlight(code, language, isDark)
@@ -1388,6 +1391,7 @@ fun CliCodeBlockContainer(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clipToBounds()
                         .horizontalScroll(rememberScrollState())
                         .padding(10.dp)
                 ) {
@@ -1582,7 +1586,7 @@ fun CliLogMessageView(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 3.dp),
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(16.dp),
             color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
             border = BorderStroke(1.dp, borderColor)
         ) {
@@ -1643,7 +1647,7 @@ fun CliLogMessageView(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             color = cadreBg,
             border = BorderStroke(1.dp, borderColor)
         ) {
@@ -1795,6 +1799,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
             if (trimmed.isEmpty()) return@forEach
 
             val isLineArabic = isArabic(trimmed)
+            val isExecConfirmation = trimmed.contains("Executive Deployment Confirmation")
             val isHeader = trimmed.startsWith("#") || (trimmed.endsWith(":") && trimmed.length < 50 && !trimmed.contains("http"))
             val isBullet = trimmed.startsWith("- ") || trimmed.startsWith("• ") || trimmed.matches(Regex("^[0-9]+[.)].*"))
             val clean = trimmed.replace(Regex("^#+\\s*"), "")
@@ -1802,7 +1807,32 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
             CompositionLocalProvider(
                 LocalLayoutDirection provides if (isLineArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
             ) {
-                if (isHeader) {
+                if (isExecConfirmation) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp, bottom = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
+                        border = BorderStroke(1.dp, primaryAccent.copy(alpha = 0.35f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("📋", fontSize = 11.sp)
+                            Text(
+                                text = clean.uppercase(),
+                                color = primaryAccent,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    }
+                } else if (isHeader) {
                     Text(
                         text = clean,
                         color = primaryAccent,

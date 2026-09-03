@@ -232,6 +232,31 @@ object ToolExecutor {
                 inCodeBlock = false
                 pendingFilePath = null
             }
+
+            // Comprehensive multi-file safety check: Ensure ALL demuxed code blocks are written to physical disk
+            if (finalFullText.isNotBlank()) {
+                try {
+                    val demuxed = StreamDemultiplexer.demux(finalFullText)
+                    for (block in demuxed.blocks) {
+                        if (block is StreamDemultiplexer.DemuxBlock.Code && block.code.isNotBlank()) {
+                            val targetPath = block.filePath ?: defaultPathForLanguage(block.language, block.code)
+                            val resolved = resolvePath(targetPath, baseDir)
+                            val f = File(resolved)
+                            if (!f.exists() || f.length() < block.code.length.toLong() / 2) {
+                                f.parentFile?.let { if (!it.exists()) it.mkdirs() }
+                                f.writeText(block.code, StandardCharsets.UTF_8)
+                                if (!writtenFiles.contains(f.absolutePath)) {
+                                    writtenFiles.add(f.absolutePath)
+                                }
+                                Log.i(TAG, "⚡ LiveDiskStreamer: Multi-file safety verified & saved: ${f.absolutePath} (${f.length()} bytes)")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in multi-file safety write: ${e.message}")
+                }
+            }
+
             return writtenFiles.toList()
         }
     }
@@ -245,58 +270,47 @@ object ToolExecutor {
     fun sanitizePostExecutionSummary(rawReply: String, writtenFiles: List<String>): String {
         if (writtenFiles.isEmpty()) return rawReply.trim()
 
-        val codeBlockRegex = Regex("""```[a-zA-Z0-9_-]*\n[\s\S]*?```""")
-        val codeBlocks = codeBlockRegex.findAll(rawReply).map { it.value }.toList()
+        val demuxed = StreamDemultiplexer.demux(rawReply)
+        val codeBlocks = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.Code>()
         if (codeBlocks.isEmpty()) return rawReply.trim()
 
-        val firstBlockStart = rawReply.indexOf("```")
-        val textBefore = if (firstBlockStart > 0) rawReply.substring(0, firstBlockStart).trim() else ""
-
-        val lastBlockMatch = codeBlockRegex.findAll(rawReply).lastOrNull()
-        val textAfter = if (lastBlockMatch != null && lastBlockMatch.range.last + 1 < rawReply.length) {
-            rawReply.substring(lastBlockMatch.range.last + 1).trim()
-        } else ""
-
-        // Sanitize textAfter: filter out lines of raw code that leaked into conversational text
-        val sanitizedAfterLines = mutableListOf<String>()
-        for (line in textAfter.lines()) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-
-            val lower = trimmed.lowercase()
-            // Detect raw code leaks
-            val isCodeLeak = (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</") || lower.startsWith("<!doctype"))) ||
-                             lower.startsWith("function ") || lower.startsWith("function(") ||
-                             lower.startsWith("const ") || lower.startsWith("var ") || lower.startsWith("let ") ||
-                             lower.startsWith("import ") || lower.startsWith("export ") ||
-                             lower.startsWith("class ") || lower.startsWith("def ") ||
-                             lower.startsWith("return ") ||
-                             (trimmed.contains("{") && trimmed.contains("}")) ||
-                             lower.contains("margin:") || lower.contains("padding:") ||
-                             lower.contains("color:") || lower.contains("display:") ||
-                             lower.contains("background:") || lower.contains("font-size:") ||
-                             trimmed.startsWith("```")
-
-            if (!isCodeLeak) {
-                sanitizedAfterLines.add(line)
-            }
-        }
-
-        val cleanAfterText = sanitizedAfterLines.joinToString("\n").trim()
+        val firstProse = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.Prose>().firstOrNull()?.text ?: ""
+        val lastProse = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.Prose>().lastOrNull()?.text ?: ""
 
         val sb = StringBuilder()
-        if (textBefore.isNotBlank()) {
-            sb.append(textBefore).append("\n\n")
+        if (firstProse.isNotBlank() && !firstProse.startsWith("### Executive Deployment Confirmation")) {
+            val cleanFirst = StreamDemultiplexer.sanitizeProse(firstProse)
+            if (cleanFirst.isNotBlank()) {
+                sb.append(cleanFirst).append("\n\n")
+            }
         }
 
         // Maintain fenced code blocks intact (rendered inside dedicated CliCodeBlockContainer)
         codeBlocks.forEach { block ->
-            sb.append(block).append("\n\n")
+            sb.append("```").append(block.language).append("\n")
+            sb.append(block.code).append("\n")
+            sb.append("```\n\n")
         }
 
-        // Clean executive confirmation without conversational redundancy
-        if (cleanAfterText.isNotBlank() && cleanAfterText.length > 25 && !cleanAfterText.contains("```")) {
-            sb.append(cleanAfterText).append("\n\n")
+        // Strict Anti-Echo Enforcement: Filter prose after code to remove any code quotes or echoes
+        if (lastProse.isNotBlank() && lastProse != firstProse) {
+            val cleanAfter = StreamDemultiplexer.sanitizeProse(lastProse)
+                .replace("### Executive Deployment Confirmation:", "")
+                .replace("### Executive Deployment Confirmation", "")
+                .trim()
+
+            // Only retain high-level conversational summary sentences (no raw code or echoes)
+            val nonCodeLines = cleanAfter.lines().filter { line ->
+                val t = line.trim()
+                t.isNotEmpty() && !t.startsWith("{") && !t.startsWith("}") &&
+                !t.contains(";") && !t.contains("flex:") && !t.contains("margin:") &&
+                !t.startsWith(".") && !t.startsWith("#") && !t.startsWith("<") &&
+                !t.startsWith("function") && !t.startsWith("const") && !t.startsWith("var")
+            }
+            val filteredSummary = nonCodeLines.joinToString("\n").trim()
+            if (filteredSummary.isNotBlank() && filteredSummary.length > 20) {
+                sb.append(filteredSummary).append("\n\n")
+            }
         }
 
         sb.append("### Executive Deployment Confirmation:\n")
