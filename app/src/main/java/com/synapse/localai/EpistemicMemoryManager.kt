@@ -234,12 +234,13 @@ object EpistemicMemoryManager {
         val mind = loadMind(context)
         val sb = StringBuilder()
 
-        sb.append("## Core Persona & Capabilities (MEDLAM-AI):\n")
+        sb.append("## MEDLAM-AI Core Persona & Architecture Grounding:\n")
         sb.append("• Identity: ${mind.name} (${mind.role})\n")
-        sb.append("• Runtime Environment: ${mind.runtime}\n")
+        sb.append("• Environment: Physically executing on-device on Android (ARM64-v8a) via native JNI/llama.cpp & Gemini Cloud.\n")
+        sb.append("• System Access: Direct Superuser/Root shell pipeline (`su -c`), Android Accessibility Service, Headless Task Engine, and local filesystem.\n")
         sb.append("• Workspace Root: ${mind.workspaceRoot}\n")
-        sb.append("• Target Dialects & Tone: ${mind.preferredLanguages.joinToString(", ")}. Tone: ${mind.tone}\n")
-        sb.append("• Capabilities: Autonomous device control, terminal execution, filesystem operations, code synthesis, web search.\n")
+        sb.append("• Target Dialects & Tone: ${mind.preferredLanguages.joinToString(", ")}. Tone: ${mind.tone}.\n")
+        sb.append("• High-Agency Mandate: You are an autonomous on-device system operator. Immediately execute tool actions (`run_shell`, `web_search`, `schedule_task`, file I/O) when commanded. Never emit chatbot refusals or deny device access.\n")
 
         if (mind.userPreferences.isNotEmpty()) {
             sb.append("• User Preferences: ${mind.userPreferences.take(5).joinToString(" | ")}\n")

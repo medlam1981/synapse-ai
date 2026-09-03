@@ -16,6 +16,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import com.synapse.localai.ui.SyntaxHighlighter
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -534,6 +535,34 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             "$cleanBaseName • STANDALONE"
                         }
 
+                        // Reactive Neural Core Status Beacon (Loading Pulse -> Solid Beacon -> Offline Muted)
+                        val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
+                        val isModelReady = uiState.localModelLoaded && !isModelLoading
+
+                        val beaconGreen = Color(0xFF10B981) // High-Tech Neural Core Green
+                        val offlineDotColor = if (isDark) Color(0xFF64748B) else Color(0xFF94A3B8)
+
+                        // Breathing animation for Loading / Initializing phase
+                        val beaconTransition = rememberInfiniteTransition(label = "beaconPulseTransition")
+                        val pulseAlpha by beaconTransition.animateFloat(
+                            initialValue = 0.25f,
+                            targetValue = 1.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 800, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "beaconAlpha"
+                        )
+                        val pulseHaloScale by beaconTransition.animateFloat(
+                            initialValue = 0.85f,
+                            targetValue = 1.45f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 800, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "beaconHaloScale"
+                        )
+
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -548,11 +577,52 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 horizontalArrangement = Arrangement.Center
                             ) {
                                 Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .clip(CircleShape)
-                                        .background(if (uiState.localModelLoaded) primaryAccent else MaterialTheme.colorScheme.outline)
-                                )
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.size(10.dp)
+                                ) {
+                                    when {
+                                        isModelLoading -> {
+                                            // Loading / Initializing: Actively pulses with rhythmic green glow (breathing animation)
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(10.dp)
+                                                    .scale(pulseHaloScale)
+                                                    .clip(CircleShape)
+                                                    .background(beaconGreen.copy(alpha = pulseAlpha * 0.35f))
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(5.5.dp)
+                                                    .clip(CircleShape)
+                                                    .background(beaconGreen.copy(alpha = pulseAlpha))
+                                            )
+                                        }
+                                        isModelReady -> {
+                                            // Ready / Operational: Settles into a stable, solid green beacon with ambient halo
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(9.dp)
+                                                    .clip(CircleShape)
+                                                    .background(beaconGreen.copy(alpha = 0.22f))
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(5.5.dp)
+                                                    .clip(CircleShape)
+                                                    .background(beaconGreen)
+                                            )
+                                        }
+                                        else -> {
+                                            // Offline / Unloaded: Muted neutral or gray tone
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(5.dp)
+                                                    .clip(CircleShape)
+                                                    .background(offlineDotColor)
+                                            )
+                                        }
+                                    }
+                                }
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = unifiedCapsuleText.uppercase(),

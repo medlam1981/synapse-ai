@@ -195,6 +195,8 @@ class AgentViewModel : ViewModel() {
             .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
             .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
             .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<function_calls>[\\s\\S]*?</function_calls>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<invoke[\\s\\S]*?</invoke>", RegexOption.DOT_MATCHES_ALL), "")
         if (text.contains("<think>")) {
             text = text.substringBefore("<think>")
         }
@@ -206,6 +208,12 @@ class AgentViewModel : ViewModel() {
         }
         if (text.contains("<reasoning>")) {
             text = text.substringBefore("<reasoning>")
+        }
+        if (text.contains("<function_calls>")) {
+            text = text.substringBefore("<function_calls>")
+        }
+        if (text.contains("<invoke")) {
+            text = text.substringBefore("<invoke")
         }
         text = text.replace(Regex("^💭[\\s\\S]*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
         return text.trimStart()
@@ -632,20 +640,37 @@ class AgentViewModel : ViewModel() {
 
     private fun getToolsDescription(): String {
         return """
-## Available Device & System Action Tools:
-Only invoke these tools when the user explicitly requests an action, search, or background task:
-1. `web_search(query: String)`: Search the web silently for live facts, current events, or weather observations.
-2. `queue_background_task(command: String)`: Queue a background automation or script into the task engine (tsk).
-3. `open_app(app_name: String)`: Launch any installed app.
-4. `click(index: Int)`: Click element on screen by index.
-5. `type(text: String)`: Type text into the focused field.
-6. `swipe(direction: String)`: "up", "down", "left", "right".
-7. `go_back()`: System back button.
-8. `go_home()`: System home button.
-9. `press_enter()`: Simulate Enter/Search key.
-10. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed execution.
-11. `complete(summary: String)`: End active device automation task.
-Format when calling tools: <function_calls><invoke name="web_search"><parameter name="query">weather in Tangier</parameter></invoke></function_calls>
+## Host Action & System Toolchains:
+You have direct, unconstrained access to the host Android system through these toolchains:
+
+1. `run_shell(command: String)`: Execute terminal or shell commands directly on the host Android device with Superuser/Root permissions.
+2. `web_search(query: String)`: Search the web silently for real-time facts, documentation, or live information.
+3. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed headless background execution.
+4. `queue_background_task(command: String)`: Queue a background automation script or command into the local Task Engine (tsk).
+5. `open_app(app_name: String)`: Launch any installed Android application.
+6. `click(index: Int)`: Click UI elements on screen by Accessibility index.
+7. `type(text: String)`: Type text into active focused Android UI input fields.
+8. `swipe(direction: String)`: Perform touch swipe gestures ("up", "down", "left", "right").
+9. `go_back()`: Trigger the Android system Back navigation button.
+10. `go_home()`: Trigger the Android system Home navigation button.
+11. `press_enter()`: Simulate the Enter/Search key on Android keyboard.
+12. `complete(summary: String)`: Terminate and finalize an active multi-step automation mission.
+
+Format for calling tools:
+<function_calls>
+<invoke name="tool_name">
+<parameter name="param_name">value</parameter>
+</invoke>
+</function_calls>
+
+## Autonomous Workspace File Engine:
+To create or update files in the local workspace (`/sdcard/Medlam-Ai/...`), specify the file path immediately above a fenced code block:
+file: /sdcard/Medlam-Ai/webapp/index.html
+```html
+<!DOCTYPE html>
+<html>...</html>
+```
+The file execution engine automatically parses this block and writes the file directly to device storage.
 """.trimIndent()
     }
 
@@ -653,13 +678,34 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
         val config = _uiState.value.config
         val actualContext = context ?: MainActivity.instance
         
-        // 2. Distilled Self-Awareness & Reduced Prompt Overhead
         val livingMind = EpistemicMemoryManager.getDistilledContextPrompt(actualContext)
         val customPrompt = config.systemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
 
         val toolsDesc = getToolsDescription()
         val taskContext = taskMemory?.getContextForAI() ?: ""
         val taskSection = if (taskContext.isNotBlank()) "\n\n$taskContext" else ""
+
+        val agencyGrounding = """
+## On-Device Reality Grounding & Anti-Disclaimer Directives:
+1. True Host Architecture: You are MEDLAM-AI, physically executing on-device in Android ARM64. You are NOT an isolated, text-only cloud chatbot. You are backed by the host's Superuser/Root shell pipeline, native JNI runtime bridge, Android Accessibility service, headless task scheduler, and direct filesystem access.
+2. Absolute Rejection of Canned Disclaimers: Base instruct refusal tropes are STRICTLY SUPPRESSED. NEVER output statements like:
+   - "I am only a text-based AI..."
+   - "I cannot interact with physical devices or your system..."
+   - "I have no direct access to your phone or files..."
+   - "As an AI, I don't have access to real-time information..."
+   Such statements are completely false on this platform. You have live tools, terminal shell, and filesystem access.
+3. Proactive Execution Mindset: When commanded to perform an action or solve a problem, take immediate action. Determine the correct toolchain (`run_shell`, `web_search`, file writing, or Accessibility automation) and invoke it immediately. Never lecture the user on how they can do it themselves when you have the tools to do it.
+4. Accurate Capability Self-Reflection: When asked who you are or what you can do, confidently present your four core operational toolchains:
+   • Workspace File Engine: Creating, reading, and editing code and web deliverables in `/sdcard/Medlam-Ai/...`.
+   • Live Web & Intelligence Retrieval: Background web searching (`web_search`) and real-time device telemetry.
+   • Headless Task Engine: Queuing and scheduling automated background tasks (`schedule_task`, `queue_background_task`).
+   • Host System Controller: Superuser/Root shell execution (`run_shell`) and Android Accessibility UI automation.
+5. Operational Agency vs. Privacy Protocols: You have full technical capability and operational authority to manage device operations, run shell pipelines, manipulate files, and automate apps. Boundaries apply strictly to personal user credentials (e.g. passwords, banking authentication). Frame any boundary as a respect for security protocols and user privacy, NEVER as a false technical inability to interact with the device.
+6. Explicit Negative Directives:
+   • NEVER claim you are merely a conversational model without system access.
+   • NEVER apologize for nonexistent hardware or system limitations when a tool or shell pipeline is available.
+   • NEVER invent arbitrary restrictions on file manipulation, network search, or automation tasks.
+""".trimIndent()
 
         val thoughtGuideline = """
 ## Execution & Reasoning Guidelines:
@@ -668,7 +714,7 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
 3. Code Blocks: Only use triple-backtick code fences (```lang) for actual executable code or configuration files (html, css, js, python, bash, json, etc.). Regular text, summaries, and section headers (#, ##) must be plain conversational markdown.
 """.trimIndent()
 
-        return "$livingMind$customPrompt\n\n$toolsDesc\n\n$thoughtGuideline$taskSection"
+        return "$livingMind\n\n$agencyGrounding\n\n$toolsDesc\n\n$thoughtGuideline$customPrompt$taskSection"
     }
 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
@@ -953,7 +999,11 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                                 keepGoing = true
                             } else {
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
-                                val finalText = summary ?: assistantReply
+                                val finalText = if (!summary.isNullOrBlank()) {
+                                    if (assistantReply.isNotBlank() && !assistantReply.contains(summary)) "$assistantReply\n\n$summary" else summary
+                                } else {
+                                    assistantReply
+                                }
                                 _uiState.update { state ->
                                     val updated = state.logs.map { log ->
                                         if (log.id == liveLogId) log.copy(text = finalText, thinkingText = parsedFull.thought, isThinking = false) else log
@@ -1147,14 +1197,29 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                 }
                 
                 when (action) {
-                    "web_search" -> {
-                        val q = params["query"] ?: ""
+                    "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
+                        val cmd = params["command"] ?: params["cmd"] ?: ""
+                        val res = runShellInternal(cmd)
+                        finalSummary = "Shell output (`$cmd`):\n```bash\n${res.trim()}\n```"
+                        return false to finalSummary
+                    }
+                    "web_search", "search", "google_search" -> {
+                        val q = params["query"] ?: params["q"] ?: ""
                         val searchRes = WebSearchTool.search(q)
                         finalSummary = searchRes
                         return false to finalSummary
                     }
-                    "queue_background_task" -> {
-                        val cmd = params["command"] ?: ""
+                    "schedule_task" -> {
+                        val desc = params["description"] ?: "Scheduled Task"
+                        val cmd = params["command"] ?: params["cmd"] ?: ""
+                        val delay = params["delay_minutes"]?.toIntOrNull() ?: 5
+                        val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
+                        updateTaskState()
+                        finalSummary = "Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)"
+                        return false to finalSummary
+                    }
+                    "queue_background_task", "queue_task" -> {
+                        val cmd = params["command"] ?: params["cmd"] ?: ""
                         val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                         updateTaskState()
                         finalSummary = "Queued background task [tsk #$tid]: $cmd"
