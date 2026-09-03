@@ -2,39 +2,74 @@ package com.synapse.localai.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Modern Neural Palette - Dark (Deep Indigo-Violet Spectrum)
-val DarkBackground = Color(0xFF0A0E14)
-val DarkSurface = Color(0xFF161B22)
-val DarkSurfaceVariant = Color(0xFF1F242C)
-val DarkOnSurface = Color(0xFFE6EDF3)
-val DarkOnSurfaceVariant = Color(0xFF8B949E)
-val DarkPrimary = Color(0xFF818CF8) // Rich Luminous Electric Indigo
-val DarkSecondary = Color(0xFF7C3AED) // Luminous Electric Violet
-val DarkAccent = Color(0xFFA78BFA) // Twilight Violet Highlight
-val DarkError = Color(0xFFF85149)
-val DarkOutline = Color(0xFF30363D)
-val DarkOutlineVariant = Color(0xFF21262D)
+// =========================================================================
+// 1. Dark Theme Palette (Deep Twilight Obsidian)
+// =========================================================================
+val ObsidianBackground = Color(0xFF0B0F17) // Deep space obsidian canvas
+val ObsidianSurface = Color(0xFF111827) // Elevated slate-navy surface
+val ObsidianSurfaceTranslucent = Color(0xE6111827) // Translucent elevated slate-navy @ 90%
+val ObsidianOnSurface = Color(0xFFF9FAFB) // Crisp white primary labels
+val ObsidianOnSurfaceVariant = Color(0xFF94A3B8) // Cool slate secondary telemetry
+val ObsidianPrimary = Color(0xFF3882F6) // Electric azure
+val ObsidianSecondary = Color(0xFF6366F1) // Electric indigo
+val ObsidianTertiary = Color(0xFF818CF8) // Twilight violet highlight
+val ObsidianOutline = Color(0xFF1F2937)
+val ObsidianOutlineVariant = Color(0xFF161E2E)
+val ObsidianError = Color(0xFFEF4444)
 
-// Modern Neural Palette - Light (Clean Daylight Slate)
-val LightBackground = Color(0xFFF6F8FA)
-val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFEAEFF5)
-val LightOnSurface = Color(0xFF1F2328)
-val LightOnSurfaceVariant = Color(0xFF57606A)
-val LightPrimary = Color(0xFF4F46E5) // Deep Indigo
-val LightSecondary = Color(0xFF6D28D9) // Violet
-val LightAccent = Color(0xFF6366F1) // Indigo
-val LightError = Color(0xFFCF222E)
-val LightOutline = Color(0xFFD0D7DE)
-val LightOutlineVariant = Color(0xFFE1E4E8)
+// =========================================================================
+// 2. Light Theme Palette (Pure Floating Porcelain)
+// =========================================================================
+val PorcelainBackground = Color(0xFFF8FAFC) // Clean, crisp porcelain canvas
+val PorcelainSurface = Color(0xFFFFFFFF) // Pure elevated white (no muddy gray tones)
+val PorcelainSurfaceElevated = Color(0xFFFFFFFF)
+val PorcelainOnSurface = Color(0xFF0F172A) // High-contrast deep slate
+val PorcelainOnSurfaceVariant = Color(0xFF475569) // Muted charcoal telemetry
+val PorcelainPrimary = Color(0xFF4F46E5) // Rich indigo
+val PorcelainSecondary = Color(0xFF6366F1) // Electric indigo
+val PorcelainTertiary = Color(0xFF3882F6) // Azure
+val PorcelainOutline = Color(0xFFE2E8F0)
+val PorcelainOutlineVariant = Color(0xFFF1F5F9)
+val PorcelainError = Color(0xFFDC2626)
 
-// Modern Accents (Deep Indigo-Violet Spectrum)
-val NeonCyan = Color(0xFF818CF8) // Electric Indigo
-val NeonPurple = Color(0xFF7C3AED) // Electric Violet
-val NeonMagenta = Color(0xFF6D28D9) // Deep Twilight Violet
-val ElectricCyan = Color(0xFF818CF8) // Luminous Indigo Accent
-val DeepIndigo = Color(0xFF4F46E5) // Deep Indigo Haze
-val ElectricBlue = Color(0xFF6366F1) // Electric Twilight Blue
+// =========================================================================
+// Ambient Outward Elevation Tokens
+// =========================================================================
+val DarkGlowAzure = Color(0x2E3882F6) // rgba(56, 130, 246, 0.18)
+val DarkGlowIndigo = Color(0x146366F1) // rgba(99, 102, 241, 0.08)
+val LightAmbientShadow = Color(0x120F172A) // rgba(15, 23, 42, 0.07)
+
+// Backward compatible aliases
+val DarkBackground = ObsidianBackground
+val DarkSurface = ObsidianSurface
+val DarkSurfaceVariant = Color(0xFF1E293B)
+val DarkOnSurface = ObsidianOnSurface
+val DarkOnSurfaceVariant = ObsidianOnSurfaceVariant
+val DarkPrimary = ObsidianPrimary
+val DarkSecondary = ObsidianSecondary
+val DarkAccent = ObsidianSecondary
+val DarkError = ObsidianError
+val DarkOutline = ObsidianOutline
+val DarkOutlineVariant = ObsidianOutlineVariant
+
+val LightBackground = PorcelainBackground
+val LightSurface = PorcelainSurface
+val LightSurfaceVariant = Color(0xFFF1F5F9)
+val LightOnSurface = PorcelainOnSurface
+val LightOnSurfaceVariant = PorcelainOnSurfaceVariant
+val LightPrimary = PorcelainPrimary
+val LightSecondary = PorcelainSecondary
+val LightAccent = PorcelainSecondary
+val LightError = PorcelainError
+val LightOutline = PorcelainOutline
+val LightOutlineVariant = PorcelainOutlineVariant
+
+val NeonCyan = ObsidianPrimary
+val NeonPurple = ObsidianSecondary
+val NeonMagenta = Color(0xFF7C3AED)
+val ElectricCyan = ObsidianPrimary
+val DeepIndigo = PorcelainPrimary
+val ElectricBlue = ObsidianPrimary
 
 // Syntax Highlighting Colors
 val CodeKeyword = Color(0xFFFF7B72)
@@ -42,7 +77,6 @@ val CodeVariable = Color(0xFF79C0FF)
 val CodeFunction = Color(0xFF79C0FF)
 val CodeString = Color(0xFFA5D6FF)
 val CodeComment = Color(0xFF8B949E)
-val CodeBackgroundDark = Color(0xFF0D1117)
-val CodeBackgroundLight = Color(0xFFF0F3F6)
-val CodeBackground = Color(0xFF0D1117)
-
+val CodeBackgroundDark = Color(0xFF0B0F17)
+val CodeBackgroundLight = Color(0xFFF8FAFC)
+val CodeBackground = Color(0xFF0B0F17)
