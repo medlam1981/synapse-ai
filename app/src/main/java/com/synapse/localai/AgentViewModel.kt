@@ -114,7 +114,9 @@ data class AgentUiState(
     val isRootAvailable: Boolean = false,
     val streamInterruptMsg: String? = null,
     val tokensPerSecond: Float = 0f,
-    val activeStatusDetail: String = ""
+    val activeStatusDetail: String = "",
+    val resumptionNotice: String? = null,
+    val activeWorkspacePath: String? = null
 )
 
 class AgentViewModel : ViewModel() {
@@ -131,6 +133,18 @@ class AgentViewModel : ViewModel() {
         fun detectModelType(path: String): ModelType {
             return ModelType.GGUF
         }
+
+        val EXECUTABLE_LANGUAGES = setOf(
+            "html", "htm", "css", "scss", "sass", "less",
+            "js", "javascript", "jsx", "ts", "typescript", "tsx",
+            "py", "python", "pyw",
+            "sh", "bash", "zsh", "shell",
+            "json", "yaml", "yml", "xml", "toml",
+            "c", "cpp", "cxx", "cc", "h", "hpp",
+            "java", "kotlin", "kt", "kts",
+            "rust", "rs", "go", "golang",
+            "sql", "php", "ruby", "rb", "swift", "dart", "lua", "r"
+        )
     }
 
     init {
@@ -166,10 +180,32 @@ class AgentViewModel : ViewModel() {
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
     private var lastScreenContext: String = ""
 
+
+    private fun isExecutableCodeStreaming(text: String): Boolean {
+        val lastBackticks = text.lastIndexOf("```")
+        if (lastBackticks == -1) return false
+        val after = text.substring(lastBackticks + 3)
+        if (after.contains("```")) return false
+        val lang = after.substringBefore('\n').trim().lowercase()
+        return lang in EXECUTABLE_LANGUAGES
+    }
+
     private fun cleanVisibleText(raw: String): String {
-        var text = raw.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.DOT_MATCHES_ALL), "")
+        var text = raw
+            .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
         if (text.contains("<think>")) {
             text = text.substringBefore("<think>")
+        }
+        if (text.contains("<|think|>")) {
+            text = text.substringBefore("<|think|>")
+        }
+        if (text.contains("<thought>")) {
+            text = text.substringBefore("<thought>")
+        }
+        if (text.contains("<reasoning>")) {
+            text = text.substringBefore("<reasoning>")
         }
         text = text.replace(Regex("^💭[\\s\\S]*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
         return text.trimStart()
@@ -182,7 +218,22 @@ class AgentViewModel : ViewModel() {
     )
 
     fun parseThoughtAndContent(raw: String): ParsedThought {
-        val s = raw.replace("<|think|>", "<think>").replace("<|thought|>", "</think>")
+        var s = raw
+            .replace("<|think|>", "<think>")
+            .replace("<|thought|>", "</think>")
+            .replace("<thought>", "<think>")
+            .replace("</thought>", "</think>")
+            .replace("<reasoning>", "<think>")
+            .replace("</reasoning>", "</think>")
+
+        // Demux ```thought or ```thinking or ```reasoning if model mistakenly used code fences
+        s = s.replace(Regex("""```(?:thought|thinking|reasoning)\n([\s\S]*?)```""", RegexOption.IGNORE_CASE)) {
+            "<think>${it.groupValues[1]}</think>"
+        }
+        if (s.contains(Regex("""```(?:thought|thinking|reasoning)\n""", RegexOption.IGNORE_CASE))) {
+            s = s.replace(Regex("""```(?:thought|thinking|reasoning)\n""", RegexOption.IGNORE_CASE), "<think>")
+        }
+
         val thinkStart = s.indexOf("<think>")
         if (thinkStart == -1) {
             val clean = cleanVisibleText(s)
@@ -311,12 +362,23 @@ class AgentViewModel : ViewModel() {
             }
             refreshSessions()
             val existingSessions = chatDb?.getAllSessions() ?: emptyList()
-            if (existingSessions.isNotEmpty()) {
+            val checkpoint = EpistemicMemoryManager.loadCheckpoint(context)
+            val resumptionNotice = EpistemicMemoryManager.getResumptionNotice(context)
+            val recentPath = checkpoint?.recentPaths?.firstOrNull()
+
+            if (checkpoint != null && checkpoint.sessionId.isNotBlank() && chatDb?.getSession(checkpoint.sessionId) != null) {
+                switchSession(checkpoint.sessionId)
+            } else if (existingSessions.isNotEmpty()) {
                 val latest = existingSessions.first()
                 switchSession(latest.id)
             } else {
                 startNewSession()
             }
+
+            _uiState.update { it.copy(
+                resumptionNotice = resumptionNotice,
+                activeWorkspacePath = recentPath
+            ) }
 
             loadWorkflows(prefs)
             initTaskSystem(context)
@@ -557,24 +619,26 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
 """.trimIndent()
     }
 
-    private fun buildSystemPrompt(): String {
+    private fun buildSystemPrompt(context: Context? = null): String {
         val config = _uiState.value.config
-        val modelType = _uiState.value.activeModelType
+        val actualContext = context ?: MainActivity.instance
         
-        var basePrompt = config.systemPrompt
-        if (basePrompt.isBlank()) {
-            basePrompt = PersonaManager.getPersonaContent()
-        }
+        // 2. Distilled Self-Awareness & Reduced Prompt Overhead
+        val livingMind = EpistemicMemoryManager.getDistilledContextPrompt(actualContext)
+        val customPrompt = config.systemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
 
         val toolsDesc = getToolsDescription()
         val taskContext = taskMemory?.getContextForAI() ?: ""
         val taskSection = if (taskContext.isNotBlank()) "\n\n$taskContext" else ""
 
-        if (modelType == ModelType.GGUF) {
-            return "$basePrompt\n\n$toolsDesc\n\nBe concise, direct, and natural. Do NOT use <think> tags."
-        }
-        
-        return "$basePrompt\n\n$toolsDesc$taskSection"
+        val thoughtGuideline = """
+## Execution & Reasoning Guidelines:
+1. Preliminary Planning & Reasoning: Always formulate your internal thought process, task breakdown, architectural plan, or tool strategy inside <think>...</think> tags before generating content or executing tools.
+2. Clean Separation: Never place internal thoughts, planning overviews, or reasoning inside markdown code blocks (e.g., never use ```markdown or ```thought for planning).
+3. Code Blocks: Only use triple-backtick code fences (```lang) for actual executable code or configuration files (html, css, js, python, bash, json, etc.). Regular text, summaries, and section headers (#, ##) must be plain conversational markdown.
+""".trimIndent()
+
+        return "$livingMind$customPrompt\n\n$toolsDesc\n\n$thoughtGuideline$taskSection"
     }
 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
@@ -593,6 +657,8 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
         val userLog = LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]")
         addLog(userLog)
         val sid = currentSessionId.value
+        val detectedInitialPath = ToolExecutor.detectFilePath(command)
+
         viewModelScope.launch(Dispatchers.IO) {
             chatDb?.insertMessage(
                 ChatMessageEntity(
@@ -604,6 +670,14 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                 )
             )
             refreshSessions()
+            EpistemicMemoryManager.updateWorkingStep(
+                context = actualContext,
+                sessionId = sid,
+                sessionTitle = currentSessionTitle.value,
+                intent = command,
+                phase = "STARTING",
+                newPath = detectedInitialPath
+            )
         }
         val lowerCmd = command.lowercase().trim()
         val isBackgroundRequest = lowerCmd.contains("in background") || lowerCmd.contains("فالخلفية") || 
@@ -714,7 +788,7 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                     _uiState.update { it.copy(
                         logs = it.logs + initialLiveLog,
                         currentPhase = AgentActionPhase.THINKING,
-                        activeStatusDetail = "Reading context & memories...",
+                        activeStatusDetail = "Thinking & Planning...",
                         streamInterruptMsg = null
                     ) }
 
@@ -754,26 +828,31 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                             val parsed = parseThoughtAndContent(rawText)
 
                             // Granular Real-Time Phase Reflection
+                            val isCodeStreaming = isExecutableCodeStreaming(parsed.content)
+                            val isWritingFile = rawText.contains("<invoke name=\"write_to_file\"")
+                            val isWebSearching = rawText.contains("<invoke name=\"web_search\"")
+                            val isToolInvoking = rawText.contains("<invoke")
+
                             val statusDetail = when {
-                                rawText.contains("<invoke name=\"web_search\"") -> "Searching the web in background..."
-                                rawText.contains("<invoke name=\"write_to_file\"") -> {
+                                parsed.isThinking -> "Thinking & Planning..."
+                                isWebSearching -> "Searching the web in background..."
+                                isWritingFile -> {
                                     val path = ToolExecutor.detectFilePath(rawText) ?: "target file"
                                     "Writing target file: $path..."
                                 }
-                                rawText.contains("<invoke") -> {
+                                isToolInvoking -> {
                                     val toolName = Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1) ?: "tool"
                                     "Executing device tool: $toolName..."
                                 }
-                                parsed.isThinking -> "Thinking & formulating architecture..."
-                                rawText.contains("```") && !rawText.endsWith("```\n") -> "Drafting code..."
+                                isCodeStreaming -> "Drafting code..."
                                 parsed.content.isNotBlank() -> "Synthesizing final output..."
-                                else -> "Thinking & formulating architecture..."
+                                else -> "Thinking & Planning..."
                             }
 
                             val currentPhase = when {
-                                rawText.contains("<invoke") -> AgentActionPhase.EXECUTING_TOOL
-                                rawText.contains("```") -> AgentActionPhase.GENERATING_CODE
                                 parsed.isThinking -> AgentActionPhase.THINKING
+                                isToolInvoking -> AgentActionPhase.EXECUTING_TOOL
+                                isCodeStreaming -> AgentActionPhase.GENERATING_CODE
                                 parsed.content.isNotBlank() -> AgentActionPhase.COMPLETING
                                 else -> AgentActionPhase.THINKING
                             }
@@ -867,6 +946,24 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
                                         )
                                     )
                                     refreshSessions()
+
+                                    val detectedPath = ToolExecutor.detectFilePath(fullResponse)
+                                    EpistemicMemoryManager.updateWorkingStep(
+                                        context = actualContext,
+                                        sessionId = sid,
+                                        sessionTitle = currentSessionTitle.value,
+                                        intent = command,
+                                        phase = "COMPLETED",
+                                        newPath = detectedPath
+                                    )
+                                    EpistemicMemoryManager.recordInteraction(
+                                        context = actualContext,
+                                        userPrompt = command,
+                                        agentResponse = fullResponse,
+                                        touchedPath = detectedPath
+                                    )
+                                    val newNotice = EpistemicMemoryManager.getResumptionNotice(actualContext)
+                                    _uiState.update { it.copy(resumptionNotice = newNotice, activeWorkspacePath = detectedPath ?: it.activeWorkspacePath) }
                                 }
                                 keepGoing = false
                             }
@@ -996,6 +1093,14 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
             if (writtenFiles.isNotEmpty()) {
                 writtenFiles.forEach { path ->
                     addSystemLog("File written: $path")
+                    EpistemicMemoryManager.updateWorkingStep(
+                        context = MainActivity.instance,
+                        sessionId = currentSessionId.value,
+                        sessionTitle = currentSessionTitle.value,
+                        intent = currentSessionTitle.value,
+                        phase = "WRITING_FILE",
+                        newPath = path
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -1244,6 +1349,10 @@ Format when calling tools: <function_calls><invoke name="web_search"><parameter 
     private fun prefs(context: Context) = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
     
     private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
+
+    fun dismissResumptionNotice() {
+        _uiState.update { it.copy(resumptionNotice = null) }
+    }
 
     override fun onCleared() { 
         super.onCleared()

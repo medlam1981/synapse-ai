@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -574,9 +575,12 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
             // CLI Workspace
             Box(modifier = Modifier.weight(1f)) {
                 if (uiState.logs.isEmpty() && !uiState.isProcessing) {
-                    CliWelcomeScreen(onSelectPrompt = { p ->
-                        viewModel.sendCommand(p, context = context)
-                    })
+                    CliWelcomeScreen(
+                        resumptionNotice = uiState.resumptionNotice,
+                        onSelectPrompt = { p ->
+                            viewModel.sendCommand(p, context = context)
+                        }
+                    )
                 } else {
                     LazyColumn(
                         state = listState,
@@ -584,6 +588,37 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 28.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        if (!uiState.resumptionNotice.isNullOrBlank()) {
+                            item(key = "resumption_banner") {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.12f else 0.08f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = uiState.resumptionNotice ?: "",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        IconButton(
+                                            onClick = { viewModel.dismissResumptionNotice() },
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, "Dismiss", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         items(uiState.logs, key = { it.id }) { log ->
                             CliLogMessageView(log = log, isDark = isDark)
                         }
@@ -814,6 +849,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     }
 
     if (showSettings) {
+        BackHandler { showSettings = false }
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
     }
 }
@@ -1271,6 +1307,33 @@ sealed class MessageSegment {
     data class Code(val language: String, val code: String, val filePath: String?) : MessageSegment()
 }
 
+val EXECUTABLE_LANGUAGES = setOf(
+    "html", "htm", "css", "scss", "sass", "less",
+    "js", "javascript", "jsx", "ts", "typescript", "tsx",
+    "py", "python", "pyw",
+    "sh", "bash", "zsh", "shell",
+    "json", "yaml", "yml", "xml", "toml",
+    "c", "cpp", "cxx", "cc", "h", "hpp",
+    "java", "kotlin", "kt", "kts",
+    "rust", "rs", "go", "golang",
+    "sql", "php", "ruby", "rb", "swift", "dart", "lua", "r"
+)
+
+fun isExecutableCode(lang: String, detectedPath: String?): Boolean {
+    val cleanLang = lang.lowercase().trim()
+    if (cleanLang in setOf("markdown", "md", "text", "txt", "plain", "plaintext", "thought", "thinking", "reasoning", "plan", "notes")) {
+        return false
+    }
+    if (cleanLang in EXECUTABLE_LANGUAGES) {
+        return true
+    }
+    if (detectedPath != null) {
+        val ext = detectedPath.substringAfterLast('.', "").lowercase()
+        return ext in EXECUTABLE_LANGUAGES
+    }
+    return false
+}
+
 fun parseMessageSegments(text: String): List<MessageSegment> {
     val segments = mutableListOf<MessageSegment>()
     val codeRegex = Regex("""```([a-zA-Z0-9_-]*)\n([\s\S]*?)```""")
@@ -1300,7 +1363,12 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
             }
         }
 
-        segments.add(MessageSegment.Code(language = lang.ifBlank { "code" }, code = code, filePath = detectedPath))
+        if (isExecutableCode(lang, detectedPath)) {
+            segments.add(MessageSegment.Code(language = lang.ifBlank { "code" }, code = code, filePath = detectedPath))
+        } else {
+            // Natural prose typography: markdown, planning, notes, and general text render as standard conversational text
+            segments.add(MessageSegment.Text(code))
+        }
         currentIndex = match.range.last + 1
     }
 
@@ -1315,7 +1383,14 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
             val afterBackticks = remainder.substring(unclosedStart + 3)
             val langLine = afterBackticks.substringBefore('\n').trim()
             val codeContent = if (afterBackticks.contains('\n')) afterBackticks.substringAfter('\n') else ""
-            segments.add(MessageSegment.Code(language = langLine.ifBlank { "code" }, code = codeContent, filePath = null))
+            if (isExecutableCode(langLine, null)) {
+                segments.add(MessageSegment.Code(language = langLine.ifBlank { "code" }, code = codeContent, filePath = null))
+            } else {
+                val fullText = (beforeCode + "\n" + codeContent).trim()
+                if (fullText.isNotEmpty()) {
+                    segments.add(MessageSegment.Text(fullText))
+                }
+            }
         } else {
             val remainingText = remainder.trim()
             if (remainingText.isNotEmpty()) {
@@ -1380,7 +1455,12 @@ fun CliLogMessageView(
             }
         } else {
             val cleanText = log.text
-                .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<\\|?think\\|?>[\\s\\S]*$", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<thought>[\\s\\S]*$", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<reasoning>[\\s\\S]*$", RegexOption.DOT_MATCHES_ALL), "")
                 .replace(Regex("^💭[\\s\\S]*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
                 .trim()
 
@@ -1550,7 +1630,10 @@ fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
 }
 
 @Composable
-fun CliWelcomeScreen(onSelectPrompt: (String) -> Unit) {
+fun CliWelcomeScreen(
+    resumptionNotice: String? = null,
+    onSelectPrompt: (String) -> Unit
+) {
     val isDark = isSystemInDarkTheme()
     val cyanAccent = MaterialTheme.colorScheme.primary
     val textBright = MaterialTheme.colorScheme.onSurface
@@ -1565,6 +1648,78 @@ fun CliWelcomeScreen(onSelectPrompt: (String) -> Unit) {
         Text("MEDLAM-AI AGENT", color = cyanAccent, fontSize = 16.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
         Text("Autonomous On-Device Agent & Chat CLI", color = textDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
         Spacer(modifier = Modifier.height(16.dp))
+
+        if (!resumptionNotice.isNullOrBlank()) {
+            Surface(
+                onClick = { onSelectPrompt("Continue and finalize the active project files") },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                color = cyanAccent.copy(alpha = if (isDark) 0.12f else 0.08f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, cyanAccent.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "⚡ RESUMED WORKSPACE STATE",
+                            color = cyanAccent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = cyanAccent.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                text = "CHECKPOINT RESTORED",
+                                color = cyanAccent,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = resumptionNotice,
+                        color = textBright,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = cyanAccent.copy(alpha = 0.25f),
+                            border = BorderStroke(0.5.dp, cyanAccent)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Continue Mission",
+                                    color = cyanAccent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Icon(Icons.Default.ArrowForward, null, tint = cyanAccent, modifier = Modifier.size(12.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         listOf(
             "Create a responsive modern web dashboard in /sdcard/Medlam-Ai/webapp",
