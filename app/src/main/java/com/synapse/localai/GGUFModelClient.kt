@@ -257,6 +257,7 @@ class GGUFModelClient {
             // 2. Hardware-Matched Resource Allocation (prioritize performance cores, size batches)
             val hw = appContext?.let { DeviceProfile.detect(it) }
             val optimalThreads = if (hw != null) DeviceProfile.optimalThreads(hw) else (if (threadCount > 0) threadCount else 4)
+            val optimalBatchThreads = if (hw != null) (hw.totalCores.coerceIn(optimalThreads, 8)) else optimalThreads
             val optimalBatch = if (hw != null) DeviceProfile.optimalBatch(hw) else 256
             val optimalUbatch = if (hw != null) DeviceProfile.optimalUbatch(hw) else 128
 
@@ -265,6 +266,9 @@ class GGUFModelClient {
             val isLargeModel = modelSizeMb > 2500L
             val baseName = modelFile.nameWithoutExtension.lowercase()
             val isQwen = baseName.contains("qwen")
+
+            // Fast Attention & KV Cache selection
+            val kvCacheType = if (hw != null && hw.totalRamMb >= 6000L && !isLargeModel) "f16" else "q8_0"
 
             // Uncapped Generation Horizon: ensure ample 8192 headroom for reasoning and synthesis
             val maxSafeCtx = when {
@@ -288,10 +292,11 @@ class GGUFModelClient {
                 "-b", effectiveBatch.toString(),
                 "-ub", effectiveUbatch.toString(),
                 "-t", optimalThreads.toString(),
+                "-tb", optimalBatchThreads.toString(), // Burst prefill on all available cores for ultra-fast thinking
                 "-ngl", effectiveGpuLayers.toString(),
                 "--flash-attn", "on",
-                "--cache-type-k", "q8_0",
-                "--cache-type-v", "q8_0",
+                "--cache-type-k", kvCacheType,
+                "--cache-type-v", kvCacheType,
                 "--alias", "local",
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString()
@@ -651,6 +656,10 @@ class GGUFModelClient {
             .put("model", "local")
             .put("messages", messages)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
+            .put("top_k", 40) // Prune vocabulary search to top 40 candidates for fast writing
+            .put("top_p", 0.9)
+            .put("min_p", 0.05)
+            .put("repeat_penalty", 1.05)
             .put("stream", true)
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)

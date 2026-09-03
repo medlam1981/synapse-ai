@@ -566,7 +566,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 .heightIn(min = 40.dp, max = 96.dp)
                                 .tactileGlassGlow(cornerRadius = 20.dp, isDark = isDark, borderWidth = 0.dp),
                             color = inputBg,
-                            shape = RoundedCornerShape(20.dp)
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -749,7 +750,8 @@ fun ConsolidatedMasterHeader(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = headerBg,
-        shape = RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp)
+        shape = RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
             modifier = Modifier
@@ -1092,6 +1094,7 @@ fun ConsolidatedMasterHeader(
 
 /**
  * Dedicated Collapsible Thought Container for streaming reasoning progression in real time.
+ * Enclosed in an executive cadre frame with structured metadata ribbon.
  */
 @Composable
 fun CliThoughtContainer(
@@ -1115,8 +1118,8 @@ fun CliThoughtContainer(
         label = "alpha"
     )
 
-    // Solid elevated surface color framed by crisp, continuous 1dp outline
-    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow
+    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f)
     val borderColor = MaterialTheme.colorScheme.outlineVariant
     val primaryColor = MaterialTheme.colorScheme.primary
     val textHeading = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1125,87 +1128,99 @@ fun CliThoughtContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         shape = RoundedCornerShape(8.dp),
         color = containerBg,
         border = BorderStroke(1.dp, borderColor)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            // Header Row: Status indicator + Functional Toggle ([Hide] / [Show])
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { userExpanded = !isExpanded },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+        Column {
+            // Header Ribbon: Status indicator + Functional Toggle ([Hide] / [Show])
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = topBarBg,
+                shape = RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp),
+                border = BorderStroke(1.dp, borderColor.copy(alpha = 0.4f))
             ) {
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.weight(1f, fill = false)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "💭",
-                        fontSize = 11.sp,
-                        modifier = if (isThinking) Modifier.alpha(alphaAnim) else Modifier
-                    )
-                    Text(
-                        text = if (isThinking) {
-                            if (thinkingText.isBlank()) "Thinking & formulating architecture..." else "Thinking in real-time..."
-                        } else {
-                            val tokenCount = thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size
-                            "Thought process ($tokenCount tokens)"
-                        },
-                        color = if (isThinking) primaryColor else textHeading,
-                        fontSize = 10.5.sp,
-                        fontFamily = FontFamily.SansSerif,
-                        fontWeight = if (isThinking) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (isThinking) {
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .alpha(alphaAnim)
-                                .clip(CircleShape)
-                                .background(primaryColor)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = primaryColor.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "🧠 REASONING",
+                                color = primaryColor,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                            )
+                        }
+
+                        Text(
+                            text = if (isThinking) {
+                                if (thinkingText.isBlank()) "Formulating architecture..." else "Thinking in real-time..."
+                            } else {
+                                val tokenCount = thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size
+                                "$tokenCount tokens"
+                            },
+                            color = if (isThinking) primaryColor else textHeading,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (isThinking) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (isThinking) {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .alpha(alphaAnim)
+                                    .clip(CircleShape)
+                                    .background(primaryColor)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
+                        modifier = Modifier.clickable { userExpanded = !isExpanded }
+                    ) {
+                        Text(
+                            text = if (isExpanded) "[Hide]" else "[Show]",
+                            color = primaryColor,
+                            fontSize = 8.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
-                    modifier = Modifier.clickable { userExpanded = !isExpanded }
-                ) {
-                    Text(
-                        text = if (isExpanded) "[Hide]" else "[Show]",
-                        color = primaryColor,
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
                 }
             }
 
             // Contained reasoning text
             AnimatedVisibility(visible = isExpanded) {
-                Text(
-                    text = if (thinkingText.isNotBlank()) thinkingText else "Formulating architecture and reasoning progression...",
-                    color = textBody,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.SansSerif,
-                    lineHeight = 16.5.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 2.dp)
-                )
+                Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                    Text(
+                        text = if (thinkingText.isNotBlank()) thinkingText else "Formulating architecture and reasoning progression...",
+                        color = textBody,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.SansSerif,
+                        lineHeight = 16.5.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }
@@ -1228,8 +1243,8 @@ fun CliCodeBlockContainer(
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
-    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow
-    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerHigh
+    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
+    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHigh
     val borderColor = MaterialTheme.colorScheme.outlineVariant
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -1237,7 +1252,7 @@ fun CliCodeBlockContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 3.dp),
         shape = RoundedCornerShape(8.dp),
         color = containerBg,
         border = BorderStroke(1.dp, borderColor)
@@ -1257,7 +1272,7 @@ fun CliCodeBlockContainer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Left: Language badge + Target file path
+                    // Left: Language badge + Target file path + Stream indicator
                     Row(
                         modifier = Modifier.weight(1f, fill = false),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1287,6 +1302,22 @@ fun CliCodeBlockContainer(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                        }
+
+                        if (isStreaming) {
+                            Surface(
+                                shape = RoundedCornerShape(3.dp),
+                                color = Color(0xFF10B981).copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "● STREAMING",
+                                    color = Color(0xFF10B981),
+                                    fontSize = 7.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
                         }
                     }
 
@@ -1539,107 +1570,202 @@ fun CliLogMessageView(
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val primaryAccent = MaterialTheme.colorScheme.primary
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
 
     if (isSystem && !log.isError) return
 
     val isLogArabic = isArabic(log.text)
 
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-        if (isUser) {
-            CompositionLocalProvider(
-                LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+    if (isUser) {
+        // Modern User Message Cadre
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 3.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(1.dp, borderColor)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.Start
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = primaryAccent.copy(alpha = 0.15f)
                 ) {
                     Text(
-                        text = if (isLogArabic) "المستخدم >> " else "USER >> ",
+                        text = if (isLogArabic) "المستخدم" else "USER",
                         color = primaryAccent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.5.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontWeight = FontWeight.Black,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
                     )
+                }
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+                ) {
                     Text(
                         text = log.text,
                         color = textBright,
                         fontSize = 12.5.sp,
                         fontFamily = FontFamily.SansSerif,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = if (isLogArabic) 20.sp else 18.sp,
-                        letterSpacing = if (isLogArabic) 0.sp else 0.2.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = if (isLogArabic) 20.sp else 18.5.sp,
                         textAlign = TextAlign.Start,
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier.weight(1f, fill = true)
                     )
                 }
             }
-        } else {
-            val demuxed = remember(log.text, log.thinkingText, log.isThinking) {
-                StreamDemultiplexer.demux(
-                    rawText = log.text,
-                    externalThinkingText = log.thinkingText,
-                    externalIsThinking = log.isThinking
-                )
-            }
+        }
+    } else {
+        // Master Cadre Frame for AI Agent Logic, Coding & Structured Response
+        val demuxed = remember(log.text, log.thinkingText, log.isThinking) {
+            StreamDemultiplexer.demux(
+                rawText = log.text,
+                externalThinkingText = log.thinkingText,
+                externalIsThinking = log.isThinking
+            )
+        }
 
-            val isAgentArabic = demuxed.blocks.any {
-                it is StreamDemultiplexer.DemuxBlock.Prose && isArabic(it.text)
-            }
+        val isAgentArabic = demuxed.blocks.any {
+            it is StreamDemultiplexer.DemuxBlock.Prose && isArabic(it.text)
+        }
 
-            // 1. Agent message header (MEDLAM >>)
-            CompositionLocalProvider(
-                LocalLayoutDirection provides if (isAgentArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+        val cadreBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
+        val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = cadreBg,
+            border = BorderStroke(1.dp, borderColor)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // 1. Cadre Master Header: MEDLAM AI + Status Indicator + Copy Turn
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides if (isAgentArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                 ) {
-                    Text(
-                        text = if (isAgentArabic) "ميدلام >>" else "MEDLAM >>",
-                        color = primaryAccent,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    if (log.text.isNotBlank()) {
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(log.text)) }, modifier = Modifier.size(20.dp)) {
-                            Icon(Icons.Outlined.ContentCopy, "Copy", tint = textDim, modifier = Modifier.size(13.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = primaryAccent.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = if (isAgentArabic) "ميدلام" else "MEDLAM AI",
+                                    color = primaryAccent,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 9.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+
+                            val isGenerating = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code && !it.isClosed }
+                            val statusText = when {
+                                demuxed.isThinking -> "REASONING"
+                                isGenerating -> "GENERATING"
+                                else -> "READY"
+                            }
+                            val badgeColor = when {
+                                demuxed.isThinking -> primaryAccent
+                                isGenerating -> Color(0xFF10B981)
+                                else -> textDim
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (demuxed.isThinking || isGenerating) primaryAccent.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.5.dp)
+                                            .clip(CircleShape)
+                                            .background(badgeColor)
+                                    )
+                                    Text(
+                                        text = statusText,
+                                        color = badgeColor,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
+                                color = textDim.copy(alpha = 0.6f),
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            if (log.text.isNotBlank()) {
+                                IconButton(onClick = { clipboard.setText(AnnotatedString(log.text)) }, modifier = Modifier.size(22.dp)) {
+                                    Icon(Icons.Outlined.ContentCopy, "Copy Turn", tint = textDim, modifier = Modifier.size(12.dp))
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            // 2. Immediate Post-Prompt Reasoning Anchor:
-            // Collapsible thinking tray renders immediately beneath prompt / header as first component
-            if (demuxed.thinkingText.isNotBlank() || demuxed.isThinking) {
-                CliThoughtContainer(
-                    thinkingText = demuxed.thinkingText,
-                    isThinking = demuxed.isThinking,
-                    isDark = isDark
-                )
-            }
+                // 2. AI Agent Logic: Reasoning Tray in dedicated cadre frame
+                if (demuxed.thinkingText.isNotBlank() || demuxed.isThinking) {
+                    CliThoughtContainer(
+                        thinkingText = demuxed.thinkingText,
+                        isThinking = demuxed.isThinking,
+                        isDark = isDark
+                    )
+                }
 
-            // 3. Interactive code blocks and conversational text segments
-            if (demuxed.blocks.isNotEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    demuxed.blocks.forEach { block ->
-                        when (block) {
-                            is StreamDemultiplexer.DemuxBlock.Prose -> {
-                                CliFormattedBody(block.text, isDark)
-                            }
-                            is StreamDemultiplexer.DemuxBlock.Code -> {
-                                CliCodeBlockContainer(
-                                    code = block.code,
-                                    language = block.language,
-                                    filePath = block.filePath,
-                                    isDark = isDark,
-                                    isStreaming = !block.isClosed
-                                )
+                // 3. AI Agent Coding & Organized Markdown Text (strictly inside cadre frame)
+                if (demuxed.blocks.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        demuxed.blocks.forEach { block ->
+                            when (block) {
+                                is StreamDemultiplexer.DemuxBlock.Prose -> {
+                                    CliFormattedBody(block.text, isDark)
+                                }
+                                is StreamDemultiplexer.DemuxBlock.Code -> {
+                                    CliCodeBlockContainer(
+                                        code = block.code,
+                                        language = block.language,
+                                        filePath = block.filePath,
+                                        isDark = isDark,
+                                        isStreaming = !block.isClosed
+                                    )
+                                }
                             }
                         }
                     }
@@ -1653,7 +1779,6 @@ fun CliLogMessageView(
 fun CliFormattedBody(raw: String, isDark: Boolean) {
     val text = raw
         .replace(Regex("<.*?>", RegexOption.DOT_MATCHES_ALL), "")
-        .replace("*", "")
         .trim()
 
     if (text.isBlank()) return
@@ -1698,7 +1823,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             Text("• ", color = primaryAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         Text(
-                            text = buildPathHighlightedString(bulletContent, isDark),
+                            text = buildOrganizedMarkdownString(bulletContent, isDark),
                             color = textBright,
                             fontSize = 12.sp,
                             fontFamily = FontFamily.SansSerif,
@@ -1713,7 +1838,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                     }
                 } else {
                     Text(
-                        text = buildPathHighlightedString(clean, isDark),
+                        text = buildOrganizedMarkdownString(clean, isDark),
                         color = textBright,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.SansSerif,
@@ -1726,6 +1851,56 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
             }
         }
     }
+}
+
+fun buildOrganizedMarkdownString(text: String, isDark: Boolean): AnnotatedString {
+    val pathRegex = "(/sdcard/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*|/(?:data|storage|system|etc|proc|sys)/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)"
+    val inlineCodeRegex = "(`[^`]+`)"
+    val boldRegex = "(\\*\\*[^*]+\\*\\*)"
+    val combinedRegex = Regex("$pathRegex|$inlineCodeRegex|$boldRegex")
+
+    val amberAccent = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
+    val pathBg = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+    val codeBg = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9)
+    val codeColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
+
+    val builder = AnnotatedString.Builder()
+    var lastIndex = 0
+
+    combinedRegex.findAll(text).forEach { match ->
+        if (match.range.first > lastIndex) {
+            builder.append(text.substring(lastIndex, match.range.first))
+        }
+
+        val v = match.value
+        when {
+            v.startsWith("/sdcard/") || v.startsWith("/data/") || v.startsWith("/storage/") -> {
+                builder.pushStyle(SpanStyle(color = amberAccent, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
+                builder.append("\u2066$v\u2069")
+                builder.pop()
+            }
+            v.startsWith("`") && v.endsWith("`") && v.length >= 2 -> {
+                val codeContent = v.substring(1, v.length - 1)
+                builder.pushStyle(SpanStyle(color = codeColor, background = codeBg, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold))
+                builder.append(" $codeContent ")
+                builder.pop()
+            }
+            v.startsWith("**") && v.endsWith("**") && v.length >= 4 -> {
+                val boldContent = v.substring(2, v.length - 2)
+                builder.pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
+                builder.append(boldContent)
+                builder.pop()
+            }
+            else -> {
+                builder.append(v)
+            }
+        }
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < text.length) {
+        builder.append(text.substring(lastIndex))
+    }
+    return builder.toAnnotatedString()
 }
 
 fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
@@ -1815,13 +1990,13 @@ fun SidebarContent(
     val sessions by viewModel.chatSessions.collectAsState()
     val activeSessionId by viewModel.currentSessionId.collectAsState()
 
-    val drawerBg = MaterialTheme.colorScheme.surfaceContainerLow
+    val drawerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
     val onSurface = MaterialTheme.colorScheme.onSurface
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
     val primary = MaterialTheme.colorScheme.primary
     val primaryContainer = MaterialTheme.colorScheme.primaryContainer
     val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
-    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
+    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val errorColor = MaterialTheme.colorScheme.error
 
@@ -1882,7 +2057,8 @@ fun SidebarContent(
                                 .fillMaxWidth()
                                 .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark, elevation = if (selected) 4.dp else 2.dp),
                             color = if (selected) primaryContainer else surfaceContainer,
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, if (selected) primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1926,7 +2102,8 @@ fun SidebarContent(
                     .fillMaxWidth()
                     .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark, elevation = 2.dp),
                 shape = RoundedCornerShape(8.dp),
-                color = surfaceContainer
+                color = surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),

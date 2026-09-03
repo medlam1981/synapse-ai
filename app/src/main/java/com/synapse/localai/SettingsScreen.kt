@@ -5,6 +5,7 @@ import android.content.Intent
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -90,9 +91,9 @@ fun SettingsScreenContent(
     val onPrimary = MaterialTheme.colorScheme.onPrimary
     val primaryContainer = MaterialTheme.colorScheme.primaryContainer
     val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
-    val surfaceContainerLow = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
+    val surfaceColor = MaterialTheme.colorScheme.background
+    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val surfaceContainerLow = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
     
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
@@ -1034,14 +1035,16 @@ fun SettingsCard(
 ) {
     var expanded by remember { mutableStateOf(true) }
     val isDark = isSystemInDarkTheme()
-    val cardColor = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
+    val cardColor = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark),
+            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark, borderWidth = 0.dp),
         color = cardColor,
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, borderColor)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),

@@ -3,33 +3,33 @@ package com.synapse.localai.ui.theme
 import androidx.compose.ui.graphics.Color
 
 // =========================================================================
-// 1. Dark Theme Palette (Deep Twilight Obsidian)
+// 1. Dark Theme Palette (Modern Cyber Obsidian)
 // =========================================================================
 val ObsidianBackground = Color(0xFF0B0F17) // Deep space obsidian canvas
 val ObsidianSurface = Color(0xFF111827) // Elevated slate-navy surface
 val ObsidianSurfaceTranslucent = Color(0xFF111827) // Solid elevated slate-navy surface
-val ObsidianOnSurface = Color(0xFFF9FAFB) // Crisp white primary labels
+val ObsidianOnSurface = Color(0xFFF8FAFC) // Crisp white primary labels
 val ObsidianOnSurfaceVariant = Color(0xFF94A3B8) // Cool slate secondary telemetry
-val ObsidianPrimary = Color(0xFF3882F6) // Electric azure
-val ObsidianSecondary = Color(0xFF6366F1) // Electric indigo
-val ObsidianTertiary = Color(0xFF818CF8) // Twilight violet highlight
-val ObsidianOutline = Color(0xFF1F2937)
-val ObsidianOutlineVariant = Color(0xFF161E2E)
+val ObsidianPrimary = Color(0xFF38BDF8) // Modern vibrant sky azure
+val ObsidianSecondary = Color(0xFF818CF8) // Electric soft indigo
+val ObsidianTertiary = Color(0xFFA78BFA) // Twilight violet highlight
+val ObsidianOutline = Color(0xFF243044) // Crisp 1dp border
+val ObsidianOutlineVariant = Color(0xFF334155) // High-contrast cadre border
 val ObsidianError = Color(0xFFEF4444)
 
 // =========================================================================
-// 2. Light Theme Palette (Pure Floating Porcelain)
+// 2. Light Theme Palette (Modern Porcelain Minimalist)
 // =========================================================================
-val PorcelainBackground = Color(0xFFF8FAFC) // Clean, crisp porcelain canvas
-val PorcelainSurface = Color(0xFFFFFFFF) // Pure elevated white (no muddy gray tones)
+val PorcelainBackground = Color(0xFFF4F6F9) // Clean, airy porcelain canvas
+val PorcelainSurface = Color(0xFFFFFFFF) // Pure elevated white surfaces
 val PorcelainSurfaceElevated = Color(0xFFFFFFFF)
 val PorcelainOnSurface = Color(0xFF0F172A) // High-contrast deep slate
 val PorcelainOnSurfaceVariant = Color(0xFF475569) // Muted charcoal telemetry
-val PorcelainPrimary = Color(0xFF4F46E5) // Rich indigo
-val PorcelainSecondary = Color(0xFF6366F1) // Electric indigo
-val PorcelainTertiary = Color(0xFF3882F6) // Azure
-val PorcelainOutline = Color(0xFFE2E8F0)
-val PorcelainOutlineVariant = Color(0xFFF1F5F9)
+val PorcelainPrimary = Color(0xFF2563EB) // Modern royal blue
+val PorcelainSecondary = Color(0xFF4F46E5) // Electric indigo
+val PorcelainTertiary = Color(0xFF7C3AED) // Deep violet
+val PorcelainOutline = Color(0xFFCBD5E1) // Crisp 1dp card border
+val PorcelainOutlineVariant = Color(0xFFE2E8F0) // Subtle micro-divider
 val PorcelainError = Color(0xFFDC2626)
 
 // =========================================================================

@@ -16,9 +16,12 @@ import androidx.core.view.WindowCompat
 // =========================================================================
 // Universal Semantic Material 3 Container Extensions for Fixed Dual-Theme
 // =========================================================================
+// =========================================================================
+// Universal Semantic Material 3 Container Extensions for Fixed Dual-Theme
+// =========================================================================
 val ColorScheme.surfaceContainerLowest: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF0B0F17) else Color(0xFFFFFFFF)
+    get() = if (isSystemInDarkTheme()) Color(0xFF0B0F17) else Color(0xFFF4F6F9)
 
 val ColorScheme.surfaceContainerLow: Color
     @Composable
@@ -26,18 +29,18 @@ val ColorScheme.surfaceContainerLow: Color
 
 val ColorScheme.surfaceContainer: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF111827) else Color(0xFFFFFFFF)
+    get() = if (isSystemInDarkTheme()) Color(0xFF162032) else Color(0xFFFFFFFF)
 
 val ColorScheme.surfaceContainerHigh: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF1F2937) else Color(0xFFF1F5F9)
+    get() = if (isSystemInDarkTheme()) Color(0xFF1F2B3E) else Color(0xFFEDF2F7)
 
 val ColorScheme.surfaceContainerHighest: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF374151) else Color(0xFFE2E8F0)
+    get() = if (isSystemInDarkTheme()) Color(0xFF29384E) else Color(0xFFE2E8F0)
 
 // =========================================================================
-// 1. Dark Theme Palette (Deep Twilight Obsidian)
+// 1. Dark Theme Palette (Modern Cyber Obsidian)
 // =========================================================================
 private val DarkColorScheme = darkColorScheme(
     primary = ObsidianPrimary,
@@ -46,8 +49,8 @@ private val DarkColorScheme = darkColorScheme(
     background = ObsidianBackground,
     surface = ObsidianBackground,
     surfaceVariant = ObsidianSurface,
-    primaryContainer = Color(0xFF1E293B),
-    onPrimaryContainer = ObsidianOnSurface,
+    primaryContainer = Color(0xFF0C4A6E),
+    onPrimaryContainer = Color(0xFFE0F2FE),
     secondaryContainer = Color(0xFF312E81),
     onSecondaryContainer = Color(0xFFEDE9FE),
     tertiaryContainer = Color(0xFF1E1B4B),
@@ -64,7 +67,7 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 // =========================================================================
-// 2. Light Theme Palette (Pure Floating Porcelain)
+// 2. Light Theme Palette (Modern Porcelain Minimalist)
 // =========================================================================
 private val LightColorScheme = lightColorScheme(
     primary = PorcelainPrimary,
@@ -72,13 +75,13 @@ private val LightColorScheme = lightColorScheme(
     tertiary = PorcelainTertiary,
     background = PorcelainBackground,
     surface = PorcelainBackground,
-    surfaceVariant = Color(0xFFF1F5F9),
-    primaryContainer = Color(0xFFEEF2FF),
-    onPrimaryContainer = Color(0xFF312E81),
-    secondaryContainer = Color(0xFFEDE9FE),
-    onSecondaryContainer = Color(0xFF4C1D95),
-    tertiaryContainer = Color(0xFFE0E7FF),
-    onTertiaryContainer = Color(0xFF1E1B4B),
+    surfaceVariant = Color(0xFFEDF2F7),
+    primaryContainer = Color(0xFFDBEAFE),
+    onPrimaryContainer = Color(0xFF1E40AF),
+    secondaryContainer = Color(0xFFEEF2FF),
+    onSecondaryContainer = Color(0xFF3730A3),
+    tertiaryContainer = Color(0xFFF3E8FF),
+    onTertiaryContainer = Color(0xFF581C87),
     onPrimary = Color.White,
     onSecondary = Color.White,
     onTertiary = Color.White,
