@@ -1101,8 +1101,8 @@ fun CliThoughtContainer(
 ) {
     if (thinkingText.isBlank() && !isThinking) return
 
-    var userExpanded by remember { mutableStateOf<Boolean?>(false) }
-    val isExpanded = userExpanded ?: false
+    var userExpanded by remember { mutableStateOf<Boolean?>(null) }
+    val isExpanded = userExpanded ?: isThinking
 
     val transition = rememberInfiniteTransition(label = "pulse")
     val alphaAnim by transition.animateFloat(
@@ -1115,30 +1115,27 @@ fun CliThoughtContainer(
         label = "alpha"
     )
 
-    // Crisp, clean surface canvas without muddy translucent frosting
-    val containerBg = if (isDark) {
-        MaterialTheme.colorScheme.surfaceContainerLow
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerLowest
-    }
+    // Solid elevated surface color framed by crisp, continuous 1dp outline
+    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
     val primaryColor = MaterialTheme.colorScheme.primary
     val textHeading = MaterialTheme.colorScheme.onSurfaceVariant
-    val textBody = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+    val textBody = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .tactileGlassGlow(cornerRadius = 10.dp, isDark = isDark, elevation = 3.dp),
-        shape = RoundedCornerShape(10.dp),
-        color = containerBg
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = containerBg,
+        border = BorderStroke(1.dp, borderColor)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            // Header Row: Expand / Collapse Toggle
+            // Header Row: Status indicator + Functional Toggle ([Hide] / [Show])
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1160,7 +1157,8 @@ fun CliThoughtContainer(
                         text = if (isThinking) {
                             if (thinkingText.isBlank()) "Thinking & formulating architecture..." else "Thinking in real-time..."
                         } else {
-                            "Thought process (${thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size} tokens)"
+                            val tokenCount = thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size
+                            "Thought process ($tokenCount tokens)"
                         },
                         color = if (isThinking) primaryColor else textHeading,
                         fontSize = 10.5.sp,
@@ -1180,16 +1178,23 @@ fun CliThoughtContainer(
                     }
                 }
 
-                Text(
-                    text = if (isExpanded) "Hide ▴" else "Show ▾",
-                    color = textHeading,
-                    fontSize = 9.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium
-                )
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
+                    modifier = Modifier.clickable { userExpanded = !isExpanded }
+                ) {
+                    Text(
+                        text = if (isExpanded) "[Hide]" else "[Show]",
+                        color = primaryColor,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
 
-            // Expanded reasoning text sits directly on the clean canvas without nested underlays
+            // Contained reasoning text
             AnimatedVisibility(visible = isExpanded) {
                 Text(
                     text = if (thinkingText.isNotBlank()) thinkingText else "Formulating architecture and reasoning progression...",
@@ -1207,22 +1212,24 @@ fun CliThoughtContainer(
 }
 
 /**
- * Interactive & Syntax-Highlighted Code Block Container with actionable top bar.
+ * Interactive & Syntax-Highlighted Code Block Container with actionable top bar and continuous 1dp border.
  */
 @Composable
 fun CliCodeBlockContainer(
     code: String,
     language: String,
     filePath: String?,
-    isDark: Boolean
+    isDark: Boolean,
+    isStreaming: Boolean = false
 ) {
-    var isExpanded by remember { mutableStateOf(false) }
+    var userExpanded by remember { mutableStateOf<Boolean?>(null) }
+    val isExpanded = userExpanded ?: true
     var copied by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
-    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surfaceContainerLowest
-    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerHigh
+    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow
+    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerHigh
     val borderColor = MaterialTheme.colorScheme.outlineVariant
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -1230,17 +1237,18 @@ fun CliCodeBlockContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
+            .padding(vertical = 4.dp),
         shape = RoundedCornerShape(8.dp),
-        color = containerBg
+        color = containerBg,
+        border = BorderStroke(1.dp, borderColor)
     ) {
         Column {
-            // Actionable Top Bar
+            // Header Ribbon: Dedicated top metadata bar
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = topBarBg,
-                shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
+                shape = RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp),
+                border = BorderStroke(1.dp, borderColor.copy(alpha = 0.4f))
             ) {
                 Row(
                     modifier = Modifier
@@ -1249,7 +1257,7 @@ fun CliCodeBlockContainer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Left: Language badge + Target path
+                    // Left: Language badge + Target file path
                     Row(
                         modifier = Modifier.weight(1f, fill = false),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1265,7 +1273,7 @@ fun CliCodeBlockContainer(
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
                             )
                         }
 
@@ -1282,10 +1290,10 @@ fun CliCodeBlockContainer(
                         }
                     }
 
-                    // Right: One-click copy + Expand/Collapse toggle
+                    // Right: Functional [COPY] action + Expand/Collapse toggle chevron
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
@@ -1305,7 +1313,7 @@ fun CliCodeBlockContainer(
                                 horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
                                 Icon(
-                                    if (copied) Icons.Filled.Check else Icons.Outlined.ContentCopy,
+                                    imageVector = if (copied) Icons.Filled.Check else Icons.Outlined.ContentCopy,
                                     contentDescription = "Copy code",
                                     tint = if (copied) primaryColor else textDim,
                                     modifier = Modifier.size(11.dp)
@@ -1323,17 +1331,17 @@ fun CliCodeBlockContainer(
                         Surface(
                             shape = RoundedCornerShape(4.dp),
                             color = Color.Transparent,
-                            modifier = Modifier.clickable { isExpanded = !isExpanded }
+                            modifier = Modifier.clickable { userExpanded = !isExpanded }
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                    contentDescription = "Toggle code",
+                                    imageVector = if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                    contentDescription = if (isExpanded) "Collapse" else "Expand",
                                     tint = textDim,
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(15.dp)
                                 )
                             }
                         }
@@ -1341,6 +1349,7 @@ fun CliCodeBlockContainer(
                 }
             }
 
+            // Contained Monospace Viewport: Strictly enclosed within horizontally scrollable container
             AnimatedVisibility(visible = isExpanded) {
                 val highlighted = remember(code, language, isDark) {
                     SyntaxHighlighter.highlight(code, language, isDark)
@@ -1355,7 +1364,8 @@ fun CliCodeBlockContainer(
                         text = highlighted,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 16.sp
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -1565,17 +1575,17 @@ fun CliLogMessageView(
                 }
             }
         } else {
-            val cleanText = log.text
-                .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("<\\|?think\\|?>[\\s\\S]*$", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("<thought>[\\s\\S]*$", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("<reasoning>[\\s\\S]*$", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("^💭[\\s\\S]*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
-                .trim()
+            val demuxed = remember(log.text, log.thinkingText, log.isThinking) {
+                StreamDemultiplexer.demux(
+                    rawText = log.text,
+                    externalThinkingText = log.thinkingText,
+                    externalIsThinking = log.isThinking
+                )
+            }
 
-            val isAgentArabic = if (cleanText.isNotBlank()) isArabic(cleanText) else false
+            val isAgentArabic = demuxed.blocks.any {
+                it is StreamDemultiplexer.DemuxBlock.Prose && isArabic(it.text)
+            }
 
             // 1. Agent message header (MEDLAM >>)
             CompositionLocalProvider(
@@ -1593,8 +1603,8 @@ fun CliLogMessageView(
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace
                     )
-                    if (cleanText.isNotBlank()) {
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(cleanText)) }, modifier = Modifier.size(20.dp)) {
+                    if (log.text.isNotBlank()) {
+                        IconButton(onClick = { clipboard.setText(AnnotatedString(log.text)) }, modifier = Modifier.size(20.dp)) {
                             Icon(Icons.Outlined.ContentCopy, "Copy", tint = textDim, modifier = Modifier.size(13.dp))
                         }
                     }
@@ -1603,32 +1613,32 @@ fun CliLogMessageView(
 
             // 2. Immediate Post-Prompt Reasoning Anchor:
             // Collapsible thinking tray renders immediately beneath prompt / header as first component
-            if (log.thinkingText.isNotBlank() || log.isThinking) {
+            if (demuxed.thinkingText.isNotBlank() || demuxed.isThinking) {
                 CliThoughtContainer(
-                    thinkingText = log.thinkingText,
-                    isThinking = log.isThinking,
+                    thinkingText = demuxed.thinkingText,
+                    isThinking = demuxed.isThinking,
                     isDark = isDark
                 )
             }
 
             // 3. Interactive code blocks and conversational text segments
-            if (cleanText.isNotBlank()) {
-                val segments = remember(cleanText) { parseMessageSegments(cleanText) }
+            if (demuxed.blocks.isNotEmpty()) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    segments.forEach { segment ->
-                        when (segment) {
-                            is MessageSegment.Text -> {
-                                CliFormattedBody(segment.content, isDark)
+                    demuxed.blocks.forEach { block ->
+                        when (block) {
+                            is StreamDemultiplexer.DemuxBlock.Prose -> {
+                                CliFormattedBody(block.text, isDark)
                             }
-                            is MessageSegment.Code -> {
+                            is StreamDemultiplexer.DemuxBlock.Code -> {
                                 CliCodeBlockContainer(
-                                    code = segment.code,
-                                    language = segment.language,
-                                    filePath = segment.filePath,
-                                    isDark = isDark
+                                    code = block.code,
+                                    language = block.language,
+                                    filePath = block.filePath,
+                                    isDark = isDark,
+                                    isStreaming = !block.isClosed
                                 )
                             }
                         }

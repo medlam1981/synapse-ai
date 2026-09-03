@@ -925,19 +925,20 @@ The file execution engine automatically parses this block and writes the file di
                         stream.collect { chunk ->
                             responseSb.append(chunk)
                             val rawText = responseSb.toString()
-                            val parsed = parseThoughtAndContent(rawText)
+                            val demuxed = StreamDemultiplexer.demux(rawText)
 
                             // Synchronous Live Writing directly into physical disk buffer in real time
-                            liveDiskStreamer.onChunk(parsed.content)
+                            liveDiskStreamer.onChunk(rawText)
 
                             // Granular Real-Time Phase Reflection (Dynamic Activity Bar Tracking)
-                            val isCodeStreaming = isExecutableCodeStreaming(parsed.content)
-                            val detectedPath = ToolExecutor.detectFilePath(rawText)
+                            val hasCodeBlock = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code }
+                            val isCodeStreaming = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code && !it.isClosed }
+                            val detectedPath = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.Code>().lastOrNull()?.filePath ?: ToolExecutor.detectFilePath(rawText)
                             val isWritingFile = rawText.contains("<invoke name=\"write_to_file\"") || (detectedPath != null && isCodeStreaming)
                             val isToolInvoking = rawText.contains("<invoke")
 
                             val statusDetail = when {
-                                parsed.isThinking -> "Thinking & Planning..."
+                                demuxed.isThinking -> "Thinking & Planning..."
                                 isWritingFile -> {
                                     val path = detectedPath ?: "/sdcard/Medlam-Ai/..."
                                     "Writing to $path..."
@@ -946,16 +947,16 @@ The file execution engine automatically parses this block and writes the file di
                                     val toolName = Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1)
                                     if (toolName != null) "Executing Tool / Task ($toolName)..." else "Executing Tool / Task..."
                                 }
-                                isCodeStreaming || parsed.content.contains("```") -> "Drafting Code & Architecture..."
-                                parsed.content.isNotBlank() -> "Drafting Code & Architecture..."
+                                isCodeStreaming || hasCodeBlock -> "Drafting Code & Architecture..."
+                                demuxed.blocks.isNotEmpty() -> "Drafting Code & Architecture..."
                                 else -> "Thinking & Planning..."
                             }
 
                             val currentPhase = when {
-                                parsed.isThinking -> AgentActionPhase.THINKING
+                                demuxed.isThinking -> AgentActionPhase.THINKING
                                 isToolInvoking -> AgentActionPhase.EXECUTING_TOOL
                                 isCodeStreaming -> AgentActionPhase.GENERATING_CODE
-                                parsed.content.isNotBlank() -> AgentActionPhase.COMPLETING
+                                demuxed.blocks.isNotEmpty() -> AgentActionPhase.COMPLETING
                                 else -> AgentActionPhase.THINKING
                             }
 
@@ -967,9 +968,9 @@ The file execution engine automatically parses this block and writes the file di
                                     logs = state.logs.map { log ->
                                         if (log.id == liveLogId) {
                                             log.copy(
-                                                text = parsed.content,
-                                                thinkingText = parsed.thought,
-                                                isThinking = parsed.isThinking
+                                                text = rawText,
+                                                thinkingText = demuxed.thinkingText,
+                                                isThinking = demuxed.isThinking
                                             )
                                         } else log
                                     }
@@ -984,18 +985,17 @@ The file execution engine automatically parses this block and writes the file di
                     }
 
                     val fullResponse = responseSb.toString()
-                    val parsedFull = parseThoughtAndContent(fullResponse)
+                    val demuxedFull = StreamDemultiplexer.demux(fullResponse)
 
                     // Finalize and auto-flush any in-flight file streaming with full synthesis
-                    val writtenFilesFromStream = liveDiskStreamer.closeAll(parsedFull.content)
-                    val cleanedFullReply = parsedFull.content.trim()
+                    val writtenFilesFromStream = liveDiskStreamer.closeAll(fullResponse)
 
-                    if (cleanedFullReply.isNotBlank() || parsedFull.thought.isNotBlank() || fullResponse.contains("<invoke")) {
+                    if (fullResponse.isNotBlank()) {
                         // Strict No-Echo Protocol: Sanitize post-execution response to eliminate code regurgitation
                         val assistantReply = if (writtenFilesFromStream.isNotEmpty()) {
-                            ToolExecutor.sanitizePostExecutionSummary(cleanedFullReply, writtenFilesFromStream)
+                            ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream)
                         } else {
-                            cleanedFullReply
+                            fullResponse
                         }
                         synchronized(conversationHistory) {
                             conversationHistory.add("assistant" to assistantReply)
@@ -1006,12 +1006,12 @@ The file execution engine automatically parses this block and writes the file di
                             val displayText = assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
                             _uiState.update { state ->
                                 val updated = state.logs.map { log ->
-                                    if (log.id == liveLogId) log.copy(text = displayText, thinkingText = parsedFull.thought, isThinking = false) else log
+                                    if (log.id == liveLogId) log.copy(text = displayText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
                                 }
                                 state.copy(logs = updated)
                             }
                             val sid = currentSessionId.value
-                            val dbText = if (parsedFull.thought.isNotBlank()) "<think>${parsedFull.thought}</think>\n$displayText" else displayText
+                            val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$displayText" else displayText
                             viewModelScope.launch(Dispatchers.IO) {
                                 chatDb?.insertMessage(
                                     ChatMessageEntity(
@@ -1043,12 +1043,12 @@ The file execution engine automatically parses this block and writes the file di
                                 }
                                 _uiState.update { state ->
                                     val updated = state.logs.map { log ->
-                                        if (log.id == liveLogId) log.copy(text = finalText, thinkingText = parsedFull.thought, isThinking = false) else log
+                                        if (log.id == liveLogId) log.copy(text = finalText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
                                     }
                                     state.copy(logs = updated)
                                 }
                                 val sid = currentSessionId.value
-                                val dbText = if (parsedFull.thought.isNotBlank()) "<think>${parsedFull.thought}</think>\n$finalText" else finalText
+                                val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$finalText" else finalText
                                 viewModelScope.launch(Dispatchers.IO) {
                                     chatDb?.insertMessage(
                                         ChatMessageEntity(
