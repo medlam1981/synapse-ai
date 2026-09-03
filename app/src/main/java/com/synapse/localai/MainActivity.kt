@@ -18,6 +18,7 @@ import androidx.compose.foundation.*
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import com.synapse.localai.ui.SyntaxHighlighter
+import com.synapse.localai.ui.tactileGlassGlow
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -481,7 +482,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                border = BorderStroke(0.5.dp, if (uiState.isProcessing) primaryAccent.copy(alpha = 0.4f) else borderColor)
+                                modifier = Modifier.tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
@@ -564,10 +565,11 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         )
 
                         Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.55f else 0.45f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -736,10 +738,10 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp),
+                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp)
+                            .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
                         shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isBusy) 0.5f else 0.3f),
-                        border = BorderStroke(0.5.dp, if (isBusy) primaryAccent.copy(alpha = 0.4f) else borderColor.copy(alpha = 0.5f))
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isBusy) 0.5f else 0.3f)
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -780,10 +782,10 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         Surface(
                             modifier = Modifier
                                 .weight(1f)
-                                .heightIn(min = 44.dp, max = 100.dp),
+                                .heightIn(min = 44.dp, max = 100.dp)
+                                .tactileGlassGlow(cornerRadius = 22.dp, isDark = isDark, borderWidth = 0.8.dp),
                             color = inputBg,
-                            shape = RoundedCornerShape(22.dp),
-                            border = BorderStroke(0.8.dp, borderColor)
+                            shape = RoundedCornerShape(22.dp)
                         ) {
                             Box(
                                 modifier = Modifier
@@ -827,10 +829,11 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
                     Surface(
                         onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                        modifier = Modifier.size(38.dp),
+                        modifier = Modifier
+                            .size(38.dp)
+                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp),
                         shape = CircleShape,
-                        color = if (selectedFileUri != null) cyanAccent.copy(alpha = 0.2f) else borderColor.copy(alpha = 0.5f),
-                        border = BorderStroke(0.5.dp, if (selectedFileUri != null) cyanAccent else borderColor)
+                        color = if (selectedFileUri != null) cyanAccent.copy(alpha = 0.2f) else borderColor.copy(alpha = 0.5f)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(Icons.Outlined.AttachFile, "Attach", tint = if (selectedFileUri != null) cyanAccent else textDim, modifier = Modifier.size(17.dp))
@@ -847,10 +850,11 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             }
                             try { speechLauncher.launch(intent) } catch (_: Exception) { isRecording = false }
                         },
-                        modifier = Modifier.size(38.dp),
+                        modifier = Modifier
+                            .size(38.dp)
+                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp),
                         shape = CircleShape,
-                        color = if (isRecording) Color.Red.copy(alpha = 0.2f) else borderColor.copy(alpha = 0.5f),
-                        border = BorderStroke(0.5.dp, borderColor)
+                        color = if (isRecording) Color.Red.copy(alpha = 0.2f) else borderColor.copy(alpha = 0.5f)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic, "Mic", tint = if (isRecording) Color.Red else textDim, modifier = Modifier.size(17.dp))
@@ -870,7 +874,9 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 selectedFileUri = null
                             }
                         },
-                        modifier = Modifier.size(38.dp),
+                        modifier = Modifier
+                            .size(38.dp)
+                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp),
                         shape = CircleShape,
                         color = if (uiState.isProcessing) Color.Red else if (canSend) cyanAccent else borderColor.copy(alpha = 0.5f),
                         enabled = uiState.isProcessing || canSend
@@ -927,10 +933,10 @@ fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 3.dp),
+            .padding(horizontal = 10.dp, vertical = 3.dp)
+            .tactileGlassGlow(cornerRadius = 10.dp, isDark = isDark),
         shape = RoundedCornerShape(10.dp),
-        color = capsuleBg,
-        border = BorderStroke(0.5.dp, capsuleBorder)
+        color = capsuleBg
     ) {
         Row(
             modifier = Modifier
@@ -1106,10 +1112,10 @@ fun CliThoughtContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 3.dp)
+            .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
         shape = RoundedCornerShape(8.dp),
-        color = surfaceColor,
-        border = BorderStroke(0.5.dp, borderColor)
+        color = surfaceColor
     ) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
             Row(
@@ -1211,10 +1217,10 @@ fun CliCodeBlockContainer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 4.dp)
+            .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
         shape = RoundedCornerShape(8.dp),
-        color = containerBg,
-        border = BorderStroke(0.5.dp, borderColor)
+        color = containerBg
     ) {
         Column {
             // Actionable Top Bar
@@ -1376,6 +1382,32 @@ fun isExecutableCode(lang: String, detectedPath: String?): Boolean {
     return false
 }
 
+fun filterCodeLeaksFromText(text: String): String {
+    val lines = text.lines()
+    val sanitized = mutableListOf<String>()
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) {
+            sanitized.add(line)
+            continue
+        }
+        val isCodeLeak = (trimmed.startsWith("<") && (trimmed.endsWith(">") || trimmed.contains("</"))) ||
+                         trimmed.startsWith("function ") || trimmed.startsWith("const ") ||
+                         trimmed.startsWith("var ") || trimmed.startsWith("let ") ||
+                         trimmed.startsWith("import ") || trimmed.startsWith("export ") ||
+                         trimmed.startsWith("class ") || trimmed.startsWith("def ") ||
+                         (trimmed.contains("{") && trimmed.contains("}")) ||
+                         trimmed.contains("margin:") || trimmed.contains("padding:") ||
+                         trimmed.contains("color:") || trimmed.contains("display:") ||
+                         trimmed.contains("background:")
+
+        if (!isCodeLeak) {
+            sanitized.add(line)
+        }
+    }
+    return sanitized.joinToString("\n").trim()
+}
+
 fun parseMessageSegments(text: String): List<MessageSegment> {
     val segments = mutableListOf<MessageSegment>()
     val codeRegex = Regex("""```([a-zA-Z0-9_-]*)\n([\s\S]*?)```""")
@@ -1384,8 +1416,9 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
     for (match in codeRegex.findAll(text)) {
         if (match.range.first > currentIndex) {
             val textPart = text.substring(currentIndex, match.range.first).trim()
-            if (textPart.isNotEmpty()) {
-                segments.add(MessageSegment.Text(textPart))
+            val cleanTextPart = filterCodeLeaksFromText(textPart)
+            if (cleanTextPart.isNotEmpty()) {
+                segments.add(MessageSegment.Text(cleanTextPart))
             }
         }
 
@@ -1419,8 +1452,9 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
         val unclosedStart = remainder.indexOf("```")
         if (unclosedStart != -1) {
             val beforeCode = remainder.substring(0, unclosedStart).trim()
-            if (beforeCode.isNotEmpty()) {
-                segments.add(MessageSegment.Text(beforeCode))
+            val cleanBeforeCode = filterCodeLeaksFromText(beforeCode)
+            if (cleanBeforeCode.isNotEmpty()) {
+                segments.add(MessageSegment.Text(cleanBeforeCode))
             }
             val afterBackticks = remainder.substring(unclosedStart + 3)
             val langLine = afterBackticks.substringBefore('\n').trim()
@@ -1428,21 +1462,22 @@ fun parseMessageSegments(text: String): List<MessageSegment> {
             if (isExecutableCode(langLine, null)) {
                 segments.add(MessageSegment.Code(language = langLine.ifBlank { "code" }, code = codeContent, filePath = null))
             } else {
-                val fullText = (beforeCode + "\n" + codeContent).trim()
+                val fullText = (cleanBeforeCode + "\n" + codeContent).trim()
                 if (fullText.isNotEmpty()) {
                     segments.add(MessageSegment.Text(fullText))
                 }
             }
         } else {
             val remainingText = remainder.trim()
-            if (remainingText.isNotEmpty()) {
-                segments.add(MessageSegment.Text(remainingText))
+            val cleanRemaining = filterCodeLeaksFromText(remainingText)
+            if (cleanRemaining.isNotEmpty()) {
+                segments.add(MessageSegment.Text(cleanRemaining))
             }
         }
     }
 
     if (segments.isEmpty() && text.isNotBlank()) {
-        segments.add(MessageSegment.Text(text))
+        segments.add(MessageSegment.Text(filterCodeLeaksFromText(text)))
     }
 
     return segments
@@ -1696,10 +1731,12 @@ fun CliWelcomeScreen(
         ).forEach { prompt ->
             Surface(
                 onClick = { onSelectPrompt(prompt) },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 5.dp)
+                    .tactileGlassGlow(cornerRadius = 8.dp, isDark = isSystemInDarkTheme()),
                 color = surfaceColor,
-                shape = RoundedCornerShape(8.dp),
-                border = BorderStroke(0.5.dp, borderColor)
+                shape = RoundedCornerShape(8.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),

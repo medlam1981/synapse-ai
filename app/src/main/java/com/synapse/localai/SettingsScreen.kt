@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -41,6 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.synapse.localai.ui.theme.*
+import com.synapse.localai.ui.tactileGlassGlow
 
 // Signature Soft Mint / Emerald Palette
 private val EmeraldMint = Color(0xFF10B981)
@@ -991,10 +993,11 @@ fun SettingsCard(
     var expanded by remember { mutableStateOf(true) }
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isSystemInDarkTheme()),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f))
+        shape = RoundedCornerShape(12.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),

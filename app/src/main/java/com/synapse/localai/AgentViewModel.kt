@@ -859,6 +859,13 @@ The file execution engine automatically parses this block and writes the file di
                     var streamInterrupted = false
                     var interruptMsg = ""
 
+                    val liveDiskStreamer = ToolExecutor.LiveFileStreamer(
+                        baseDir = _uiState.value.activeWorkspacePath ?: ToolExecutor.BASE_DIR,
+                        onStatusUpdate = { status ->
+                            _uiState.update { it.copy(activeStatusDetail = status, currentPhase = AgentActionPhase.GENERATING_CODE) }
+                        }
+                    )
+
                     // 1. Immediate Post-Prompt Reasoning Anchor
                     val initialLiveLog = LogEntry(
                         id = liveLogId,
@@ -908,6 +915,9 @@ The file execution engine automatically parses this block and writes the file di
                             responseSb.append(chunk)
                             val rawText = responseSb.toString()
                             val parsed = parseThoughtAndContent(rawText)
+
+                            // Synchronous Live Writing directly into physical disk buffer in real time
+                            liveDiskStreamer.onChunk(parsed.content)
 
                             // Granular Real-Time Phase Reflection (Dynamic Activity Bar Tracking)
                             val isCodeStreaming = isExecutableCodeStreaming(parsed.content)
@@ -962,12 +972,20 @@ The file execution engine automatically parses this block and writes the file di
                         _uiState.update { it.copy(streamInterruptMsg = interruptMsg) }
                     }
 
+                    // Finalize and auto-flush any in-flight file streaming
+                    val writtenFilesFromStream = liveDiskStreamer.closeAll()
+
                     val fullResponse = responseSb.toString()
                     val parsedFull = parseThoughtAndContent(fullResponse)
                     val cleanedFullReply = parsedFull.content.trim()
 
                     if (cleanedFullReply.isNotBlank() || parsedFull.thought.isNotBlank() || fullResponse.contains("<invoke")) {
-                        val assistantReply = cleanedFullReply
+                        // Strict No-Echo Protocol: Sanitize post-execution response to eliminate code regurgitation
+                        val assistantReply = if (writtenFilesFromStream.isNotEmpty()) {
+                            ToolExecutor.sanitizePostExecutionSummary(cleanedFullReply, writtenFilesFromStream)
+                        } else {
+                            cleanedFullReply
+                        }
                         synchronized(conversationHistory) {
                             conversationHistory.add("assistant" to assistantReply)
                             while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
