@@ -131,19 +131,28 @@ object ModelScanner {
             .filter { it.length > 1 }
             .map { it.lowercase() }
 
-        // Determine if a file is a disqualified auxiliary block:
-        // Only exclude "mtp-gemma-4" paired with "bf16" AND "assistant" together,
-        // or files that explicitly say "assistant" — NOT generic E2B mtp files.
+        // Determine base model family: "gemma", "qwen", "llama", "phi", etc.
+        val baseFamily = when {
+            baseName.contains("gemma") -> "gemma"
+            baseName.contains("qwen") -> "qwen"
+            baseName.contains("llama") -> "llama"
+            baseName.contains("phi") -> "phi"
+            baseName.contains("deepseek") -> "deepseek"
+            else -> ""
+        }
+
+        // Determine candidate files matching the same architecture/family
         val candidateFiles = mtpFiles.filter { file ->
             val name = file.name.lowercase()
             val isAssistantBlock = name.contains("assistant")
             val isBf16OnlyAuxiliary = name.contains("bf16") && name.contains("mtp-gemma-4") && !name.contains("e2b")
-            !isAssistantBlock && !isBf16OnlyAuxiliary
+            val matchesFamily = if (baseFamily.isNotEmpty()) name.contains(baseFamily) else true
+            !isAssistantBlock && !isBf16OnlyAuxiliary && matchesFamily
         }
 
         if (candidateFiles.isEmpty()) return null
 
-        // Score each candidate by token overlap with base model
+        // Score each candidate by token overlap with base model (excluding generic precision tags like bf16)
         data class Scored(val file: File, val score: Int)
 
         val scored = candidateFiles.map { mtpFile ->
@@ -151,14 +160,14 @@ object ModelScanner {
             val cleanMtp = mtpName
                 .removePrefix("mtp-")
                 .removePrefix("mtp_")
-            val score = baseTokens.count { token -> cleanMtp.contains(token) }
+            val score = baseTokens.count { token -> token != "bf16" && cleanMtp.contains(token) }
             Scored(mtpFile, score)
         }.sortedWith(
             compareByDescending<Scored> { it.score }
                 .thenByDescending { it.file.name.contains("bf16", ignoreCase = true) }
         )
 
-        // Return best match if it shares at least 1 token, otherwise first candidate
-        return scored.firstOrNull { it.score > 0 }?.file ?: candidateFiles.firstOrNull()
+        // Only return if there is an actual positive score and family match
+        return scored.firstOrNull { it.score > 0 }?.file
     }
 }

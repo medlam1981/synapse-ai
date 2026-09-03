@@ -254,9 +254,23 @@ class GGUFModelClient {
             val optimalThreads = if (hw != null) DeviceProfile.optimalThreads(hw) else (if (threadCount > 0) threadCount else 4)
             val optimalBatch = if (hw != null) DeviceProfile.optimalBatch(hw) else 256
             val optimalUbatch = if (hw != null) DeviceProfile.optimalUbatch(hw) else 128
-            val resolvedCtx = contextLength.coerceIn(2048, 16384)
-            val effectiveBatch = if (resolvedCtx >= 16384) minOf(optimalBatch, 512) else optimalBatch
-            val effectiveUbatch = if (resolvedCtx >= 16384) minOf(optimalUbatch, 128) else optimalUbatch
+
+            val modelFile = File(resolvedPath)
+            val modelSizeMb = if (modelFile.exists()) modelFile.length() / (1024 * 1024) else 0L
+            val isLargeModel = modelSizeMb > 2500L
+            val baseName = modelFile.nameWithoutExtension.lowercase()
+            val isQwen = baseName.contains("qwen")
+
+            // Conservative context length for heavy / BF16 models to prevent OOM
+            val maxSafeCtx = when {
+                modelSizeMb > 3000L -> 2048
+                modelSizeMb > 2000L -> 4096
+                else -> 8192
+            }
+            val resolvedCtx = contextLength.coerceIn(2048, maxSafeCtx)
+            val effectiveBatch = if (isLargeModel) minOf(optimalBatch, 128) else (if (resolvedCtx >= 16384) minOf(optimalBatch, 512) else optimalBatch)
+            val effectiveUbatch = if (isLargeModel) minOf(optimalUbatch, 64) else (if (resolvedCtx >= 16384) minOf(optimalUbatch, 128) else optimalUbatch)
+            val effectiveGpuLayers = if (isLargeModel || isQwen) 0 else gpuLayers
 
             val baseArgs = mutableListOf(
                 "-m", resolvedPath,
@@ -264,10 +278,11 @@ class GGUFModelClient {
                 "--parallel", "1",
                 "--cont-batching",
                 "--no-warmup",
+                "--fit", "off",
                 "-b", effectiveBatch.toString(),
                 "-ub", effectiveUbatch.toString(),
                 "-t", optimalThreads.toString(),
-                "-ngl", gpuLayers.toString(),
+                "-ngl", effectiveGpuLayers.toString(),
                 "--cache-type-k", "q8_0",
                 "--cache-type-v", "q8_0",
                 "--alias", "local",
@@ -281,12 +296,25 @@ class GGUFModelClient {
                 baseArgs.add("--no-mmap")
             }
 
-            // 3. Auto detect MTP
+            // 3. Auto detect MTP (strictly enforce model family matching)
             var activeDraftPath = draftModelPath
             if (activeDraftPath.isNullOrBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(resolvedPath)
                 if (matched != null && matched.exists()) {
                     activeDraftPath = matched.absolutePath
+                }
+            } else {
+                // Ensure existing draftModelPath actually matches the base model family
+                val draftName = File(activeDraftPath).nameWithoutExtension.lowercase()
+                val isFamilyMatch = when {
+                    baseName.contains("gemma") && draftName.contains("gemma") -> true
+                    baseName.contains("qwen") && draftName.contains("qwen") -> true
+                    baseName.contains("llama") && draftName.contains("llama") -> true
+                    else -> false
+                }
+                if (!isFamilyMatch) {
+                    fileLog("⚠️ Incompatible MTP draft ($draftName) discarded for base model ($baseName)")
+                    activeDraftPath = null
                 }
             }
 

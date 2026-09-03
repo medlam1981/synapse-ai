@@ -317,6 +317,19 @@ class AgentViewModel : ViewModel() {
                 (rawLower.contains("bf16") && rawLower.contains("mtp-gemma-4") && !rawLower.contains("e2b")) ||
                 (rawDraft.isNotBlank() && !File(rawDraft).exists())
             var draftPath = if (draftIsInvalid) "" else rawDraft
+            if (localPath.isNotBlank() && draftPath.isNotBlank()) {
+                val baseName = File(localPath).nameWithoutExtension.lowercase()
+                val draftName = File(draftPath).nameWithoutExtension.lowercase()
+                val isFamilyMatch = when {
+                    baseName.contains("gemma") && draftName.contains("gemma") -> true
+                    baseName.contains("qwen") && draftName.contains("qwen") -> true
+                    baseName.contains("llama") && draftName.contains("llama") -> true
+                    else -> false
+                }
+                if (!isFamilyMatch) {
+                    draftPath = ""
+                }
+            }
             if (draftPath.isBlank() && localPath.isNotBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(localPath)
                 if (matched != null) {

@@ -357,8 +357,10 @@ fun SettingsScreenContent(
                                     .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
                                     .border(0.5.dp, if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                                     .clickable {
+                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath)
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
+                                            draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -369,8 +371,10 @@ fun SettingsScreenContent(
                                 RadioButton(
                                     selected = isSelected,
                                     onClick = {
+                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath)
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
+                                            draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
