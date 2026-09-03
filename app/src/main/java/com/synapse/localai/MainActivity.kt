@@ -428,222 +428,14 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
 
-            // Top Header: Spacious Navigation Bar with Heavyweight Typography
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = surfaceColor
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Surface(
-                                onClick = { coroutineScope.launch { drawerState.open() } },
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Widgets,
-                                        contentDescription = "Menu",
-                                        tint = primaryAccent,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-
-                            Column {
-                                Text(
-                                    text = "MEDLAM-AI AGENT",
-                                    color = textBright,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = FontFamily.SansSerif,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.6.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(if (uiState.isProcessing) primaryAccent else textDim)
-                                    )
-                                    Text(
-                                        text = if (uiState.isProcessing) "RUNNING" else "IDLE",
-                                        color = if (uiState.isProcessing) primaryAccent else textDim,
-                                        fontSize = 9.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
-
-                            IconButton(
-                                onClick = { showSettings = true },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Outlined.Settings, "Settings", tint = textDim, modifier = Modifier.size(18.dp))
-                            }
-                        }
-                    }
-
-                    // Unified Model & MTP Capsule (Automatically hides when Cloud/Gemini mode is active)
-                    val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
-                    if (!isCloudMode) {
-                        val hasMtp = uiState.config.draftModelPath.isNotBlank() && File(uiState.config.draftModelPath).exists()
-                        val draftName = if (hasMtp) File(uiState.config.draftModelPath).nameWithoutExtension else null
-                        val rawBaseName = uiState.activeModelName.ifBlank {
-                            if (uiState.config.localModelPath.isNotBlank()) File(uiState.config.localModelPath).nameWithoutExtension else "GEMMA-4-E2B"
-                        }
-                        val cleanBaseName = rawBaseName
-                            .replace("-it", "")
-                            .replace("-qat", "")
-                            .replace("-UD", "")
-                            .replace("-Q2_K_XL", " Q2")
-                            .replace("-Q4_K_XL", " Q4")
-                            .replace("-BF16", "")
-
-                        val unifiedCapsuleText = if (draftName != null) {
-                            "$cleanBaseName • MTP: $draftName"
-                        } else {
-                            "$cleanBaseName • STANDALONE"
-                        }
-
-                        // Reactive Neural Core Status Beacon (Loading Pulse -> Solid Beacon -> Offline Muted)
-                        val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
-                        val isModelReady = uiState.localModelLoaded && !isModelLoading
-
-                        val beaconGreen = MaterialTheme.colorScheme.primary
-                        val offlineDotColor = MaterialTheme.colorScheme.outline
-
-                        // Breathing animation for Loading / Initializing phase
-                        val beaconTransition = rememberInfiniteTransition(label = "beaconPulseTransition")
-                        val pulseAlpha by beaconTransition.animateFloat(
-                            initialValue = 0.25f,
-                            targetValue = 1.0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(durationMillis = 800, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "beaconAlpha"
-                        )
-                        val pulseHaloScale by beaconTransition.animateFloat(
-                            initialValue = 0.85f,
-                            targetValue = 1.45f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(durationMillis = 800, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "beaconHaloScale"
-                        )
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier.size(10.dp)
-                                ) {
-                                    when {
-                                        isModelLoading -> {
-                                            // Loading / Initializing: Actively pulses with rhythmic green glow (breathing animation)
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(10.dp)
-                                                    .scale(pulseHaloScale)
-                                                    .clip(CircleShape)
-                                                    .background(beaconGreen.copy(alpha = pulseAlpha * 0.35f))
-                                            )
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(5.5.dp)
-                                                    .clip(CircleShape)
-                                                    .background(beaconGreen.copy(alpha = pulseAlpha))
-                                            )
-                                        }
-                                        isModelReady -> {
-                                            // Ready / Operational: Settles into a stable, solid green beacon with ambient halo
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(9.dp)
-                                                    .clip(CircleShape)
-                                                    .background(beaconGreen.copy(alpha = 0.22f))
-                                            )
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(5.5.dp)
-                                                    .clip(CircleShape)
-                                                    .background(beaconGreen)
-                                            )
-                                        }
-                                        else -> {
-                                            // Offline / Unloaded: Muted neutral or gray tone
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(5.dp)
-                                                    .clip(CircleShape)
-                                                    .background(offlineDotColor)
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = unifiedCapsuleText.uppercase(),
-                                    color = textDim,
-                                    fontSize = 8.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Unified Capsule (Battery, RAM, CPU, Temp, Keys, TSK Capsule + Clock Capsule)
-            UnifiedTelemetryBar(context = context, isDark = isDark, uiState = uiState)
+            // Consolidated Master Header Frame (Single Structured Container)
+            ConsolidatedMasterHeader(
+                context = context,
+                uiState = uiState,
+                isDark = isDark,
+                onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
+                onOpenSettings = { showSettings = true }
+            )
 
             // CLI Workspace
             Box(modifier = Modifier.weight(1f)) {
@@ -712,7 +504,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         .fillMaxWidth()
                         .navigationBarsPadding()
                 ) {
-                    // 4. Docked Real-Time Dynamic Activity Bar (Impenetrable Lower Boundary & Visual Floor)
+                    // 2. Containerless Dynamic Activity Indicator (Pure Typographic Indicator)
                     val infiniteTransition = rememberInfiniteTransition(label = "docked_activity_pulse")
                     val pulseAlpha by infiniteTransition.animateFloat(
                         initialValue = 0.35f,
@@ -734,36 +526,30 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     val dotColor = if (isBusy) primaryAccent else MaterialTheme.colorScheme.primary
                     val textColor = if (isBusy) primaryAccent else textDim
 
-                    Surface(
+                    // Raw Inline Status: Completely unboxed, zero card, zero elevation, plain floating text
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp)
-                            .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isBusy) 0.8f else 0.5f) else MaterialTheme.colorScheme.surfaceContainerLowest
+                            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .then(if (isBusy) Modifier.alpha(pulseAlpha) else Modifier)
-                                    .clip(CircleShape)
-                                    .background(dotColor)
-                            )
-                            Text(
-                                text = statusText,
-                                color = textColor,
-                                fontSize = 9.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .then(if (isBusy) Modifier.alpha(pulseAlpha) else Modifier)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                        Text(
+                            text = statusText,
+                            color = textColor,
+                            fontSize = 9.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
 
                     // Unified Slim Input Capsule (Internalized Inline Actions)
@@ -922,10 +708,21 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 }
 
 /**
- * Full Width Capsule: Metrics on left, TSK Capsule + Clock on right
+ * UI/UX Architectural Specification: Consolidated Master Header Frame
+ * Single structured container docked at top of viewport with 3 organized internal rows:
+ * - Top Row: Drawer toggle button, centered MEDLAM-AI AGENT title with status badge (IDLE / RUNNING), settings gear icon.
+ * - Middle Row: Compact inline spec chip detailing active Base Model & Companion MTP profile (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16).
+ * - Bottom Row: Compact hardware telemetry bar showing Battery, RAM, Storage, Thermals, MTP status, Task counter, and Session Clock.
+ * Minimal internal vertical padding to retain maximum screen real estate for message stream.
  */
 @Composable
-fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState) {
+fun ConsolidatedMasterHeader(
+    context: Context,
+    uiState: AgentUiState,
+    isDark: Boolean,
+    onOpenDrawer: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
     var stats by remember { mutableStateOf(SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)) }
     var currentTime by remember { mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())) }
 
@@ -939,128 +736,236 @@ fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState
         }
     }
 
-    val capsuleBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
-    val capsuleBorder = MaterialTheme.colorScheme.outlineVariant
+    val headerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
+    val subCardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceVariant
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val primaryAccent = MaterialTheme.colorScheme.primary
     val secondaryAccent = MaterialTheme.colorScheme.secondary
 
-    val currentKey = if (uiState.totalKeys > 0) "Key ${uiState.currentKeyIndex + 1}/${uiState.totalKeys}" else if (stats.totalKeys > 0) "Key ${stats.currentKeyIndex}/${stats.totalKeys}" else "Key 0/0"
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
 
+    // Solid Master Header Card docked at top of viewport
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 3.dp)
-            .tactileGlassGlow(cornerRadius = 10.dp, isDark = isDark),
-        shape = RoundedCornerShape(10.dp),
-        color = capsuleBg
+        modifier = Modifier.fillMaxWidth(),
+        color = headerBg,
+        shape = RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Metrics (Battery, RAM, CPU, Temp, Keys) - strictly single line with scroll if narrow
+            // -------------------------------------------------------------
+            // 1. TOP ROW: Drawer Toggle, Centered Title + Status, Settings
+            // -------------------------------------------------------------
             Row(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                // Left: Drawer toggle button
+                IconButton(
+                    onClick = onOpenDrawer,
+                    modifier = Modifier.size(28.dp)
+                ) {
                     Icon(
-                        if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull,
-                        null,
-                        tint = if (stats.isCharging) primaryAccent else textDim,
-                        modifier = Modifier.size(11.dp)
+                        imageVector = Icons.Outlined.Widgets,
+                        contentDescription = "Menu",
+                        tint = primaryAccent,
+                        modifier = Modifier.size(17.dp)
                     )
+                }
+
+                // Center: Centered MEDLAM-AI AGENT title with its status badge (IDLE / RUNNING)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Text(
-                        text = if (stats.isCharging) "⚡${stats.battery}%" else "${stats.battery}%",
+                        text = "MEDLAM-AI AGENT",
                         color = textBright,
-                        fontSize = 8.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.SansSerif,
+                        letterSpacing = 0.5.sp
                     )
-                }
 
-                Text("•", color = textDim, fontSize = 7.5.sp, maxLines = 1, softWrap = false)
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Icon(Icons.Filled.Memory, null, tint = primaryAccent, modifier = Modifier.size(11.dp))
-                    Text(stats.ramFree, color = textBright, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
-                }
-
-                Text("•", color = textDim, fontSize = 7.5.sp, maxLines = 1, softWrap = false)
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Icon(Icons.Filled.DeveloperBoard, null, tint = primaryAccent, modifier = Modifier.size(11.dp))
-                    Text(stats.cpuUsage, color = textBright, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
-                }
-
-                Text("•", color = textDim, fontSize = 7.5.sp, maxLines = 1, softWrap = false)
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Icon(Icons.Filled.Thermostat, null, tint = if (stats.cpuTempInt > 55) MaterialTheme.colorScheme.error else primaryAccent, modifier = Modifier.size(11.dp))
-                    Text(stats.cpuTemp, color = textBright, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
-                }
-
-                if (uiState.config.showApiKeyTracker) {
-                    Text("•", color = textDim, fontSize = 7.5.sp, maxLines = 1, softWrap = false)
-
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(Icons.Filled.VpnKey, null, tint = secondaryAccent, modifier = Modifier.size(10.dp))
-                        Text(
-                            text = if (uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)) {
-                                if (stats.totalKeys > 0) currentKey else "CLOUD"
-                            } else {
-                                if (uiState.config.draftModelPath.isNotBlank()) "⚡ MTP" else "LOCAL"
-                            },
-                            color = secondaryAccent,
-                            fontSize = 8.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                    // Solid Status Badge
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(if (uiState.isProcessing) primaryAccent else textDim)
+                            )
+                            Text(
+                                text = if (uiState.isProcessing) "RUNNING" else "IDLE",
+                                color = if (uiState.isProcessing) primaryAccent else textDim,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
                     }
+                }
+
+                // Right: Settings gear icon
+                IconButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Settings,
+                        contentDescription = "Settings",
+                        tint = textDim,
+                        modifier = Modifier.size(17.dp)
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            // -------------------------------------------------------------
+            // 2. MIDDLE ROW: Compact inline spec chip (Base Model & Companion MTP)
+            // (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16)
+            // -------------------------------------------------------------
+            val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
+            val hasMtp = uiState.config.draftModelPath.isNotBlank() && File(uiState.config.draftModelPath).exists()
+            val draftName = if (hasMtp) File(uiState.config.draftModelPath).nameWithoutExtension else null
+            val rawBaseName = uiState.activeModelName.ifBlank {
+                if (uiState.config.localModelPath.isNotBlank()) File(uiState.config.localModelPath).nameWithoutExtension else "GEMMA-4-E2B"
+            }
+            val cleanBaseName = rawBaseName
+                .replace("-it", "")
+                .replace("-qat", "")
+                .replace("-UD", "")
+                .replace("-Q2_K_XL", " Q2")
+                .replace("-Q4_K_XL", " Q4")
+                .replace("-BF16", "")
 
-            // Right Side: TSK Capsule + Clock Capsule (rigidly single-line, zero wrapping)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            val specChipText = if (isCloudMode) {
+                "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}"
+            } else if (draftName != null) {
+                "$cleanBaseName • MTP: $draftName"
+            } else {
+                "$cleanBaseName • STANDALONE"
+            }
+
+            val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
+            val isModelReady = uiState.localModelLoaded && !isModelLoading
+
+            Surface(
+                shape = RoundedCornerShape(5.dp),
+                color = subCardBg,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Surface(
-                    shape = RoundedCornerShape(5.dp),
-                    color = if (totalTasks > 0) primaryAccent.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    isModelLoading -> primaryAccent
+                                    isModelReady -> primaryAccent
+                                    else -> MaterialTheme.colorScheme.outline
+                                }
+                            )
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = specChipText.uppercase(),
+                        color = textDim,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // -------------------------------------------------------------
+            // 3. BOTTOM ROW: Compact hardware telemetry bar
+            // Showing: Battery, RAM, Storage, Thermals, MTP status, Task counter, and Session Clock
+            // -------------------------------------------------------------
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Left Metrics: Battery, RAM, Storage, Thermals, MTP status
+                Row(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    // Battery
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(
+                            if (stats.isCharging) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryFull,
+                            null,
+                            tint = if (stats.isCharging) primaryAccent else textDim,
+                            modifier = Modifier.size(10.dp)
+                        )
                         Text(
-                            text = "tsk",
-                            color = primaryAccent,
+                            text = if (stats.isCharging) "⚡${stats.battery}%" else "${stats.battery}%",
+                            color = textBright,
                             fontSize = 8.sp,
-                            fontWeight = FontWeight.Black,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
                             softWrap = false
                         )
+                    }
+
+                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
+
+                    // RAM
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(Icons.Filled.Memory, null, tint = primaryAccent, modifier = Modifier.size(10.dp))
+                        Text(stats.ramFree, color = textBright, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
+                    }
+
+                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
+
+                    // Storage
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(Icons.Filled.Storage, null, tint = primaryAccent, modifier = Modifier.size(10.dp))
+                        Text("${stats.storageFree} HD", color = textBright, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
+                    }
+
+                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
+
+                    // Thermals
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(Icons.Filled.Thermostat, null, tint = if (stats.cpuTempInt > 55) MaterialTheme.colorScheme.error else primaryAccent, modifier = Modifier.size(10.dp))
+                        Text(stats.cpuTemp, color = textBright, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, maxLines = 1, softWrap = false)
+                    }
+
+                    // MTP / Engine Status
+                    Text("•", color = textDim, fontSize = 7.sp, maxLines = 1, softWrap = false)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(Icons.Filled.VpnKey, null, tint = secondaryAccent, modifier = Modifier.size(9.dp))
                         Text(
-                            text = "$totalTasks",
-                            color = textBright,
+                            text = if (isCloudMode) "CLOUD" else if (hasMtp) "⚡ MTP" else "LOCAL",
+                            color = secondaryAccent,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
@@ -1070,25 +975,41 @@ fun UnifiedTelemetryBar(context: Context, isDark: Boolean, uiState: AgentUiState
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(5.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Right Metrics: Task counter + Session Clock
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    // Task Counter
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (totalTasks > 0) primaryAccent.copy(alpha = 0.15f) else subCardBg
                     ) {
-                        Icon(Icons.Outlined.Schedule, null, tint = primaryAccent, modifier = Modifier.size(9.dp))
-                        Text(
-                            text = currentTime,
-                            color = textBright,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text("tsk", color = primaryAccent, fontSize = 7.5.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                            Text("$totalTasks", color = textBright, fontSize = 7.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+
+                    // Session Clock
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = subCardBg
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(Icons.Outlined.Schedule, null, tint = primaryAccent, modifier = Modifier.size(8.dp))
+                            Text(currentTime, color = textBright, fontSize = 7.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        }
                     }
                 }
             }

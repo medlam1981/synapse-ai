@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.Color
 // =========================================================================
 val ObsidianBackground = Color(0xFF0B0F17) // Deep space obsidian canvas
 val ObsidianSurface = Color(0xFF111827) // Elevated slate-navy surface
-val ObsidianSurfaceTranslucent = Color(0xE6111827) // Translucent elevated slate-navy @ 90%
+val ObsidianSurfaceTranslucent = Color(0xFF111827) // Solid elevated slate-navy surface
 val ObsidianOnSurface = Color(0xFFF9FAFB) // Crisp white primary labels
 val ObsidianOnSurfaceVariant = Color(0xFF94A3B8) // Cool slate secondary telemetry
 val ObsidianPrimary = Color(0xFF3882F6) // Electric azure

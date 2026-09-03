@@ -155,13 +155,8 @@ class GeminiModelClient(
                     kotlinx.coroutines.delay(1000L) // Fixed short wait
                 }
 
-                // Normalize model name: SDK accepts shortform e.g. "gemini-2.0-flash"
-                val trimmed = modelName.trim()
-                val effectiveModelName = when {
-                    trimmed.contains("/") -> trimmed
-                    trimmed.startsWith("gemini-") -> trimmed
-                    else -> "models/$trimmed"
-                }
+                // Direct API Endpoint Routing: exact user-defined model string dynamically routed without fallback interception
+                val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
 
                 val generativeModel = GenerativeModel(
                     modelName = effectiveModelName,
@@ -274,13 +269,8 @@ class GeminiModelClient(
                     kotlinx.coroutines.delay(1000L)
                 }
 
-                // Normalize model name: SDK accepts shortform e.g. \"gemini-2.0-flash\"
-                val trimmed = modelName.trim()
-                val effectiveModelName = when {
-                    trimmed.contains("/") -> trimmed
-                    trimmed.startsWith("gemini-") -> trimmed
-                    else -> "models/$trimmed"
-                }
+                // Direct API Endpoint Routing: exact user-defined model string dynamically routed without fallback interception
+                val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
 
                 val generativeModel = GenerativeModel(
                     modelName = effectiveModelName,

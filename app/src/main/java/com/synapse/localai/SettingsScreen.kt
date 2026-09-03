@@ -16,10 +16,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -94,6 +96,7 @@ fun SettingsScreenContent(
     
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
+    var geminiModelText by remember(config.geminiModelName) { mutableStateOf(config.geminiModelName) }
     var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
@@ -244,47 +247,86 @@ fun SettingsScreenContent(
                                 }
                             )
 
-                            // Cloud Model Selection Matrix
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("CLOUD MODEL SELECTION:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                val cloudModels = listOf(
-                                    Triple("gemini-2.0-flash", "Gemini 2.0 Flash", "Ultra-fast multimodal, real-time reasoning"),
-                                    Triple("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Cost-efficient lightweight stream"),
-                                    Triple("gemini-1.5-pro", "Gemini 1.5 Pro", "Complex architecture & long context"),
-                                    Triple("gemini-1.5-flash", "Gemini 1.5 Flash", "High-speed balanced reasoning")
-                                )
-                                cloudModels.forEach { (mId, mLabel, mDesc) ->
-                                    val isSelected = config.geminiModelName == mId
-                                    Surface(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable {
-                                                val newConfig = config.copy(geminiModelName = mId)
-                                                viewModel.saveConfig(context, newConfig)
-                                            },
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (isSelected) primaryContainer else surfaceContainer
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            RadioButton(
-                                                selected = isSelected,
+                            // Freeform Manual Model Input Field (Dynamic Custom Model Entry & Zero Client-Side Restrictions)
+                            OutlinedTextField(
+                                value = geminiModelText,
+                                onValueChange = { input ->
+                                    geminiModelText = input
+                                    val newConfig = config.copy(geminiModelName = input.trim())
+                                    viewModel.saveConfig(context, newConfig)
+                                },
+                                label = { Text("GEMINI CLOUD MODEL IDENTIFIER", color = primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
+                                placeholder = { Text("e.g. gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                colors = settingsFieldColors(),
+                                textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (geminiModelText.isNotBlank()) {
+                                            IconButton(
                                                 onClick = {
-                                                    val newConfig = config.copy(geminiModelName = mId)
+                                                    geminiModelText = ""
+                                                    val newConfig = config.copy(geminiModelName = "")
                                                     viewModel.saveConfig(context, newConfig)
                                                 },
-                                                colors = RadioButtonDefaults.colors(selectedColor = primary)
-                                            )
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(mLabel, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                                Text(mDesc, color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(Icons.Filled.Clear, "Clear model ID", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                                             }
                                         }
+                                        IconButton(
+                                            onClick = {
+                                                val defaultModel = "gemini-2.0-flash"
+                                                geminiModelText = defaultModel
+                                                val newConfig = config.copy(geminiModelName = defaultModel)
+                                                viewModel.saveConfig(context, newConfig)
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Filled.Refresh, "Reset to default", tint = primary, modifier = Modifier.size(16.dp))
+                                        }
                                     }
+                                }
+                            )
+
+                            // Inline Key & Model Status (Confirms active model ID currently queued for cloud queries)
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = surfaceContainer,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(if (config.geminiModelName.isNotBlank()) primary else MaterialTheme.colorScheme.error)
+                                        )
+                                        Text(
+                                            text = "ACTIVE INFERENCE TARGET",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    Text(
+                                        text = config.geminiModelName.ifBlank { "NO MODEL CONFIGURED" },
+                                        color = if (config.geminiModelName.isNotBlank()) primary else MaterialTheme.colorScheme.error,
+                                        fontSize = 9.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1
+                                    )
                                 }
                             }
 
