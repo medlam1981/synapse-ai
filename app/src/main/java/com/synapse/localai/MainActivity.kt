@@ -203,6 +203,9 @@ class MainActivity : ComponentActivity() {
 
         setupGlobalCrashHandler()
 
+        // Early App Process Initialization: Background Neural Priming & Persistent Persona KV Cache
+        NeuralPrimingManager.primeNeuralCore(applicationContext)
+
         lifecycleScope.launch {
             try {
                 checkStoragePermissions()
@@ -763,129 +766,149 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         }
                     }
 
-                    // Floating Message Input Capsule Row
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                    // Unified Slim Input Capsule (Internalized Inline Actions)
                     val inputIsArabic = isArabic(textInput)
+                    val canSend = textInput.isNotBlank() || selectedFileUri != null
+
                     CompositionLocalProvider(
                         LocalLayoutDirection provides if (inputIsArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                     ) {
                         Surface(
                             modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 44.dp, max = 100.dp)
-                                .tactileGlassGlow(cornerRadius = 22.dp, isDark = isDark, borderWidth = 0.8.dp),
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                .heightIn(min = 40.dp, max = 96.dp)
+                                .tactileGlassGlow(cornerRadius = 20.dp, isDark = isDark, borderWidth = 0.dp),
                             color = inputBg,
-                            shape = RoundedCornerShape(22.dp)
+                            shape = RoundedCornerShape(20.dp)
                         ) {
-                            Box(
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp),
-                                contentAlignment = if (inputIsArabic) Alignment.CenterEnd else Alignment.CenterStart
+                                    .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                BasicTextField(
-                                    value = textInput,
-                                    onValueChange = { textInput = it },
-                                    textStyle = TextStyle(
-                                        color = textBright,
-                                        fontSize = 12.5.sp,
-                                        fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
-                                        textAlign = if (inputIsArabic) TextAlign.End else TextAlign.Start
-                                    ),
-                                    cursorBrush = SolidColor(cyanAccent),
-                                    maxLines = 4,
+                                // Left: Expandable Text Field Area
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 10.dp),
-                                    decorationBox = { inner ->
-                                        if (textInput.isEmpty()) {
-                                            Text(
-                                                text = if (inputIsArabic) "رسالة إلى MEDLAM..." else "Message MEDLAM...",
-                                                style = TextStyle(
-                                                    color = textDim,
-                                                    fontSize = 12.sp,
-                                                    fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
-                                                    textAlign = if (inputIsArabic) TextAlign.End else TextAlign.Start
-                                                ),
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
+                                        .weight(1f)
+                                        .padding(vertical = 6.dp),
+                                    contentAlignment = if (inputIsArabic) Alignment.CenterEnd else Alignment.CenterStart
+                                ) {
+                                    BasicTextField(
+                                        value = textInput,
+                                        onValueChange = { textInput = it },
+                                        textStyle = TextStyle(
+                                            color = textBright,
+                                            fontSize = 12.5.sp,
+                                            fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
+                                            textAlign = if (inputIsArabic) TextAlign.End else TextAlign.Start
+                                        ),
+                                        cursorBrush = SolidColor(cyanAccent),
+                                        maxLines = 4,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        decorationBox = { inner ->
+                                            if (textInput.isEmpty()) {
+                                                Text(
+                                                    text = if (inputIsArabic) "رسالة إلى MEDLAM..." else "Message MEDLAM...",
+                                                    style = TextStyle(
+                                                        color = textDim,
+                                                        fontSize = 12.sp,
+                                                        fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
+                                                        textAlign = if (inputIsArabic) TextAlign.End else TextAlign.Start
+                                                    ),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                            }
+                                            inner()
                                         }
-                                        inner()
+                                    )
+                                }
+
+                                // Right: Internalized Inline Action Controls (Clean shared surface, subtle diffused touch glow)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(1.dp)
+                                ) {
+                                    // 1. File Attachment Action
+                                    IconButton(
+                                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                        modifier = Modifier.size(34.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.AttachFile,
+                                            contentDescription = "Attach",
+                                            tint = if (selectedFileUri != null) cyanAccent else textDim,
+                                            modifier = Modifier.size(17.dp)
+                                        )
                                     }
-                                )
+
+                                    // 2. Microphone / Voice Input Action
+                                    IconButton(
+                                        onClick = {
+                                            isRecording = true
+                                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
+                                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...")
+                                            }
+                                            try { speechLauncher.launch(intent) } catch (_: Exception) { isRecording = false }
+                                        },
+                                        modifier = Modifier.size(34.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic,
+                                            contentDescription = "Mic",
+                                            tint = if (isRecording) MaterialTheme.colorScheme.error else textDim,
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
+
+                                    // 3. Send / Stop Action
+                                    IconButton(
+                                        onClick = {
+                                            if (uiState.isProcessing) {
+                                                viewModel.stopAgent()
+                                            } else if (canSend) {
+                                                val cmd = textInput
+                                                textInput = ""
+                                                focusManager.clearFocus()
+                                                viewModel.sendCommand(cmd, selectedFileUri, context)
+                                                selectedFileUri = null
+                                            }
+                                        },
+                                        enabled = uiState.isProcessing || canSend,
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .then(
+                                                if (canSend || uiState.isProcessing) {
+                                                    Modifier.background(
+                                                        color = if (uiState.isProcessing) {
+                                                            MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                                                        } else {
+                                                            cyanAccent.copy(alpha = 0.15f)
+                                                        },
+                                                        shape = CircleShape
+                                                    )
+                                                } else Modifier
+                                            )
+                                    ) {
+                                        Icon(
+                                            imageVector = if (uiState.isProcessing) Icons.Default.Stop else Icons.Default.ArrowUpward,
+                                            contentDescription = "Send",
+                                            tint = if (uiState.isProcessing) {
+                                                MaterialTheme.colorScheme.error
+                                            } else if (canSend) {
+                                                cyanAccent
+                                            } else {
+                                                textDim.copy(alpha = 0.35f)
+                                            },
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
-                    }
-
-                    Surface(
-                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                        modifier = Modifier
-                            .size(38.dp)
-                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.dp),
-                        shape = CircleShape,
-                        color = if (selectedFileUri != null) indigoAccent.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.7f else 0.9f)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Outlined.AttachFile, "Attach", tint = if (selectedFileUri != null) indigoAccent else textDim, modifier = Modifier.size(17.dp))
-                        }
-                    }
-
-                    Surface(
-                        onClick = {
-                            isRecording = true
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
-                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...")
-                            }
-                            try { speechLauncher.launch(intent) } catch (_: Exception) { isRecording = false }
-                        },
-                        modifier = Modifier
-                            .size(38.dp)
-                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.dp),
-                        shape = CircleShape,
-                        color = if (isRecording) Color.Red.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.7f else 0.9f)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic, "Mic", tint = if (isRecording) Color.Red else textDim, modifier = Modifier.size(17.dp))
-                        }
-                    }
-
-                    val canSend = textInput.isNotBlank() || selectedFileUri != null
-                    Surface(
-                        onClick = {
-                            if (uiState.isProcessing) {
-                                viewModel.stopAgent()
-                            } else if (canSend) {
-                                val cmd = textInput
-                                textInput = ""
-                                focusManager.clearFocus()
-                                viewModel.sendCommand(cmd, selectedFileUri, context)
-                                selectedFileUri = null
-                            }
-                        },
-                        modifier = Modifier
-                            .size(38.dp)
-                            .tactileGlassGlow(cornerRadius = 19.dp, isDark = isDark, glowAlpha = 0.12f, borderWidth = 0.dp),
-                        shape = CircleShape,
-                        color = if (uiState.isProcessing) Color.Red else if (canSend) indigoAccent else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.7f else 0.9f),
-                        enabled = uiState.isProcessing || canSend
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (uiState.isProcessing) Icons.Default.Stop else Icons.Default.ArrowUpward,
-                                contentDescription = "Send",
-                                tint = if (canSend || uiState.isProcessing) (if (isDark) Color.Black else Color.White) else textDim,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
                     }
                 }
             }

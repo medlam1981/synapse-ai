@@ -510,6 +510,93 @@ class GGUFModelClient {
         }
     }
 
+    /**
+     * Priming & KV Cache Persistence Engine:
+     * Pre-evaluates the static system prompt and active persona directives into slot 0.
+     * Caches the key-value states to eliminate cold-start prefill latency.
+     */
+    suspend fun warmupPersonaKVCache(systemPrompt: String): Boolean = withContext(Dispatchers.IO) {
+        if (!isServerReady() || systemPrompt.isBlank()) return@withContext false
+        try {
+            fileLog("Priming KV Cache for static persona & system prompt (${systemPrompt.length} chars)...")
+            
+            // 1. Try restoring previously saved slot if exists
+            val restored = restoreSlotState(0)
+            if (restored) {
+                fileLog("Successfully restored persisted persona slot from disk ✓")
+            }
+
+            // 2. Evaluate prompt prefix into slot 0 with cache_prompt = true
+            val url = URL("$serverUrl/completion")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 45_000
+                readTimeout = 90_000
+                doOutput = true
+            }
+
+            val body = JSONObject()
+                .put("prompt", systemPrompt)
+                .put("n_predict", 0)
+                .put("cache_prompt", true)
+                .put("id_slot", 0)
+
+            conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
+            val code = conn.responseCode
+            val success = (code == 200)
+            fileLog("KV Cache Priming completed with response code: $code (success: $success)")
+            conn.disconnect()
+
+            if (success) {
+                // 3. Persist primed slot state to disk for cross-session survival
+                saveSlotState(0)
+            }
+            success
+        } catch (e: Exception) {
+            fileLog("KV Cache Priming exception: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun saveSlotState(slotId: Int = 0, filePath: String = "/sdcard/Medlam-Ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val slotsDir = File("/sdcard/Medlam-Ai/slots")
+            if (!slotsDir.exists()) slotsDir.mkdirs()
+            val url = URL("$serverUrl/slots/$slotId?action=save&filepath=$filePath")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5000
+                readTimeout = 10000
+            }
+            val code = conn.responseCode
+            conn.disconnect()
+            fileLog("Slot $slotId save action completed: $code")
+            code == 200
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun restoreSlotState(slotId: Int = 0, filePath: String = "/sdcard/Medlam-Ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val slotFile = File(filePath)
+            if (!slotFile.exists() || slotFile.length() == 0L) return@withContext false
+            val url = URL("$serverUrl/slots/$slotId?action=restore&filepath=$filePath")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5000
+                readTimeout = 10000
+            }
+            val code = conn.responseCode
+            conn.disconnect()
+            fileLog("Slot $slotId restore action completed: $code")
+            code == 200
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun generateCompletionStream(prompt: String, systemPrompt: String = ""): Flow<String> = generateStream(prompt, systemPrompt)
 
     fun generateStream(prompt: String, systemPrompt: String = ""): Flow<String> = flow {

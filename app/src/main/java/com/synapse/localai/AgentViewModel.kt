@@ -574,6 +574,13 @@ class AgentViewModel : ViewModel() {
                                         loadingStatusText = ""
                                     ) }
                                     addSystemLog("Local Model Active: $modelName")
+                                    viewModelScope.launch(Dispatchers.IO) {
+                                        val systemPrompt = buildSystemPrompt(context)
+                                        val primed = client.warmupPersonaKVCache(systemPrompt)
+                                        if (primed) {
+                                            addSystemLog("Persona KV Cache Primed & Pre-warmed ✓")
+                                        }
+                                    }
                                 } else {
                                     _uiState.update { it.copy(
                                         localModelLoaded = false, 
@@ -1299,6 +1306,10 @@ The file execution engine automatically parses this block and writes the file di
             ) 
         }
         addSystemLog("Operational Personas: ${current.joinToString(", ")}")
+        viewModelScope.launch(Dispatchers.IO) {
+            val systemPrompt = buildSystemPrompt(context)
+            ggufClient?.warmupPersonaKVCache(systemPrompt)
+        }
     }
 
     fun setActivePersonas(personas: Set<String>, context: Context) {
@@ -1313,6 +1324,10 @@ The file execution engine automatically parses this block and writes the file di
             ) 
         }
         addSystemLog("Operational Personas: ${safeSet.joinToString(", ")}")
+        viewModelScope.launch(Dispatchers.IO) {
+            val systemPrompt = buildSystemPrompt(context)
+            ggufClient?.warmupPersonaKVCache(systemPrompt)
+        }
     }
 
     fun setActivePersona(personaName: String, context: Context) {
