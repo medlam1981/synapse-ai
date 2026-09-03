@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +83,7 @@ fun SettingsScreenContent(
 ) {
     val coroutineScope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
+    var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     
     // --- LOCAL FORM STATE ---
@@ -95,6 +97,7 @@ fun SettingsScreenContent(
         isScanning = true
         withContext(Dispatchers.IO) {
             models = ModelScanner.scanBaseModels()
+            mtpModels = ModelScanner.scanMtpModels()
         }
         isScanning = false
     }
@@ -248,6 +251,24 @@ fun SettingsScreenContent(
                                 colors = settingsFieldColors(),
                                 textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                             )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                    Text("Show Key Counter in Capsule", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Conceal active API key rotation index during recordings/demos", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                }
+                                Switch(
+                                    checked = config.showApiKeyTracker,
+                                    onCheckedChange = {
+                                        val newConfig = config.copy(showApiKeyTracker = it)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -321,12 +342,11 @@ fun SettingsScreenContent(
                         Text("No .gguf models found in /sdcard/Medlam-Ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                     }
 
-                    // Base Model Picker (Auto-Saving & Auto-MTP Pairing)
+                    // Base Model Picker
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         models.forEach { file ->
                             val isSelected = config.localModelPath == file.absolutePath
-                            val matchedMtp = remember(file.absolutePath) { ModelScanner.findMatchingMtpModel(file.absolutePath) }
 
                             Row(
                                 modifier = Modifier
@@ -337,7 +357,6 @@ fun SettingsScreenContent(
                                     .clickable {
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
-                                            draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -350,7 +369,6 @@ fun SettingsScreenContent(
                                     onClick = {
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
-                                            draftModelPath = matchedMtp?.absolutePath ?: "",
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -360,43 +378,90 @@ fun SettingsScreenContent(
                                 Column {
                                     Text(file.name, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                                     Text(formatSize(file.length()) + " • " + file.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-
-                                    if (isSelected) {
-                                        if (matchedMtp != null) {
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = Color(0xFF10B981).copy(alpha = 0.15f),
-                                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.7f)),
-                                                modifier = Modifier.padding(top = 6.dp)
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    Text("⚡ MTP LINKED: ${matchedMtp.name}", color = Color(0xFF10B981), fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                                }
-                                            }
-                                        } else {
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                                                modifier = Modifier.padding(top = 6.dp)
-                                            ) {
-                                                Text(
-                                                    text = "Standalone Mode (No MTP)",
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    fontSize = 10.sp,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                )
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }
+                    }
+
+                    // User-Driven Companion Draft / MTP Model Selection
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("COMPANION DRAFT / MTP MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+
+                        // Option 1: Standalone Execution (No MTP)
+                        val isStandalone = config.draftModelPath.isBlank()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isStandalone) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+                                .border(0.5.dp, if (isStandalone) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val newConfig = config.copy(draftModelPath = "")
+                                    viewModel.saveConfig(context, newConfig)
+                                }
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isStandalone,
+                                onClick = {
+                                    val newConfig = config.copy(draftModelPath = "")
+                                    viewModel.saveConfig(context, newConfig)
+                                }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("Standalone Execution (No MTP)", color = if (isStandalone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Standard autoregressive generation without companion draft", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                            }
+                        }
+
+                        // Option 2: Discovered MTP models from storage
+                        mtpModels.forEach { mtpFile ->
+                            val isMtpSelected = config.draftModelPath == mtpFile.absolutePath
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isMtpSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+                                    .border(0.5.dp, if (isMtpSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isMtpSelected,
+                                    onClick = {
+                                        val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text("⚡ MTP: ${mtpFile.name}", color = if (isMtpSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(formatSize(mtpFile.length()) + " • " + mtpFile.parent, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                }
+                            }
+                        }
+
+                        // Option 3: Custom Draft Model Path
+                        var customDraftText by remember(config.draftModelPath) { mutableStateOf(config.draftModelPath) }
+                        OutlinedTextField(
+                            value = customDraftText,
+                            onValueChange = {
+                                customDraftText = it
+                                val newConfig = config.copy(draftModelPath = it.trim())
+                                viewModel.saveConfig(context, newConfig)
+                            },
+                            label = { Text("Manual Draft / MTP File Path") },
+                            placeholder = { Text("/sdcard/Medlam-Ai/mtp/your-model.gguf") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = settingsFieldColors(),
+                            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        )
                     }
 
                     // ========================================================
@@ -495,6 +560,7 @@ fun SettingsScreenContent(
                                     coroutineScope.launch {
                                         withContext(Dispatchers.IO) {
                                             models = ModelScanner.scanBaseModels()
+                                            mtpModels = ModelScanner.scanMtpModels()
                                         }
                                         isScanning = false
                                     }
@@ -524,6 +590,40 @@ fun SettingsScreenContent(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // Context Length Presets (up to 16K)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("CONTEXT WINDOW HORIZON (UP TO 16K):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(2048, 4096, 8192, 16384).forEach { size ->
+                                val label = if (size == 16384) "16K" else if (size == 8192) "8K" else if (size == 4096) "4K" else "2K"
+                                val isSelected = config.contextLength == size
+                                Surface(
+                                    modifier = Modifier.weight(1f).clickable {
+                                        contextLengthText = size.toString()
+                                        val newConfig = config.copy(contextLength = size)
+                                        viewModel.saveConfig(context, newConfig)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(0.5.dp, if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -533,13 +633,13 @@ fun SettingsScreenContent(
                             onValueChange = {
                                 contextLengthText = it
                                 it.toIntOrNull()?.let { len ->
-                                    if (len >= 2048) {
+                                    if (len in 1024..16384) {
                                         val newConfig = config.copy(contextLength = len)
                                         viewModel.saveConfig(context, newConfig)
                                     }
                                 }
                             },
-                            label = { Text("Context Size") },
+                            label = { Text("Context Size (up to 16K)") },
                             modifier = Modifier.weight(1f),
                             colors = settingsFieldColors(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)

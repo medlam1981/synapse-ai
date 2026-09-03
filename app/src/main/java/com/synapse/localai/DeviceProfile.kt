@@ -2,27 +2,77 @@ package com.synapse.localai
 
 import android.app.ActivityManager
 import android.content.Context
+import java.io.File
 
-data class HardwareProfile(val totalRamMb: Long, val cores: Int)
+data class HardwareProfile(
+    val totalRamMb: Long,
+    val totalCores: Int,
+    val performanceCores: Int
+)
 
 object DeviceProfile {
+
     fun detect(context: Context): HardwareProfile {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val info = ActivityManager.MemoryInfo()
         am.getMemoryInfo(info)
-        val cores = Runtime.getRuntime().availableProcessors()
-        return HardwareProfile(info.totalMem / (1024 * 1024), cores)
+        val totalCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val perfCores = detectPerformanceCores(totalCores)
+        return HardwareProfile(info.totalMem / (1024 * 1024), totalCores, perfCores)
     }
 
-    // Professor's Turbo Settings: 
-    // Higher batch size for prefilling makes initial understanding faster.
-    fun optimalBatch(hw: HardwareProfile): Int = 512 // Boosted for maximum speed
+    /**
+     * Inspects CPU maximum frequencies to identify high-performance ("big") cores
+     * vs efficiency ("little") cores across big.LITTLE / DynamIQ architectures.
+     */
+    private fun detectPerformanceCores(totalCores: Int): Int {
+        try {
+            val freqs = mutableListOf<Long>()
+            for (i in 0 until totalCores) {
+                val freqFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
+                val altFreqFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/scaling_max_freq")
+                val freq = when {
+                    freqFile.exists() -> freqFile.readText().trim().toLongOrNull()
+                    altFreqFile.exists() -> altFreqFile.readText().trim().toLongOrNull()
+                    else -> null
+                }
+                if (freq != null && freq > 0) {
+                    freqs.add(freq)
+                }
+            }
 
-    // ubatch is for generation speed.
-    fun optimalUbatch(hw: HardwareProfile): Int = 128
-    
-    // Smart Threading: Use all available cores for maximum performance
+            if (freqs.size == totalCores && freqs.distinct().size > 1) {
+                val maxFreq = freqs.maxOrNull() ?: 0L
+                // Count cores within 15% of max frequency as performance cores
+                val threshold = (maxFreq * 0.85).toLong()
+                val perfCount = freqs.count { it >= threshold }
+                if (perfCount in 1 until totalCores) {
+                    return perfCount
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Fallback heuristic: 8-core SoCs usually have 4 performance cores
+        return if (totalCores >= 8) 4 else totalCores.coerceIn(2, 4)
+    }
+
+    // Optimal batch size scaled to memory envelope to prevent OOM
+    fun optimalBatch(hw: HardwareProfile): Int = when {
+        hw.totalRamMb >= 6000 -> 512
+        hw.totalRamMb >= 3500 -> 256
+        else -> 128
+    }
+
+    fun optimalUbatch(hw: HardwareProfile): Int = when {
+        hw.totalRamMb >= 6000 -> 256
+        else -> 128
+    }
+
+    /**
+     * Optimal thread allocation prioritizing high-performance cores
+     * over efficiency clusters to maximize token generation speed without thrashing.
+     */
     fun optimalThreads(hw: HardwareProfile): Int {
-        return hw.cores
+        return hw.performanceCores.coerceIn(2, 6)
     }
 }

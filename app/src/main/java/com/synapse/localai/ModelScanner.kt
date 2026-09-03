@@ -67,7 +67,11 @@ object ModelScanner {
                 }
             }
         }
-        return found.distinctBy { it.name }.sortedByDescending { it.length() }
+        return found.distinctBy { it.name }
+            .sortedWith(
+                compareByDescending<File> { it.name.contains("gemma", ignoreCase = true) }
+                    .thenByDescending { it.length() }
+            )
     }
 
     fun scanMtpModels(): List<File> {
@@ -149,7 +153,10 @@ object ModelScanner {
                 .removePrefix("mtp_")
             val score = baseTokens.count { token -> cleanMtp.contains(token) }
             Scored(mtpFile, score)
-        }.sortedByDescending { it.score }
+        }.sortedWith(
+            compareByDescending<Scored> { it.score }
+                .thenByDescending { it.file.name.contains("bf16", ignoreCase = true) }
+        )
 
         // Return best match if it shares at least 1 token, otherwise first candidate
         return scored.firstOrNull { it.score > 0 }?.file ?: candidateFiles.firstOrNull()

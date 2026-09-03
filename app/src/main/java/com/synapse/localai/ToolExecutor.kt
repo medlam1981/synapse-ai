@@ -151,7 +151,7 @@ object ToolExecutor {
         return "$BASE_DIR/$filename"
     }
 
-    private fun detectFilePath(line: String): String? {
+    fun detectFilePath(line: String): String? {
         if (isLikelyConversation(line)) return null
 
         for (pattern in FILE_PATH_PATTERNS) {
