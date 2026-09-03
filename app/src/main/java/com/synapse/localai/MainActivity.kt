@@ -331,7 +331,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val borderColor = MaterialTheme.colorScheme.outlineVariant
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
-    val cyanAccent = MaterialTheme.colorScheme.primary
+    val indigoAccent = MaterialTheme.colorScheme.primary
+    val cyanAccent = indigoAccent
     val primaryAccent = MaterialTheme.colorScheme.primary
     val secondaryAccent = MaterialTheme.colorScheme.secondary
     val inputBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -1710,7 +1711,8 @@ fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
 fun CliWelcomeScreen(
     onSelectPrompt: (String) -> Unit
 ) {
-    val cyanAccent = MaterialTheme.colorScheme.primary
+    val indigoAccent = MaterialTheme.colorScheme.primary
+    val cyanAccent = indigoAccent
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -1770,7 +1772,8 @@ fun SidebarContent(
     val borderColor = MaterialTheme.colorScheme.outlineVariant
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
-    val cyanAccent = MaterialTheme.colorScheme.primary
+    val indigoAccent = MaterialTheme.colorScheme.primary
+    val cyanAccent = indigoAccent
 
     ModalDrawerSheet(
         drawerContainerColor = surfaceColor,
