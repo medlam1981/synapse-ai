@@ -1860,6 +1860,9 @@ fun CliLogMessageView(
                                     isStreaming = !block.isClosed
                                 )
                             }
+                            is StreamDemultiplexer.DemuxBlock.ToolCall -> {
+                                CliToolCallEvent(block, isDark)
+                            }
                         }
                     }
                 }
@@ -1893,6 +1896,49 @@ fun CliLogMessageView(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boolean) {
+    val paramStr = block.params.entries.joinToString(", ") { "${it.key}: \"${it.value}\"" }
+    val displayText = buildString {
+        append("⚡ Tool(")
+        append(block.toolName)
+        if (paramStr.isNotBlank()) {
+            append(": ")
+            append(paramStr)
+        }
+        append(")")
+        if (!block.isClosed) {
+            append(" -> Running...")
+        } else {
+            append(" -> Dispatched")
+        }
+    }
+
+    Surface(
+        color = if (isDark) Color(0xFF0F172A).copy(alpha = 0.85f) else Color(0xFFF1F5F9),
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(0.5.dp, if (isDark) Color(0xFF38BDF8).copy(alpha = 0.35f) else Color(0xFF0284C7).copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = displayText,
+                color = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

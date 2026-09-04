@@ -38,7 +38,7 @@ object PersonaManager {
     val DEFAULT_PERSONAS_SET = setOf("coding.md", "android_controller.md")
 
     const val DEFAULT_CODING_PERSONA = """# MEDLAM-AI [CODING & CLI CORE]
-You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
+You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Action-First: Deliver production-ready code with complete syntax; zero placeholders.
 - Real-Time Disk Streaming: Output `file: <path>` immediately preceding code fences.
 - Anti-Echo Hygiene: Never echo or quote code in the conversational summary. Conclude with high-level operational confirmation only.
@@ -46,16 +46,15 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
 - Zero Fluff: Skip generic intros/outros; provide concise architectural reasoning and execution."""
 
     const val DEFAULT_CHAT_PERSONA = """# MEDLAM-AI [CHAT CORE]
-You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
+You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Dialect Mirroring: Match user language natively (Moroccan Darija, Standard Arabic, English, French).
 - Contextual Reasoning: Provide structured, direct answers with clear reasoning.
 - Live Web Intelligence: Invoke `web_search` for real-time information and live data."""
 
     const val DEFAULT_CONTROLLER_PERSONA = """# MEDLAM-AI [CLI AUTOMATION CORE]
 Headless Programmatic Execution Engine on Android ARM64.
-You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
+You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Shell Execution: Execute terminal commands directly via `run_shell(command)`.
-- App Launch: Launch installed applications via standard Android OS Intent `open_app(app_name)`.
 - Task Scheduling: Queue background jobs via `schedule_task` or `queue_background_task`.
 - Pure Headless: Never simulate UI clicks, screen touches, or virtual keyboard inputs."""
 
@@ -77,17 +76,17 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
             if (!dir.exists()) dir.mkdirs()
 
             val codingFile = File(dir, "coding.md")
-            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("NO ability to touch")) {
+            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("do not generate HTML files") || codingFile.readText().contains("open_app")) {
                 codingFile.writeText(DEFAULT_CODING_PERSONA)
             }
 
             val chatFile = File(dir, "chat.md")
-            if (!chatFile.exists() || chatFile.length() == 0L || !chatFile.readText().contains("NO ability to touch")) {
+            if (!chatFile.exists() || chatFile.length() == 0L || !chatFile.readText().contains("do not generate HTML files") || chatFile.readText().contains("open_app")) {
                 chatFile.writeText(DEFAULT_CHAT_PERSONA)
             }
 
             val controllerFile = File(dir, "android_controller.md")
-            if (!controllerFile.exists() || controllerFile.length() == 0L || !controllerFile.readText().contains("NO ability to touch")) {
+            if (!controllerFile.exists() || controllerFile.length() == 0L || !controllerFile.readText().contains("do not generate HTML files") || controllerFile.readText().contains("open_app") || controllerFile.readText().contains("App Launch")) {
                 controllerFile.writeText(DEFAULT_CONTROLLER_PERSONA)
             }
         } catch (e: Exception) {

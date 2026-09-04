@@ -14,8 +14,9 @@ import java.util.Locale
 data class ExtractedCodeBlock(
     val language: String,
     val code: String,
-    val targetPath: String,
-    val rawMatch: String
+    val targetPath: String?,
+    val hasExplicitPath: Boolean = false,
+    val rawMatch: String = ""
 )
 
 /**
@@ -33,14 +34,11 @@ object ToolExecutor {
     private const val TAG = "ToolExecutor"
     const val BASE_DIR = "/sdcard/Medlam-Ai"
 
-    // Patterns that suggest a file path label before a code block
+    // Patterns that suggest an explicit file path label before a code block
     private val FILE_PATH_PATTERNS = listOf(
         Regex("""(?:file|path|save to|write to|create file|filename)[:\s]+[`"']?([^\s`"'\n]+\.[a-zA-Z0-9]{1,10})[`"']?""", RegexOption.IGNORE_CASE),
-        Regex("""→\s*([^\s\n]+\.[a-zA-Z0-9]{1,10})"""),
-        Regex("""#\s*([\w/.-]+\.[a-zA-Z0-9]{1,10})\s*$""", RegexOption.MULTILINE),
-        Regex("""`([\w/.-]+\.[a-zA-Z0-9]{1,10})`"""),
-        Regex("""(/sdcard/[^\s\n"'`]+\.[a-zA-Z0-9]{1,10})"""),
-        Regex("""([\w/.-]+/[\w.-]+\.[a-zA-Z0-9]{1,10})""")
+        Regex("""(?://|/\*|#|<!--)\s*(?:file|path)[:\s]+([^\s*`"'\n]+\.[a-zA-Z0-9]{1,10})""", RegexOption.IGNORE_CASE),
+        Regex("""(/sdcard/Medlam-Ai/[^\s\n"'`]+\.[a-zA-Z0-9]{1,10})""")
     )
 
     // Extensions that represent executable web/UI content
@@ -97,6 +95,11 @@ object ToolExecutor {
 
         @Synchronized
         fun onChunk(fullAccumulatedText: String) {
+            // Pre-Parser Tool-Call Quarantine: Mute all file streaming from tool calls
+            if (fullAccumulatedText.contains("<function_calls>") || fullAccumulatedText.contains("<invoke")) {
+                return
+            }
+
             if (!inCodeBlock) {
                 // Look for opening fence strictly AFTER the last processed/closed block
                 val nextOpening = fullAccumulatedText.indexOf("```", lastProcessedOffset)
@@ -123,8 +126,21 @@ object ToolExecutor {
                         }
 
                         val codeStart = nextOpening + 3 + newlineIdx + 1
-                        val target = pendingFilePath ?: defaultPathForLanguage(lang, "")
-                        val resolved = resolvePath(target, baseDir)
+                        val explicitTarget = pendingFilePath
+
+                        if (explicitTarget == null) {
+                            // Turn-Level State Sanitization: Strictly prohibit writing to /sdcard/...
+                            // unless the active stream contains an explicit file-writing directive with an explicitly defined target path.
+                            inCodeBlock = true
+                            currentFile = null
+                            currentWriter = null
+                            currentFos = null
+                            lastWrittenOffset = codeStart
+                            lastProcessedOffset = codeStart
+                            return
+                        }
+
+                        val resolved = resolvePath(explicitTarget, baseDir)
 
                         try {
                             val targetFile = File(resolved)
@@ -143,7 +159,7 @@ object ToolExecutor {
                                 writtenFiles.add(targetFile.absolutePath)
                             }
 
-                            Log.i(TAG, "⚡ LiveDiskStreamer: Immediate file provisioned: ${targetFile.absolutePath}")
+                            Log.i(TAG, "⚡ LiveDiskStreamer: Explicit file provisioned: ${targetFile.absolutePath}")
                             onStatusUpdate?.invoke("Writing to ${targetFile.absolutePath}...")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed provisioning $resolved: ${e.message}")
@@ -162,28 +178,29 @@ object ToolExecutor {
                 }
 
                 if (closingBackticks != -1) {
-                    // Closing ``` found: write final code characters up to the closing fence
-                    val finalChunk = fullAccumulatedText.substring(lastWrittenOffset, closingBackticks)
-                    try {
-                        currentWriter?.write(finalChunk)
-                        currentWriter?.flush()
-                        currentWriter?.close()
-                        currentFos?.close()
-                        Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & saved (${currentFile?.length()} bytes): ${currentFile?.absolutePath}")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error closing stream: ${e.message}")
-                    } finally {
-                        currentWriter = null
-                        currentFos = null
-                        currentFile = null
-                        inCodeBlock = false
-                        pendingFilePath = null
-                        // Move lastProcessedOffset past closing ```
-                        val afterClosing = fullAccumulatedText.indexOf('\n', closingBackticks + 3)
-                        lastProcessedOffset = if (afterClosing != -1) afterClosing + 1 else closingBackticks + 3
-                        lastWrittenOffset = lastProcessedOffset
+                    // Closing ``` found: write final code characters up to the closing fence if active file handle exists
+                    if (currentWriter != null && currentFile != null) {
+                        val finalChunk = fullAccumulatedText.substring(lastWrittenOffset, closingBackticks)
+                        try {
+                            currentWriter?.write(finalChunk)
+                            currentWriter?.flush()
+                            currentWriter?.close()
+                            currentFos?.close()
+                            Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & saved (${currentFile?.length()} bytes): ${currentFile?.absolutePath}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error closing stream: ${e.message}")
+                        }
                     }
-                } else {
+                    currentWriter = null
+                    currentFos = null
+                    currentFile = null
+                    inCodeBlock = false
+                    pendingFilePath = null
+                    // Move lastProcessedOffset past closing ```
+                    val afterClosing = fullAccumulatedText.indexOf('\n', closingBackticks + 3)
+                    lastProcessedOffset = if (afterClosing != -1) afterClosing + 1 else closingBackticks + 3
+                    lastWrittenOffset = lastProcessedOffset
+                } else if (currentWriter != null) {
                     // Still generating code: stream tokens safely to disk, leaving a 4-char buffer for "\n```"
                     val safeEnd = (fullAccumulatedText.length - 4).coerceAtLeast(lastWrittenOffset)
                     if (safeEnd > lastWrittenOffset) {
@@ -233,14 +250,13 @@ object ToolExecutor {
                 pendingFilePath = null
             }
 
-            // Comprehensive multi-file safety check: Ensure ALL demuxed code blocks are written to physical disk
+            // Comprehensive multi-file safety check: Ensure only EXPLICIT file blocks are written to physical disk
             if (finalFullText.isNotBlank()) {
                 try {
                     val demuxed = StreamDemultiplexer.demux(finalFullText)
                     for (block in demuxed.blocks) {
-                        if (block is StreamDemultiplexer.DemuxBlock.Code && block.code.isNotBlank()) {
-                            val targetPath = block.filePath ?: defaultPathForLanguage(block.language, block.code)
-                            val resolved = resolvePath(targetPath, baseDir)
+                        if (block is StreamDemultiplexer.DemuxBlock.Code && block.code.isNotBlank() && !block.filePath.isNullOrBlank()) {
+                            val resolved = resolvePath(block.filePath, baseDir)
                             val f = File(resolved)
                             if (!f.exists() || f.length() < block.code.length.toLong() / 2) {
                                 f.parentFile?.let { if (!it.exists()) it.mkdirs() }
@@ -248,7 +264,7 @@ object ToolExecutor {
                                 if (!writtenFiles.contains(f.absolutePath)) {
                                     writtenFiles.add(f.absolutePath)
                                 }
-                                Log.i(TAG, "⚡ LiveDiskStreamer: Multi-file safety verified & saved: ${f.absolutePath} (${f.length()} bytes)")
+                                Log.i(TAG, "⚡ LiveDiskStreamer: Explicit file safety verified & saved: ${f.absolutePath} (${f.length()} bytes)")
                             }
                         }
                     }
@@ -376,8 +392,8 @@ object ToolExecutor {
                 if (line.trimStart().startsWith("```")) {
                     inCodeBlock = false
                     val code = codeSb.toString().trim()
-                    val lang = codeLanguage.ifBlank { "text" }
-                    val targetPath = pendingFilePath ?: defaultPathForLanguage(lang, code)
+                    val lang = codeLanguage.ifBlank { "plaintext" }
+                    val targetPath = pendingFilePath
 
                     if (code.isNotBlank()) {
                         blocks.add(
@@ -385,6 +401,7 @@ object ToolExecutor {
                                 language = lang,
                                 code = code,
                                 targetPath = targetPath,
+                                hasExplicitPath = targetPath != null,
                                 rawMatch = rawSb.toString()
                             )
                         )
@@ -403,13 +420,14 @@ object ToolExecutor {
         // Catch any trailing unclosed code block:
         if (inCodeBlock && codeSb.isNotBlank()) {
             val code = codeSb.toString().trim()
-            val lang = codeLanguage.ifBlank { "text" }
-            val targetPath = pendingFilePath ?: defaultPathForLanguage(lang, code)
+            val lang = codeLanguage.ifBlank { "plaintext" }
+            val targetPath = pendingFilePath
             blocks.add(
                 ExtractedCodeBlock(
                     language = lang,
                     code = code,
                     targetPath = targetPath,
+                    hasExplicitPath = targetPath != null,
                     rawMatch = rawSb.toString()
                 )
             )
@@ -420,29 +438,33 @@ object ToolExecutor {
 
     /**
      * Extract and write all detected file-code pairs from an AI response.
+     * Strictly writes to disk ONLY if an explicit target file path directive was present.
      */
     fun extractAndWriteFiles(response: String): List<String> {
         val writtenFiles = mutableListOf<String>()
         val blocks = parseCodeBlocksWithPaths(response)
 
         for (block in blocks) {
-            val ext = block.targetPath.substringAfterLast('.').lowercase()
-            if (ext in CODE_EXTENSIONS && isLikelyCode(block.code, ext)) {
-                val resolved = resolvePath(block.targetPath, BASE_DIR)
-                val existingFile = File(resolved)
-                // Integrity check: If file already exists and was streamed with more or equal content,
-                // do NOT truncate or overwrite with an echoed snippet!
-                if (existingFile.exists() && existingFile.length() >= block.code.length) {
-                    Log.i(TAG, "Skipping re-write: existing file is complete (${existingFile.length()} >= ${block.code.length})")
-                    if (!writtenFiles.contains(existingFile.absolutePath)) {
-                        writtenFiles.add(existingFile.absolutePath)
+            val target = block.targetPath
+            if (block.hasExplicitPath && !target.isNullOrBlank()) {
+                val ext = target.substringAfterLast('.').lowercase()
+                if (ext in CODE_EXTENSIONS && isLikelyCode(block.code, ext)) {
+                    val resolved = resolvePath(target, BASE_DIR)
+                    val existingFile = File(resolved)
+                    // Integrity check: If file already exists and was streamed with more or equal content,
+                    // do NOT truncate or overwrite with an echoed snippet!
+                    if (existingFile.exists() && existingFile.length() >= block.code.length) {
+                        Log.i(TAG, "Skipping re-write: existing file is complete (${existingFile.length()} >= ${block.code.length})")
+                        if (!writtenFiles.contains(existingFile.absolutePath)) {
+                            writtenFiles.add(existingFile.absolutePath)
+                        }
+                        continue
                     }
-                    continue
-                }
 
-                val written = writeFile(block.targetPath, block.code)
-                if (written != null && !writtenFiles.contains(written)) {
-                    writtenFiles.add(written)
+                    val written = writeFile(target, block.code)
+                    if (written != null && !writtenFiles.contains(written)) {
+                        writtenFiles.add(written)
+                    }
                 }
             }
         }
@@ -451,24 +473,10 @@ object ToolExecutor {
     }
 
     /**
-     * Assigns a smart default filename when no explicit path was provided.
+     * Fallback generic output path when no explicit path was provided.
      */
     fun defaultPathForLanguage(language: String, code: String): String {
-        val lower = language.lowercase().trim()
-        val filename = when {
-            lower == "html" || lower == "htm" || code.contains("<!DOCTYPE") || code.contains("<html") -> "webapp/index.html"
-            lower == "css" -> "webapp/styles.css"
-            lower == "javascript" || lower == "js" -> "webapp/app.js"
-            lower == "typescript" || lower == "ts" -> "webapp/app.ts"
-            lower == "python" || lower == "py" -> "scripts/main.py"
-            lower == "kotlin" || lower == "kt" -> "src/App.kt"
-            lower == "java" -> "src/Main.java"
-            lower == "bash" || lower == "sh" -> "scripts/script.sh"
-            lower == "json" -> "data.json"
-            lower == "xml" -> "layout.xml"
-            else -> "output.txt"
-        }
-        return "$BASE_DIR/$filename"
+        return "$BASE_DIR/output.txt"
     }
 
     fun detectFilePath(line: String): String? {

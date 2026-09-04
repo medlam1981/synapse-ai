@@ -702,10 +702,9 @@ You have direct programmatic access to the host Android system through these too
 
 1. `run_shell(command: String)`: Execute terminal or shell commands directly on the host Android device with Superuser/Root permissions.
 2. `web_search(query: String)`: Search the web silently for real-time facts, documentation, or live information.
-3. `open_app(app_name: String)`: Launch any installed Android application via standard OS Intent.
-4. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed headless background execution.
-5. `queue_background_task(command: String)`: Queue a background automation script or command into the local Task Engine (tsk).
-6. `complete(summary: String)`: Terminate and finalize an active multi-step automation mission.
+3. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed headless background execution.
+4. `queue_background_task(command: String)`: Queue a background automation script or command into the local Task Engine (tsk).
+5. `complete(summary: String)`: Terminate and finalize an active multi-step automation mission.
 
 Format for calling tools:
 <function_calls>
@@ -738,17 +737,16 @@ The file execution engine automatically parses this block and writes the file di
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
+            return """You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
-CRITICAL: When the user asks to open or launch an app, NEVER write HTML or code files! You MUST invoke `open_app(app_name)` immediately.
 Format for calling tools:
 <function_calls>
 <invoke name="tool_name">
 <parameter name="param_name">value</parameter>
 </invoke>
 </function_calls>
-Available tools: run_shell(command), web_search(query), open_app(app_name), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+Available tools: run_shell(command), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
@@ -769,17 +767,16 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         // 3. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
+You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
 - Deliver code strictly inside ```lang code fences only when programming or requested to write code.
-- Device & App Launch Rules: When asked to open or launch an app, NEVER generate HTML or code files! You MUST invoke `open_app(app_name)`.
 - To write files to device storage (/sdcard/Medlam-Ai/...), place `file: <path>` immediately above the code fence.
 - Conclude with a high-level summary confirmation without echoing raw code.
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
-- Available tools: run_shell(command), web_search(query), open_app(app_name), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+- Available tools: run_shell(command), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
@@ -821,43 +818,6 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
             refreshSessions()
         }
 
-        // Fast-path deterministic intent detection: Direct App Launch
-        val targetAppToLaunch = AppLauncher.extractAppLaunchTarget(command)
-        if (targetAppToLaunch != null) {
-            val launched = AppLauncher.launch(actualContext, targetAppToLaunch)
-            val displayName = targetAppToLaunch.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
-            val responseText = if (launched) {
-                if (isArabic(command)) "تم فتح تطبيق $displayName بنجاح."
-                else if (command.trim().lowercase().startsWith("ouvre") || command.trim().lowercase().startsWith("lance")) "Application $displayName ouverte avec succès."
-                else "Opening $displayName..."
-            } else {
-                if (isArabic(command)) "تعذر العثور على تطبيق \"$displayName\" مثبت على الجهاز."
-                else "Could not find an installed app matching \"$displayName\"."
-            }
-            val agentLog = LogEntry(sender = "AGENT", text = responseText)
-            addLog(agentLog)
-            _uiState.update { 
-                it.copy(
-                    isProcessing = false,
-                    currentPhase = if (launched) AgentActionPhase.COMPLETING else AgentActionPhase.IDLE,
-                    activeStatusDetail = if (launched) "Opened $displayName" else "Idle / Ready"
-                )
-            }
-            viewModelScope.launch(Dispatchers.IO) {
-                chatDb?.insertMessage(
-                    ChatMessageEntity(
-                        id = agentLog.id,
-                        sessionId = sid,
-                        sender = "AGENT",
-                        text = agentLog.text,
-                        timestamp = agentLog.timestamp
-                    )
-                )
-                refreshSessions()
-            }
-            processNextQueuedCommand(actualContext)
-            return
-        }
 
         val lowerCmd = command.lowercase().trim()
         val isBackgroundRequest = lowerCmd.contains("in background") || lowerCmd.contains("فالخلفية") || 
@@ -888,7 +848,14 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
         }
 
         currentJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isProcessing = true) }
+            _uiState.update { 
+                it.copy(
+                    isProcessing = true,
+                    activeWorkspacePath = null,
+                    lastExecutionResult = "",
+                    streamInterruptMsg = null
+                ) 
+            }
             
             try {
                 var finalCommand = command
@@ -954,7 +921,7 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
                     var interruptMsg = ""
 
                     val liveDiskStreamer = ToolExecutor.LiveFileStreamer(
-                        baseDir = _uiState.value.activeWorkspacePath ?: ToolExecutor.BASE_DIR,
+                        baseDir = ToolExecutor.BASE_DIR,
                         onStatusUpdate = { status ->
                             _uiState.update { it.copy(activeStatusDetail = status, currentPhase = AgentActionPhase.GENERATING_CODE) }
                         }
@@ -1172,7 +1139,6 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
                                         agentResponse = fullResponse,
                                         touchedPath = detectedPath
                                     )
-                                    _uiState.update { it.copy(activeWorkspacePath = detectedPath ?: it.activeWorkspacePath) }
                                 }
                                 keepGoing = false
                             }
@@ -1361,14 +1327,6 @@ You are an autonomous on-device development and CLI agent. You have NO ability t
                         val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                         updateTaskState()
                         finalSummary = "Queued background task [tsk #$tid]: $cmd"
-                        return false to finalSummary
-                    }
-                    "open_app" -> {
-                        val appName = params["app_name"] ?: params["name"] ?: ""
-                        val targetCtx = appContext ?: MainActivity.instance
-                        val ok = if (targetCtx != null) AppLauncher.launch(targetCtx, appName) else false
-                        val displayName = appName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
-                        finalSummary = if (ok) "Opened $displayName successfully." else "Could not find or open app \"$appName\"."
                         return false to finalSummary
                     }
                     "complete" -> { 
