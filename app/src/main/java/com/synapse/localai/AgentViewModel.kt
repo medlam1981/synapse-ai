@@ -1009,8 +1009,8 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                         stream.collect { chunk ->
                             responseSb.append(chunk)
                             val now = System.currentTimeMillis()
-                            // Real-time letter-by-letter stream: 16ms (60 FPS) throttle gives instant smooth UI updates
-                            if (now - lastUiUpdateTime >= 16L) {
+                            // Real-time letter-by-letter stream: 33ms (~30 FPS) throttle gives instant smooth UI updates while preventing CPU starvation
+                            if (now - lastUiUpdateTime >= 33L) {
                                 lastUiUpdateTime = now
                                 pushUiUpdate(responseSb.toString())
                                 pendingUiUpdate = false
@@ -1438,6 +1438,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
             if (!rootDir.exists()) rootDir.mkdirs()
             val oldCheckpoint = File("/sdcard/Medlam-Ai/memory/agent_checkpoint.json")
             if (oldCheckpoint.exists()) oldCheckpoint.delete()
+            ZramOptimizer.ensureNoMedia()
         } catch (_: Exception) {}
     }
 

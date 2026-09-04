@@ -59,6 +59,7 @@ object ZramOptimizer {
             append("echo -17 > /proc/$pid/oom_adj 2>/dev/null")
         }.toString()
 
+        ensureNoMedia()
         val success = executeSuperuserCommand(script)
         if (success) {
             Log.i(TAG, "✓ ZRAM compression & virtual memory subsystem tuned for low-memory bypass")
@@ -66,6 +67,42 @@ object ZramOptimizer {
             Log.w(TAG, "⚠️ ZRAM optimization skipped or root not granted")
         }
         success
+    }
+
+    /**
+     * Pins all current application threads and child llama-server worker threads
+     * directly to the big / high-performance CPU cores (e.g. Kryo Gold).
+     */
+    suspend fun pinToPerformanceCores(mask: String = "f0"): Boolean = withContext(Dispatchers.IO) {
+        val pid = Process.myPid()
+        val cmd = "taskset -a -p $mask $pid 2>/dev/null; for p in \$(pgrep -f com.synapse.localai); do taskset -a -p $mask \$p 2>/dev/null; done; for p in \$(pgrep llama-server); do taskset -a -p $mask \$p 2>/dev/null; done"
+        val ok = executeSuperuserCommand(cmd)
+        if (ok) {
+            Log.i(TAG, "✓ CPU affinity pinned to performance cores mask ($mask)")
+        }
+        ok
+    }
+
+    /**
+     * Prevents Android MediaProvider from scanning /sdcard/Medlam-Ai,
+     * which causes extreme background CPU usage (150%+) and I/O disk starvation.
+     */
+    fun ensureNoMedia() {
+        try {
+            val dirs = listOf(
+                File("/sdcard/Medlam-Ai"),
+                File("/sdcard/Medlam-Ai/models"),
+                File("/sdcard/Medlam-Ai/mtp"),
+                File("/sdcard/Medlam-Ai/slots")
+            )
+            for (d in dirs) {
+                if (!d.exists()) d.mkdirs()
+                val nomedia = File(d, ".nomedia")
+                if (!nomedia.exists()) {
+                    nomedia.createNewFile()
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun executeSuperuserCommand(cmd: String): Boolean {

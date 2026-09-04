@@ -254,10 +254,10 @@ class GGUFModelClient {
             val logFile = File(logDir, "native_log.txt")
             try { logFile.delete() } catch (_: Exception) {}
 
-            // 2. Hardware-Matched Resource Allocation (strictly physical performance cores)
+            // 2. Hardware-Matched Resource Allocation (strictly physical performance cores for generation, all cores for prefill)
             val hw = appContext?.let { DeviceProfile.detect(it) }
             val optimalThreads = if (hw != null) DeviceProfile.optimalThreads(hw) else (if (threadCount in 2..4) threadCount else 4)
-            val optimalBatchThreads = optimalThreads // Pin strictly to physical Performance/Big cores; never thrash little efficiency cores
+            val optimalBatchThreads = if (hw != null) DeviceProfile.optimalBatchThreads(hw) else (if (threadCount > 0) threadCount else 8)
             val optimalBatch = if (hw != null) DeviceProfile.optimalBatch(hw) else 256
             val optimalUbatch = if (hw != null) DeviceProfile.optimalUbatch(hw) else 128
 
@@ -287,12 +287,11 @@ class GGUFModelClient {
                 "-b", effectiveBatch.toString(),
                 "-ub", effectiveUbatch.toString(),
                 "-t", optimalThreads.toString(),
-                "-tb", optimalBatchThreads.toString(), // Strictly physical Performance cores
+                "-tb", optimalBatchThreads.toString(), // Multi-core burst prefill on all available cores
                 "-ngl", "0",
                 "--flash-attn", "on",
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,
-                "--reasoning-budget", "384",
                 "--alias", "local",
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString()
@@ -388,6 +387,10 @@ class GGUFModelClient {
                     val totalSec = (System.currentTimeMillis() - startTime) / 1000
                     fileLog("🚀 Server fully ONLINE (HTTP 200) in ${totalSec}s!")
                     isLoaded = true
+                    hw?.let { h ->
+                        val mask = DeviceProfile.performanceAffinityMask(h)
+                        ZramOptimizer.pinToPerformanceCores(mask)
+                    }
                     onProgress(1.0f, "ONLINE • 100%")
                     onStatus("Neural Core Ready (${totalSec}s) ✓")
                     return@withLock true
@@ -471,6 +474,11 @@ class GGUFModelClient {
                 val totalSec = (System.currentTimeMillis() - startTime) / 1000
                 fileLog("🚀 Fallback Server ONLINE in ${totalSec}s!")
                 isLoaded = true
+                val hwFb = appContext?.let { DeviceProfile.detect(it) }
+                hwFb?.let { h ->
+                    val mask = DeviceProfile.performanceAffinityMask(h)
+                    ZramOptimizer.pinToPerformanceCores(mask)
+                }
                 onProgress(1.0f, "ONLINE • 100%")
                 onStatus("Neural Core Ready (${totalSec}s) ✓")
                 return@withContext true
@@ -634,17 +642,11 @@ class GGUFModelClient {
             .put("model", "local")
             .put("messages", messages)
             .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
-            .put("top_k", 40) // Prune vocabulary search to top 40 candidates for fast writing
             .put("top_p", 0.9)
-            .put("min_p", 0.05)
-            .put("repeat_penalty", 1.05)
             .put("stream", true)
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)
             .put("cache_prompt", true)
-            .put("reasoning_budget", 384)
-            .put("slot_id", 0)
-            .put("id_slot", 0)
             .put("stop", stopArray)
 
         val bodyBytes = body.toString().toByteArray()
