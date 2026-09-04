@@ -127,7 +127,7 @@ fun SettingsScreenContent(
                     )
                 )
                 .background(surfaceColor)
-                .padding(horizontal = 20.dp, vertical = 10.dp)
+                .padding(horizontal = 6.dp, vertical = 8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -173,8 +173,8 @@ fun SettingsScreenContent(
             modifier = Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+                .padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // ==========================================
             // CARD 1: COGNITIVE ENGINE SELECTOR (AUTO-SAVING)
@@ -1047,8 +1047,8 @@ fun SettingsCard(
         border = BorderStroke(1.dp, borderColor)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier
@@ -1096,7 +1096,7 @@ fun SettingsCard(
             androidx.compose.animation.AnimatedVisibility(visible = expanded) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     content()
                 }

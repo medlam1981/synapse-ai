@@ -473,7 +473,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
+                    .padding(start = 5.dp, end = 5.dp, top = 5.dp, bottom = 5.dp)
                     .clip(RoundedCornerShape(14.dp)),
                 shape = RoundedCornerShape(14.dp),
                 color = chassisBg,
@@ -497,7 +497,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             modifier = Modifier
                                 .fillMaxSize()
                                 .clipToBounds(),
-                            contentPadding = PaddingValues(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 14.dp),
+                            contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             items(uiState.logs, key = { it.id }) { log ->
@@ -579,7 +579,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 4.dp),
+                            .padding(start = 6.dp, end = 6.dp, top = 2.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
@@ -611,7 +611,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                                .padding(start = 5.dp, end = 5.dp, bottom = 6.dp)
                                 .heightIn(min = 42.dp, max = 96.dp)
                                 .tactileGlassGlow(cornerRadius = 14.dp, isDark = isDark, borderWidth = 0.dp),
                             color = inputBg,
@@ -621,7 +621,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                    .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 // Left: Expandable Text Field Area
@@ -917,25 +917,28 @@ fun ConsolidatedMasterHeader(
 
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
 
-    // Solid Master Header Card docked at top of viewport along the unified 12.dp horizontal grid rail
+    // Solid Master Header Card docked at top of viewport along the unified 5.dp horizontal grid rail
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp)
-            .tactileCardElevation(isDark, cornerRadius = 16.dp),
+            .padding(start = 5.dp, end = 5.dp, top = 4.dp, bottom = 2.dp)
+            .tactileCardElevation(isDark, cornerRadius = 14.dp),
         color = headerBg,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             // -------------------------------------------------------------
             // 1. TOP ROW: Left-Aligned [Menu Card] MEDLAM-AI AGENT [Status Badge] ──── [Settings Card] (Right)
             // -------------------------------------------------------------
+            val cyanAccent = Color(0xFF00D2FF)
+            val cyanBorder = Color(0xFF00B4D8)
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -948,9 +951,6 @@ fun ConsolidatedMasterHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val cyanAccent = Color(0xFF00D2FF)
-                    val cyanBorder = Color(0xFF00B4D8)
-
                     // Sidebar Drawer Button: Tactile micro-plate container with ambient cyan back-glow
                     Box(
                         modifier = Modifier
@@ -1018,10 +1018,11 @@ fun ConsolidatedMasterHeader(
                 }
 
                 // Right: Symmetric micro-plate settings gear icon anchored flush to far right
+                // Full visual parity with left drawer button: neon cyan accent, gradient border, and ambient cyan back-glow
                 Box(
                     modifier = Modifier
                         .size(28.dp)
-                        .background(textDim.copy(alpha = 0.06f), RoundedCornerShape(7.dp))
+                        .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(7.dp))
                 ) {
                     Surface(
                         onClick = onOpenSettings,
@@ -1030,7 +1031,7 @@ fun ConsolidatedMasterHeader(
                         border = BorderStroke(
                             1.dp,
                             Brush.verticalGradient(
-                                listOf(textDim.copy(alpha = 0.4f), textDim.copy(alpha = 0.18f))
+                                listOf(cyanAccent.copy(alpha = 0.6f), cyanBorder.copy(alpha = 0.25f))
                             )
                         ),
                         shadowElevation = 2.dp,
@@ -1040,7 +1041,7 @@ fun ConsolidatedMasterHeader(
                             Icon(
                                 imageVector = Icons.Outlined.Settings,
                                 contentDescription = "Settings",
-                                tint = textBright.copy(alpha = 0.85f),
+                                tint = cyanAccent,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -1386,6 +1387,22 @@ fun CliCodeBlockContainer(
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
+    val livePulse = if (isStreaming) {
+        val transition = rememberInfiniteTransition(label = "code_live_pulse")
+        val alpha by transition.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(650, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "code_live_alpha"
+        )
+        alpha
+    } else {
+        1f
+    }
+
     val blockBg = if (isDark) Color(0xFF0D1117) else Color(0xFFF8FAFC)
     val headerBg = if (isDark) Color(0xFF161B22) else Color(0xFFF1F5F9)
     val borderColor = if (isDark) Color(0xFF21262D) else Color(0xFFE2E8F0)
@@ -1402,16 +1419,18 @@ fun CliCodeBlockContainer(
         border = BorderStroke(1.dp, borderColor)
     ) {
         Column {
-            // Header Bar: Minimalist Terminal Bar
+            // Header Bar: Minimalist Terminal Bar with Locked 30dp Height & Strict Single-Row Guardrails
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(30.dp)
                     .background(headerBg)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .clipToBounds()
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left: ┌── <LANG> • <FILE_PATH>
+                // Left: ┌── <LANG> • <FILE_PATH> (Strict Single Line)
                 Row(
                     modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1421,21 +1440,24 @@ fun CliCodeBlockContainer(
                         text = "┌──",
                         color = textDim,
                         fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
                     Text(
                         text = language.uppercase().ifBlank { "CODE" },
                         color = langAccent,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
                     if (!filePath.isNullOrBlank()) {
                         Text(
                             text = "•",
                             color = textDim,
                             fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
                         )
                         Text(
                             text = filePath,
@@ -1446,28 +1468,45 @@ fun CliCodeBlockContainer(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    if (isStreaming) {
-                        Text(
-                            text = "● LIVE",
-                            color = Color(0xFF10B981),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
                 }
 
-                // Right: [COPY] [-]/[+]
+                // Right-Hand Action Cluster: [● LIVE] [COPY] [-]/[+] on strict single center baseline
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Micro-Scale Live Badge: docked directly to the left of the [COPY] action button
+                    if (isStreaming) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(4.5.dp)
+                                    .alpha(livePulse)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF10B981))
+                            )
+                            Text(
+                                text = "LIVE",
+                                color = Color(0xFF10B981),
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.04.em,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
                     Text(
                         text = if (copied) "[COPIED]" else "[COPY]",
                         color = if (copied) Color(0xFF10B981) else textDim,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
                         modifier = Modifier
                             .clickable {
                                 clipboard.setText(AnnotatedString(code))
@@ -1486,6 +1525,7 @@ fun CliCodeBlockContainer(
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
                         modifier = Modifier
                             .clickable { userExpanded = !isExpanded }
                             .padding(horizontal = 4.dp, vertical = 2.dp)
@@ -2074,7 +2114,7 @@ fun CliWelcomeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 8.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.Center
     ) {
         // Terminal ASCII Banner Header
