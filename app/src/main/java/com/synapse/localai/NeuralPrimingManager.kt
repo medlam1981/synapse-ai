@@ -78,6 +78,10 @@ object NeuralPrimingManager {
                     onStatus = { Log.d(TAG, "Status: $it") },
                     onProgress = { progress, text -> Log.d(TAG, "Progress $progress: $text") },
                     onLoaded = {
+                        if (!client.isLoaded) {
+                            isPriming = false
+                            return@loadModel
+                        }
                         scope.launch {
                             try {
                                 // Compile active persona system prompt prefix

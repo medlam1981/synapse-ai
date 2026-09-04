@@ -230,10 +230,10 @@ class GGUFModelClient {
             }
 
             // 1. Clean previous state and zombie processes
+            try { LlamaServerJNI.stop() } catch (_: Throwable) {}
             if (globalLoadedPath != null) {
                 onStatus("Stopping previous instance...")
-                try { LlamaServerJNI.stop() } catch (_: Throwable) {}
-                delay(800)
+                delay(600)
                 globalServerThread?.interrupt()
                 globalServerThread = null
                 globalLoadedPath = null
@@ -279,7 +279,7 @@ class GGUFModelClient {
             val resolvedCtx = if (contextLength >= 4096) contextLength.coerceAtMost(maxSafeCtx) else 8192
             val effectiveBatch = if (isLargeModel) minOf(optimalBatch, 128) else (if (resolvedCtx >= 16384) minOf(optimalBatch, 512) else optimalBatch)
             val effectiveUbatch = if (isLargeModel) minOf(optimalUbatch, 64) else (if (resolvedCtx >= 16384) minOf(optimalUbatch, 128) else optimalUbatch)
-            val effectiveGpuLayers = if (isLargeModel || isQwen) 0 else gpuLayers
+            val effectiveGpuLayers = 0 // CPU-only native runtime: libllama.so links to libggml-cpu.so without GPU backend
 
             val baseArgs = mutableListOf(
                 "-m", resolvedPath,
@@ -293,13 +293,10 @@ class GGUFModelClient {
                 "-ub", effectiveUbatch.toString(),
                 "-t", optimalThreads.toString(),
                 "-tb", optimalBatchThreads.toString(), // Strictly physical Performance cores
-                "-ngl", effectiveGpuLayers.toString(),
+                "-ngl", "0",
                 "--flash-attn", "on",
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,
-                "--cache-reuse", "64", // Strict KV prefix cache reuse across conversational turns
-                "--slots", "1",
-                "--slot-save-path", "/sdcard/Medlam-Ai/slots",
                 "--alias", "local",
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString()
@@ -380,8 +377,10 @@ class GGUFModelClient {
 
             fileLog("Launch args: ${trialArgs.joinToString(" ")}")
 
+            val nativeReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
             val newThread = Thread {
                 val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(trialArgs.toTypedArray(), logFile) }
+                nativeReturnCode.set(ret)
                 fileLog("Native server thread returned: $ret")
             }.apply {
                 name = "llama-server-jni"
@@ -413,8 +412,15 @@ class GGUFModelClient {
                     serverBecameAlive = true
                 }
 
+                // If native initialization returned error code (e.g. -1), break early
+                val retCode = nativeReturnCode.get()
+                if (retCode != null && retCode != 0) {
+                    fileLog("⚠️ Native server start failed with exit code: $retCode")
+                    break
+                }
+
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                val progress = (elapsedSec / 25f).coerceIn(0.08f, 0.95f)
+                val progress = (elapsedSec / 35f).coerceIn(0.08f, 0.95f)
                 val statusText = if (serverBecameAlive) {
                     "Loading tensors into RAM (${elapsedSec.toInt()}s)..."
                 } else {
@@ -429,6 +435,17 @@ class GGUFModelClient {
 
             val finalError = try { if (logFile.exists()) logFile.readLines().takeLast(6).joinToString(" | ") else "" } catch (_: Exception) { "" }
             fileLog("Boot timeout. Native output: $finalError")
+
+            // If speculative decoding was attempted with draft args and failed, fallback to base model
+            if (hasDraft) {
+                fileLog("Attempting fallback to standalone base model...")
+                onStatus("Falling back to base model... ⏳")
+                val fallbackSuccess = startServerFallback(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
+                if (fallbackSuccess) {
+                    return@withLock true
+                }
+            }
+
             onProgress(0f, "Boot Timeout")
             onStatus(if (finalError.isNotBlank()) "❌ $finalError" else "❌ Error: Boot Timeout")
             return@withLock false
@@ -446,8 +463,10 @@ class GGUFModelClient {
         fileLog("Launching Fallback Server: ${args.joinToString(" ")}")
         onStatus("Launching High-Speed Base Model... ⏳")
 
+        val fallbackReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
         val newThread = Thread {
             val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(args, logFile) }
+            fallbackReturnCode.set(ret)
             fileLog("Fallback server thread returned: $ret")
         }.apply {
             name = "llama-server-fallback"
@@ -470,6 +489,12 @@ class GGUFModelClient {
                 onProgress(1.0f, "ONLINE • 100%")
                 onStatus("Neural Core Ready (${totalSec}s) ✓")
                 return@withContext true
+            }
+
+            val fbCode = fallbackReturnCode.get()
+            if (fbCode != null && fbCode != 0) {
+                fileLog("⚠️ Fallback server start failed with exit code: $fbCode")
+                break
             }
 
             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
@@ -498,6 +523,8 @@ class GGUFModelClient {
 
         if (resolvedPath == null) {
             onStatus("Error: File not found")
+            isLoaded = false
+            onLoaded()
             return
         }
 
@@ -513,9 +540,7 @@ class GGUFModelClient {
         onStatus("Launching Neural Core... ⏳")
         val started = startServer(resolvedPath, onStatus, onProgress)
         isLoaded = started
-        if (started) {
-            onLoaded()
-        }
+        onLoaded()
     }
 
     /**

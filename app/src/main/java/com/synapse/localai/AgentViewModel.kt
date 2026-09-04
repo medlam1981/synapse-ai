@@ -588,6 +588,7 @@ class AgentViewModel : ViewModel() {
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
+                                    addSystemLog("Model loading failed: $modelName")
                                 }
                             }
                         )

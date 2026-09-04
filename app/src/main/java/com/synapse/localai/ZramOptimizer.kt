@@ -42,10 +42,10 @@ object ZramOptimizer {
     suspend fun optimizeMemoryAndZram(context: Context): Boolean = withContext(Dispatchers.IO) {
         val pid = Process.myPid()
         val script = StringBuilder().apply {
-            append("echo 3 > /proc/sys/vm/drop_caches; ")
+            append("echo 1 > /proc/sys/vm/drop_caches 2>/dev/null; ")
             append("echo 1 > /proc/sys/vm/compact_memory 2>/dev/null; ")
-            append("echo 180 > /proc/sys/vm/swappiness; ")
-            append("echo 200 > /proc/sys/vm/watermark_scale_factor 2>/dev/null; ")
+            append("echo 60 > /proc/sys/vm/swappiness 2>/dev/null; ")
+            append("echo 10 > /proc/sys/vm/watermark_scale_factor 2>/dev/null; ")
             append("echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null; ")
             append("echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null; ")
             append("if [ -f /sys/block/zram0/disksize ]; then ")
