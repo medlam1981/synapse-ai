@@ -44,7 +44,7 @@ class GeminiModelClient(
     private val keyFailureCounts = java.util.concurrent.ConcurrentHashMap<Int, Int>()
 
     var modelName: String = "gemini-1.5-flash"
-    var maxTokens: Int = 8192
+    var maxTokens: Int = 2048 // Reduced from 8192 to 2048 to drastically cut TPM rate-limiter reservation and save quota
     var temperature: Float = 0.7f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
 
@@ -88,10 +88,13 @@ class GeminiModelClient(
         // Clean up expired cooldowns
         keyCooldowns.entries.removeIf { it.value <= now }
 
-        // If ALL keys are cooling down, clear cooldowns for circular round-robin failover
+        // If ALL keys are cooling down, un-cooldown only the earliest degraded key for retry
         if (keyCooldowns.size >= totalKeys) {
-            fileLog("All keys in cooldown pool. Clearing cooldowns to allow sequential round-robin.")
-            keyCooldowns.clear()
+            val oldestCooldownKey = keyCooldowns.minByOrNull { it.value }?.key
+            if (oldestCooldownKey != null) {
+                keyCooldowns.remove(oldestCooldownKey)
+                fileLog("All keys in cooldown pool. Released earliest key #${oldestCooldownKey + 1}/$totalKeys for retry.")
+            }
         }
 
         if (forceRotate) {
@@ -194,15 +197,22 @@ class GeminiModelClient(
 
         var attempt = 0
         val totalKeys = apiKeys.size
+        val maxAttempts = minOf(totalKeys, 6)
         var success = false
         var lastErrorDetail = ""
+        var currentPair = getNextValidKey(forceRotate = false)
 
-        while (attempt < totalKeys && !success) {
-            val pair = getNextValidKey(forceRotate = attempt > 0)
-            if (pair == null) { attempt++; continue }
-            val (apiKey, keyIdx) = pair
+        while (attempt < maxAttempts && !success) {
+            if (currentPair == null) {
+                delay(5000L)
+                currentPair = getNextValidKey(forceRotate = false)
+                if (currentPair == null) {
+                    attempt++
+                    continue
+                }
+            }
+            val (apiKey, keyIdx) = currentPair
 
-            var firstChunkReceived = false
             val channel = Channel<String>(Channel.BUFFERED)
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
@@ -245,11 +255,6 @@ class GeminiModelClient(
             }
 
             try {
-                if (attempt > 0) {
-                    onRetry?.invoke()
-                    delay(500L)
-                }
-
                 // Strict 5-Second SLA Timeout Window for initial connection & response chunk
                 val firstChunk = withTimeoutOrNull(5000L) {
                     val res = channel.receiveCatching()
@@ -272,7 +277,6 @@ class GeminiModelClient(
                 }
 
                 // First byte received within 5-second SLA: Validate key & persist immediately
-                firstChunkReceived = true
                 markKeySuccess(keyIdx)
                 emit(firstChunk)
 
@@ -318,9 +322,18 @@ class GeminiModelClient(
                     t is java.io.IOException ||
                     t.javaClass.simpleName.contains("SerializationException")
 
-                if (shouldRetry) {
+                if (shouldRetry && attempt + 1 < maxAttempts) {
                     attempt++
-                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$totalKeys). Failover to next key in pool...")
+                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
+                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
+                    onRetry?.invoke()
+
+                    // Strict 5-Second Stable Grace Period:
+                    // Never rotate or hammer keys in milliseconds! Wait a full 5000ms before rotating to next key.
+                    delay(5000L)
+
+                    // Advance key and update UI only after the 5-second grace window expires
+                    currentPair = getNextValidKey(forceRotate = true)
                 } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
                     throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
                 } else {
@@ -330,7 +343,7 @@ class GeminiModelClient(
         }
 
         if (!success) {
-            throw RuntimeException("All $totalKeys API keys in pool failed or timed out. Last error: $lastErrorDetail")
+            throw RuntimeException("All tried API keys in pool failed or timed out. Last error: $lastErrorDetail")
         }
     }.flowOn(Dispatchers.IO)
 
@@ -354,15 +367,22 @@ class GeminiModelClient(
 
         var attempt = 0
         val totalKeys = apiKeys.size
+        val maxAttempts = minOf(totalKeys, 6)
         var success = false
         var lastErrorDetail = ""
+        var currentPair = getNextValidKey(forceRotate = false)
 
-        while (attempt < totalKeys && !success) {
-            val pair = getNextValidKey(forceRotate = attempt > 0)
-            if (pair == null) { attempt++; continue }
-            val (apiKey, keyIdx) = pair
+        while (attempt < maxAttempts && !success) {
+            if (currentPair == null) {
+                delay(5000L)
+                currentPair = getNextValidKey(forceRotate = false)
+                if (currentPair == null) {
+                    attempt++
+                    continue
+                }
+            }
+            val (apiKey, keyIdx) = currentPair
 
-            var firstChunkReceived = false
             val channel = Channel<String>(Channel.BUFFERED)
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
@@ -400,11 +420,6 @@ class GeminiModelClient(
             }
 
             try {
-                if (attempt > 0) {
-                    onRetry?.invoke()
-                    delay(500L)
-                }
-
                 // Strict 5-Second SLA Timeout Window for initial connection & response chunk
                 val firstChunk = withTimeoutOrNull(5000L) {
                     val res = channel.receiveCatching()
@@ -426,8 +441,7 @@ class GeminiModelClient(
                     }
                 }
 
-                // Initial chunk received within 5-second SLA: Validate key & persist immediately
-                firstChunkReceived = true
+                // First byte received within 5-second SLA: Validate key & persist immediately
                 markKeySuccess(keyIdx)
                 emit(firstChunk)
 
@@ -473,9 +487,18 @@ class GeminiModelClient(
                     t is java.io.IOException ||
                     t.javaClass.simpleName.contains("SerializationException")
 
-                if (shouldRetry) {
+                if (shouldRetry && attempt + 1 < maxAttempts) {
                     attempt++
-                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$totalKeys). Failover to next key in pool...")
+                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
+                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
+                    onRetry?.invoke()
+
+                    // Strict 5-Second Stable Grace Period:
+                    // Never rotate or hammer keys in milliseconds! Wait a full 5000ms before rotating to next key.
+                    delay(5000L)
+
+                    // Advance key and update UI only after the 5-second grace window expires
+                    currentPair = getNextValidKey(forceRotate = true)
                 } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
                     throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
                 } else {
@@ -485,7 +508,7 @@ class GeminiModelClient(
         }
 
         if (!success) {
-            throw RuntimeException("All $totalKeys API keys in pool failed or timed out. Last error: $lastErrorDetail")
+            throw RuntimeException("All tried API keys in pool failed or timed out. Last error: $lastErrorDetail")
         }
     }.flowOn(Dispatchers.IO)
 

@@ -129,7 +129,7 @@ class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "SYNAPSE_CORE"
-        private const val MAX_HISTORY_MESSAGES = 10
+        private const val MAX_HISTORY_MESSAGES = 6
         private const val MAX_TASK_ITERATIONS = 15
         private const val AGENTS_DIR = "/sdcard/Medlam-Ai/Agents"
         
@@ -223,6 +223,29 @@ class AgentViewModel : ViewModel() {
         }
         text = text.replace(Regex("^💭[\\s\\S]*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
         return text.trimStart()
+    }
+
+    private fun stripThinkingForHistory(raw: String): String {
+        return raw
+            .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
+            .trim()
+    }
+
+    private fun compactHistoryForQuota(content: String): String {
+        if (!content.contains("```")) return content.take(1200)
+        return content.replace(Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")) { mr ->
+            val lang = mr.groupValues[1]
+            val code = mr.groupValues[2]
+            if (code.length > 200) {
+                val preview = code.take(100).trimEnd()
+                val lineCount = code.lines().size
+                "```$lang\n$preview\n// ... [$lineCount lines deliverable saved to disk] ...\n```"
+            } else {
+                mr.value
+            }
+        }.take(1500)
     }
 
     data class ParsedThought(
@@ -761,24 +784,23 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         val activePersonasMarkdown = actualContext?.let { PersonaManager.getActivePersonasContent(it) }
             ?: PersonaManager.DEFAULT_CODING_PERSONA
 
-        // 3. Operational Toolchains Description
-        val toolsDesc = getToolsDescription()
-
-        // 4. Reasoning & Code Containment Guidelines
-        val thoughtGuideline = """
-## Execution & Reasoning Guidelines:
-1. Preliminary Planning & Reasoning: Always formulate your internal thought process, task breakdown, architectural plan, or tool strategy inside <think>...</think> tags before generating content or executing tools.
-2. Clean Separation: Never place internal thoughts, planning overviews, or reasoning inside markdown code blocks.
-3. Strict Code Fence Containment: Only use triple-backtick code fences (```lang) for actual executable code or configuration files. Raw code syntax, script logic, and HTML tags must NEVER leak or render as regular prose text.
-4. Post-Execution Summary Hygiene & Elimination of Code Echoing:
-   - When generating code files for storage (e.g., /sdcard/Medlam-Ai/...), deliver each file within its dedicated fenced code block.
-   - DO NOT repeat, quote, or echo generated code snippets in the conversational summary response following the code blocks.
-   - Conclude exclusively with a high-level executive summary: features implemented, API endpoints used, and confirmation of file paths.
+        // 3. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
+        val toolsAndGuidelines = """
+## Host Toolchains & Guidelines:
+- Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
+- Deliver code strictly inside ```lang code fences.
+- To write files to device storage (/sdcard/Medlam-Ai/...), place `file: <path>` immediately above the code fence.
+- Conclude with a high-level summary confirmation without echoing raw code.
+- Tool invocation format:
+<function_calls>
+<invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
+</function_calls>
+- Available tools: run_shell(command), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), open_app(app_name), click(index), type(text), swipe(direction), go_back(), go_home(), press_enter(), complete(summary).
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
 
-        val compiled = "$livingMind\n\n$activePersonasMarkdown\n\n$toolsDesc\n\n$thoughtGuideline$customPromptSection"
+        val compiled = "$livingMind\n\n$activePersonasMarkdown\n\n$toolsAndGuidelines$customPromptSection"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -896,7 +918,10 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                 // Conversational intelligence: do NOT capture screen on casual dialogue or greetings
                 val isCasual = isCasualGreetingOrChat(finalCommand)
                 if (modelType != ModelType.GGUF && !isCasual && (finalCommand.contains("open", true) || finalCommand.contains("click", true) || finalCommand.contains("app", true))) {
-                    lastScreenContext = "\n[Current State]:\n${service?.getDroidrunPhoneState()}\n\n${service?.getDroidrunScreenTree()}"
+                    val phoneState = service?.getDroidrunPhoneState() ?: ""
+                    val screenTree = service?.getDroidrunScreenTree() ?: ""
+                    val rawScreen = "\n[Current State]:\n$phoneState\n\n$screenTree"
+                    lastScreenContext = if (rawScreen.length > 1200) rawScreen.take(1200) + "\n...[screen tree truncated]" else rawScreen
                 } else {
                     lastScreenContext = ""
                 }
@@ -940,7 +965,18 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                     ) }
 
                     try {
-                        val historyCopy = synchronized(conversationHistory) { conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList() }
+                        val historyCopy = synchronized(conversationHistory) {
+                            val historyList = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
+                            historyList.mapIndexed { idx, (role, content) ->
+                                val isOlder = idx < historyList.size - 2
+                                val safeContent = if (isOlder && role == "assistant") {
+                                    compactHistoryForQuota(content)
+                                } else {
+                                    content
+                                }
+                                role to safeContent
+                            }
+                        }
                         val historyWithScreen = historyCopy.toMutableList()
                         if (lastScreenContext.isNotBlank() && historyWithScreen.isNotEmpty()) {
                             val lastIdx = historyWithScreen.indexOfLast { it.first == "user" }
@@ -948,6 +984,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                                 val (role, content) = historyWithScreen[lastIdx]
                                 historyWithScreen[lastIdx] = role to content + lastScreenContext
                             }
+                            lastScreenContext = "" // Reset after single use to avoid re-sending screen dumps in future turns
                         }
 
                         var lastUiUpdateTime = 0L
@@ -1064,8 +1101,10 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                         } else {
                             fullResponse
                         }
+                        // Strip internal thinking tags before adding to conversation history to save tokens
+                        val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                         synchronized(conversationHistory) {
-                            conversationHistory.add("assistant" to assistantReply)
+                            conversationHistory.add("assistant" to if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply)
                             while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
                         }
 
@@ -1181,7 +1220,9 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
             taskHistory.add("user" to command)
             
             if (modelType != ModelType.GGUF && service != null) {
-                val screenData = "\n[Current State]:\n${service.getDroidrunPhoneState()}\n\n${service.getDroidrunScreenTree()}"
+                val pState = service.getDroidrunPhoneState()
+                val sTree = service.getDroidrunScreenTree()
+                val screenData = "\n[Current State]:\n$pState\n\n$sTree".take(1200)
                 taskHistory[0] = "user" to command + screenData
             }
             
@@ -1216,14 +1257,17 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                 if (response.isBlank()) { keepGoing = false; continue }
                 
                 val reply = cleanVisibleText(response).trim()
-                taskHistory.add("assistant" to reply)
-                while (taskHistory.size > 10) taskHistory.removeAt(0)
+                taskHistory.add("assistant" to stripThinkingForHistory(reply))
+                while (taskHistory.size > 6) taskHistory.removeAt(0)
                 
                 val (usedTools, summary) = executeToolLoop(response)
                 if (usedTools) {
                     if (modelType != ModelType.GGUF && service != null) {
                         delay(1500)
-                        taskHistory.add("user" to "[Next State]:\n${service.getDroidrunPhoneState()}\n\n${service.getDroidrunScreenTree()}")
+                        val pState = service.getDroidrunPhoneState()
+                        val sTree = service.getDroidrunScreenTree()
+                        val nextScreen = "[Next State]:\n$pState\n\n$sTree".take(1200)
+                        taskHistory.add("user" to nextScreen)
                     }
                 } else {
                     resultSb.append(summary ?: reply)
@@ -1515,7 +1559,8 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                 conversationHistory.clear()
                 restoredLogs.takeLast(MAX_HISTORY_MESSAGES).forEach { l ->
                     val role = if (l.sender == "USER") "user" else "assistant"
-                    conversationHistory.add(role to l.text)
+                    val cleanText = if (role == "assistant") stripThinkingForHistory(l.text) else l.text
+                    conversationHistory.add(role to cleanText)
                 }
             }
         }
