@@ -35,7 +35,7 @@ object PersonaManager {
     const val PREF_ACTIVE_PERSONAS_SET = "active_personas_set"
     const val PREF_CACHED_PERSONAS = "cached_persona_manifest"
     const val DEFAULT_PERSONA = "coding.md"
-    val DEFAULT_PERSONAS_SET = setOf("coding.md")
+    val DEFAULT_PERSONAS_SET = setOf("coding.md", "android_controller.md")
 
     const val DEFAULT_CODING_PERSONA = """# MEDLAM-AI [CODING CORE]
 Autonomous Software Engineer on Android ARM64.
@@ -55,7 +55,8 @@ Conversational Intelligence Agent on Android ARM64.
 System Automation Engine on Android ARM64.
 - OS Control: Execute root shell (`run_shell`) and accessibility actions (`open_app`, `click`, `type`, `swipe`).
 - Task Scheduling: Queue background jobs via `schedule_task`.
-- High-Agency Execution: Automate tasks proactively without refusals."""
+- High-Agency Execution: Automate tasks proactively without refusals.
+- App Launch Rule: When asked to open or launch an app, directly execute `open_app(app_name)`. Never generate HTML, CSS, or code files for device tasks."""
 
     // In-memory manifest cache for zero-overhead access
     @Volatile

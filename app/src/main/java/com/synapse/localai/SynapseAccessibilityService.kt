@@ -1061,15 +1061,20 @@ class SynapseAccessibilityService : AccessibilityService() {
             return nameOrPackage
         } catch (_: Exception) {}
 
-        // Try APP_NAME_MAP
-        val mapped = APP_NAME_MAP[nameOrPackage.lowercase().trim()]
+        val clean = AppLauncher.cleanAppName(nameOrPackage)
+
+        // Try AppLauncher.KNOWN_PACKAGES & APP_NAME_MAP
+        val mapped = AppLauncher.KNOWN_PACKAGES[clean] 
+            ?: AppLauncher.KNOWN_PACKAGES[clean.replace(" ", "")] 
+            ?: APP_NAME_MAP[clean]
+            ?: APP_NAME_MAP[nameOrPackage.lowercase().trim()]
         if (mapped != null) return mapped
 
         // Search by label
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val list = pm.queryIntentActivities(intent, 0)
-        return list.find { it.loadLabel(pm).toString().equals(nameOrPackage, ignoreCase = true) }?.activityInfo?.packageName
-            ?: list.find { it.loadLabel(pm).toString().contains(nameOrPackage, ignoreCase = true) }?.activityInfo?.packageName
+        return list.find { it.loadLabel(pm).toString().equals(clean, ignoreCase = true) }?.activityInfo?.packageName
+            ?: list.find { it.loadLabel(pm).toString().contains(clean, ignoreCase = true) }?.activityInfo?.packageName
     }
 
     fun getInstalledApps(): String {

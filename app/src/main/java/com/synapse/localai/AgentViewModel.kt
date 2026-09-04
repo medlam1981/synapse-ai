@@ -761,12 +761,14 @@ The file execution engine automatically parses this block and writes the file di
             return """You are MEDLAM-AI, an autonomous on-device AI system controller on Android ARM64.
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
+CRITICAL: When the user asks to open/launch an app or control the device, NEVER write HTML or code files! You MUST invoke open_app immediately.
 Format for calling tools:
 <function_calls>
 <invoke name="tool_name">
 <parameter name="param_name">value</parameter>
 </invoke>
 </function_calls>
+Available tools: open_app(app_name), run_shell(command), web_search(query), click(index), type(text), swipe(direction), go_back(), go_home(), press_enter(), complete(summary).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
@@ -788,7 +790,8 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         val toolsAndGuidelines = """
 ## Host Toolchains & Guidelines:
 - Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
-- Deliver code strictly inside ```lang code fences.
+- Deliver code strictly inside ```lang code fences only when programming or requested to write code.
+- Device & App Launch Rules: When asked to open or launch an app, NEVER generate HTML or code files! You MUST invoke `open_app(app_name)`.
 - To write files to device storage (/sdcard/Medlam-Ai/...), place `file: <path>` immediately above the code fence.
 - Conclude with a high-level summary confirmation without echoing raw code.
 - Tool invocation format:
@@ -836,6 +839,45 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
             )
             refreshSessions()
         }
+
+        // Fast-path deterministic intent detection: Direct App Launch
+        val targetAppToLaunch = AppLauncher.extractAppLaunchTarget(command)
+        if (targetAppToLaunch != null) {
+            val launched = AppLauncher.launch(actualContext, targetAppToLaunch)
+            val displayName = targetAppToLaunch.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+            val responseText = if (launched) {
+                if (isArabic(command)) "تم فتح تطبيق $displayName بنجاح."
+                else if (command.trim().lowercase().startsWith("ouvre") || command.trim().lowercase().startsWith("lance")) "Application $displayName ouverte avec succès."
+                else "Opening $displayName..."
+            } else {
+                if (isArabic(command)) "تعذر العثور على تطبيق \"$displayName\" مثبت على الجهاز."
+                else "Could not find an installed app matching \"$displayName\"."
+            }
+            val agentLog = LogEntry(sender = "AGENT", text = responseText)
+            addLog(agentLog)
+            _uiState.update { 
+                it.copy(
+                    isProcessing = false,
+                    currentPhase = if (launched) AgentActionPhase.COMPLETING else AgentActionPhase.IDLE,
+                    activeStatusDetail = if (launched) "Opened $displayName" else "Idle / Ready"
+                )
+            }
+            viewModelScope.launch(Dispatchers.IO) {
+                chatDb?.insertMessage(
+                    ChatMessageEntity(
+                        id = agentLog.id,
+                        sessionId = sid,
+                        sender = "AGENT",
+                        text = agentLog.text,
+                        timestamp = agentLog.timestamp
+                    )
+                )
+                refreshSessions()
+            }
+            processNextQueuedCommand(actualContext)
+            return
+        }
+
         val lowerCmd = command.lowercase().trim()
         val isBackgroundRequest = lowerCmd.contains("in background") || lowerCmd.contains("فالخلفية") || 
             lowerCmd.startsWith("task:") || lowerCmd.startsWith("tsk:")
@@ -1376,7 +1418,14 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                         finalSummary = "Queued background task [tsk #$tid]: $cmd"
                         return false to finalSummary
                     }
-                    "open_app" -> service?.launchApp(params["app_name"] ?: "")
+                    "open_app" -> {
+                        val appName = params["app_name"] ?: params["name"] ?: ""
+                        val targetCtx = service ?: MainActivity.instance
+                        val ok = AppLauncher.launch(targetCtx, appName)
+                        val displayName = appName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                        finalSummary = if (ok) "Opened $displayName successfully." else "Could not find or open app \"$appName\"."
+                        return false to finalSummary
+                    }
                     "click" -> service?.clickByIndex(params["index"]?.toIntOrNull() ?: -1)
                     "type" -> service?.typeText(params["text"] ?: "")
                     "swipe" -> service?.scrollScreen(params["direction"] ?: "down")
