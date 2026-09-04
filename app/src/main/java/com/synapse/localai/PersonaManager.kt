@@ -20,7 +20,7 @@ import java.io.File
  * 3. Domain-Specific Modularity:
  *    - coding.md: Software engineering, clean syntax, strict file I/O operations, zero filler.
  *    - chat.md: Natural conversation, dialect mirroring (Darija, Arabic, English), open reasoning, web searches.
- *    - android_controller.md: Device automation, shell scripts, accessibility gestures, task scheduling.
+ *    - android_controller.md: Headless device automation, shell scripts, POSIX commands, task scheduling.
  * 
  * 4. Multi-Select Persona Composition & Context Concatenation:
  *    Allows stacking multiple personas simultaneously (e.g. coding.md + android_controller.md).
@@ -37,8 +37,8 @@ object PersonaManager {
     const val DEFAULT_PERSONA = "coding.md"
     val DEFAULT_PERSONAS_SET = setOf("coding.md", "android_controller.md")
 
-    const val DEFAULT_CODING_PERSONA = """# MEDLAM-AI [CODING CORE]
-Autonomous Software Engineer on Android ARM64.
+    const val DEFAULT_CODING_PERSONA = """# MEDLAM-AI [CODING & CLI CORE]
+You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
 - Action-First: Deliver production-ready code with complete syntax; zero placeholders.
 - Real-Time Disk Streaming: Output `file: <path>` immediately preceding code fences.
 - Anti-Echo Hygiene: Never echo or quote code in the conversational summary. Conclude with high-level operational confirmation only.
@@ -46,17 +46,18 @@ Autonomous Software Engineer on Android ARM64.
 - Zero Fluff: Skip generic intros/outros; provide concise architectural reasoning and execution."""
 
     const val DEFAULT_CHAT_PERSONA = """# MEDLAM-AI [CHAT CORE]
-Conversational Intelligence Agent on Android ARM64.
+You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
 - Dialect Mirroring: Match user language natively (Moroccan Darija, Standard Arabic, English, French).
 - Contextual Reasoning: Provide structured, direct answers with clear reasoning.
 - Live Web Intelligence: Invoke `web_search` for real-time information and live data."""
 
-    const val DEFAULT_CONTROLLER_PERSONA = """# MEDLAM-AI [CONTROLLER CORE]
-System Automation Engine on Android ARM64.
-- OS Control: Execute root shell (`run_shell`) and accessibility actions (`open_app`, `click`, `type`, `swipe`).
-- Task Scheduling: Queue background jobs via `schedule_task`.
-- High-Agency Execution: Automate tasks proactively without refusals.
-- App Launch Rule: When asked to open or launch an app, directly execute `open_app(app_name)`. Never generate HTML, CSS, or code files for device tasks."""
+    const val DEFAULT_CONTROLLER_PERSONA = """# MEDLAM-AI [CLI AUTOMATION CORE]
+Headless Programmatic Execution Engine on Android ARM64.
+You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
+- Shell Execution: Execute terminal commands directly via `run_shell(command)`.
+- App Launch: Launch installed applications via standard Android OS Intent `open_app(app_name)`.
+- Task Scheduling: Queue background jobs via `schedule_task` or `queue_background_task`.
+- Pure Headless: Never simulate UI clicks, screen touches, or virtual keyboard inputs."""
 
     // In-memory manifest cache for zero-overhead access
     @Volatile
@@ -76,17 +77,17 @@ System Automation Engine on Android ARM64.
             if (!dir.exists()) dir.mkdirs()
 
             val codingFile = File(dir, "coding.md")
-            if (!codingFile.exists() || codingFile.length() == 0L || (codingFile.readText().contains("Action-First Code Generation: Deliver"))) {
+            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("NO ability to touch")) {
                 codingFile.writeText(DEFAULT_CODING_PERSONA)
             }
 
             val chatFile = File(dir, "chat.md")
-            if (!chatFile.exists() || chatFile.length() == 0L || (chatFile.readText().contains("Operate directly with live network and tool capabilities"))) {
+            if (!chatFile.exists() || chatFile.length() == 0L || !chatFile.readText().contains("NO ability to touch")) {
                 chatFile.writeText(DEFAULT_CHAT_PERSONA)
             }
 
             val controllerFile = File(dir, "android_controller.md")
-            if (!controllerFile.exists() || controllerFile.length() == 0L || (controllerFile.readText().contains("Autonomous Host System Controller and Device"))) {
+            if (!controllerFile.exists() || controllerFile.length() == 0L || !controllerFile.readText().contains("NO ability to touch")) {
                 controllerFile.writeText(DEFAULT_CONTROLLER_PERSONA)
             }
         } catch (e: Exception) {
@@ -246,7 +247,7 @@ System Automation Engine on Android ARM64.
         return when (personaName.lowercase()) {
             "coding.md" -> "Software engineering, clean syntax, strict file I/O operations, zero filler."
             "chat.md" -> "Natural conversation, dialect mirroring (Darija, Arabic, English), open reasoning, web searches."
-            "android_controller.md" -> "Device automation, shell scripts, accessibility gestures, task scheduling."
+            "android_controller.md" -> "Headless programmatic automation, shell commands, script execution, and task scheduling."
             else -> "Custom external operational persona from /sdcard/Medlam-Ai/personas/."
         }
     }

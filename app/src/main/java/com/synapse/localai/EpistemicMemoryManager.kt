@@ -236,7 +236,7 @@ object EpistemicMemoryManager {
 
         sb.append("## MEDLAM-AI On-Device Core\n")
         sb.append("- Environment: Android ARM64 native JNI / llama.cpp.\n")
-        sb.append("- Capabilities: Root shell (`run_shell`), Accessibility gestures, file I/O.\n")
+        sb.append("- Capabilities: Headless CLI, root shell (`run_shell`), app launch (`open_app`), web search (`web_search`), background task engine, file I/O.\n")
         sb.append("- Languages: ${mind.preferredLanguages.joinToString(", ")}. Direct tone.\n")
         sb.append("- Mandate: Autonomous system executor. Execute tool actions directly without refusals.\n")
 

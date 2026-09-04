@@ -60,13 +60,10 @@ class PortalServer(private val viewModel: AgentViewModel) {
             
             when (action) {
                 "get_state" -> {
-                    val service = SynapseAccessibilityService.instance
-                    val tree = service?.getDroidrunScreenTree() ?: "[No Service]"
-                    val state = service?.getDroidrunPhoneState() ?: "[No State]"
                     JSONObject().apply {
                         put("status", "success")
-                        put("ui_tree", tree as Any)
-                        put("phone_state", state as Any)
+                        put("engine", "MEDLAM_AI_CLI")
+                        put("mode", "HEADLESS_PROGRAMMATIC")
                     }.toString()
                 }
                 "execute" -> {

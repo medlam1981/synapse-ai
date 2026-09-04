@@ -7,108 +7,112 @@ import android.util.Log
 /**
  * Universal AppLauncher:
  * Provides deterministic app launching and intent resolution.
- * Supports AccessibilityService and fallback Context-based launchIntent,
+ * Direct OS Intent-based launchIntent resolution,
  * with comprehensive multilingual package mapping (English, Arabic, French).
  */
 object AppLauncher {
 
     private const val TAG = "AppLauncher"
 
-    val KNOWN_PACKAGES: Map<String, String> = mapOf(
+    val PACKAGE_CANDIDATES: Map<String, List<String>> = mapOf(
         // Social & Messaging
-        "facebook" to "com.facebook.katana",
-        "fb" to "com.facebook.katana",
-        "فيسبوك" to "com.facebook.katana",
-        "فيس" to "com.facebook.katana",
-        "whatsapp" to "com.whatsapp",
-        "واتساب" to "com.whatsapp",
-        "واتس" to "com.whatsapp",
-        "instagram" to "com.instagram.android",
-        "insta" to "com.instagram.android",
-        "انستغرام" to "com.instagram.android",
-        "انستا" to "com.instagram.android",
-        "telegram" to "org.telegram.messenger",
-        "تلغرام" to "org.telegram.messenger",
-        "تليجرام" to "org.telegram.messenger",
-        "twitter" to "com.twitter.android",
-        "x" to "com.twitter.android",
-        "تويتر" to "com.twitter.android",
-        "tiktok" to "com.zhiliaoapp.musically",
-        "تيك توك" to "com.zhiliaoapp.musically",
-        "snapchat" to "com.snapchat.android",
-        "سناب شات" to "com.snapchat.android",
-        "سناب" to "com.snapchat.android",
+        "facebook" to listOf("com.facebook.katana", "com.facebook.lite", "com.facebook.android"),
+        "fb" to listOf("com.facebook.katana", "com.facebook.lite", "com.facebook.android"),
+        "فيسبوك" to listOf("com.facebook.katana", "com.facebook.lite", "com.facebook.android"),
+        "فيس" to listOf("com.facebook.katana", "com.facebook.lite", "com.facebook.android"),
+        "whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+        "واتساب" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+        "واتس" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+        "instagram" to listOf("com.instagram.android", "com.instagram.lite"),
+        "insta" to listOf("com.instagram.android", "com.instagram.lite"),
+        "انستغرام" to listOf("com.instagram.android", "com.instagram.lite"),
+        "انستا" to listOf("com.instagram.android", "com.instagram.lite"),
+        "messenger" to listOf("com.facebook.orca", "com.facebook.mlite"),
+        "ماسينجر" to listOf("com.facebook.orca", "com.facebook.mlite"),
+        "telegram" to listOf("org.telegram.messenger", "org.thunderdog.challegram"),
+        "تلغرام" to listOf("org.telegram.messenger", "org.thunderdog.challegram"),
+        "تليجرام" to listOf("org.telegram.messenger", "org.thunderdog.challegram"),
+        "twitter" to listOf("com.twitter.android", "com.twitter.android.lite"),
+        "x" to listOf("com.twitter.android", "com.twitter.android.lite"),
+        "تويتر" to listOf("com.twitter.android", "com.twitter.android.lite"),
+        "tiktok" to listOf("com.zhiliaoapp.musically", "com.ss.android.ugc.trill"),
+        "تيك توك" to listOf("com.zhiliaoapp.musically", "com.ss.android.ugc.trill"),
+        "snapchat" to listOf("com.snapchat.android"),
+        "سناب شات" to listOf("com.snapchat.android"),
+        "سناب" to listOf("com.snapchat.android"),
 
         // Google & Browsers
-        "chrome" to "com.android.chrome",
-        "browser" to "com.android.chrome",
-        "كروم" to "com.android.chrome",
-        "متصفح" to "com.android.chrome",
-        "youtube" to "com.google.android.youtube",
-        "yt" to "com.google.android.youtube",
-        "يوتيوب" to "com.google.android.youtube",
-        "gmail" to "com.google.android.gm",
-        "email" to "com.google.android.gm",
-        "mail" to "com.google.android.gm",
-        "جيميل" to "com.google.android.gm",
-        "بريد" to "com.google.android.gm",
-        "maps" to "com.google.android.apps.maps",
-        "خرائط" to "com.google.android.apps.maps",
-        "photos" to "com.google.android.apps.photos",
-        "gallery" to "com.google.android.apps.photos",
-        "صور" to "com.google.android.apps.photos",
-        "معرض" to "com.google.android.apps.photos",
-        "galerie" to "com.google.android.apps.photos",
-        "play store" to "com.android.vending",
-        "store" to "com.android.vending",
-        "متجر" to "com.android.vending",
-        "بلاي ستور" to "com.android.vending",
+        "chrome" to listOf("com.android.chrome"),
+        "browser" to listOf("com.android.chrome", "org.mozilla.firefox", "com.opera.browser"),
+        "كروم" to listOf("com.android.chrome"),
+        "متصفح" to listOf("com.android.chrome", "org.mozilla.firefox", "com.opera.browser"),
+        "youtube" to listOf("com.google.android.youtube"),
+        "yt" to listOf("com.google.android.youtube"),
+        "يوتيوب" to listOf("com.google.android.youtube"),
+        "gmail" to listOf("com.google.android.gm"),
+        "email" to listOf("com.google.android.gm"),
+        "mail" to listOf("com.google.android.gm"),
+        "جيميل" to listOf("com.google.android.gm"),
+        "بريد" to listOf("com.google.android.gm"),
+        "maps" to listOf("com.google.android.apps.maps"),
+        "خرائط" to listOf("com.google.android.apps.maps"),
+        "photos" to listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d"),
+        "gallery" to listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d"),
+        "صور" to listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d"),
+        "معرض" to listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d"),
+        "galerie" to listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d"),
+        "play store" to listOf("com.android.vending"),
+        "store" to listOf("com.android.vending"),
+        "متجر" to listOf("com.android.vending"),
+        "بلاي ستور" to listOf("com.android.vending"),
 
         // System & Tools
-        "settings" to "com.android.settings",
-        "إعدادات" to "com.android.settings",
-        "اعدادات" to "com.android.settings",
-        "paramètres" to "com.android.settings",
-        "camera" to "com.android.camera",
-        "camera2" to "com.android.camera2",
-        "كاميرا" to "com.android.camera",
-        "phone" to "com.android.dialer",
-        "dialer" to "com.android.dialer",
-        "call" to "com.android.dialer",
-        "هاتف" to "com.android.dialer",
-        "اتصال" to "com.android.dialer",
-        "contacts" to "com.android.contacts",
-        "جهات الاتصال" to "com.android.contacts",
-        "messages" to "com.google.android.apps.messaging",
-        "sms" to "com.google.android.apps.messaging",
-        "رسائل" to "com.google.android.apps.messaging",
-        "calendar" to "com.google.android.calendar",
-        "تقويم" to "com.google.android.calendar",
-        "clock" to "com.google.android.deskclock",
-        "alarm" to "com.google.android.deskclock",
-        "ساعة" to "com.google.android.deskclock",
-        "منبه" to "com.google.android.deskclock",
-        "horloge" to "com.google.android.deskclock",
-        "calculator" to "com.google.android.calculator",
-        "حاسبة" to "com.google.android.calculator",
-        "files" to "com.google.android.documentsui",
-        "file manager" to "com.google.android.documentsui",
-        "ملفات" to "com.google.android.documentsui",
-        "مدير الملفات" to "com.google.android.documentsui",
+        "settings" to listOf("com.android.settings"),
+        "إعدادات" to listOf("com.android.settings"),
+        "اعدادات" to listOf("com.android.settings"),
+        "paramètres" to listOf("com.android.settings"),
+        "camera" to listOf("com.android.camera", "com.android.camera2", "com.google.android.GoogleCamera"),
+        "camera2" to listOf("com.android.camera2", "com.android.camera"),
+        "كاميرا" to listOf("com.android.camera", "com.android.camera2", "com.google.android.GoogleCamera"),
+        "phone" to listOf("com.android.dialer", "com.google.android.dialer"),
+        "dialer" to listOf("com.android.dialer", "com.google.android.dialer"),
+        "call" to listOf("com.android.dialer", "com.google.android.dialer"),
+        "هاتف" to listOf("com.android.dialer", "com.google.android.dialer"),
+        "اتصال" to listOf("com.android.dialer", "com.google.android.dialer"),
+        "contacts" to listOf("com.android.contacts", "com.google.android.contacts"),
+        "جهات الاتصال" to listOf("com.android.contacts", "com.google.android.contacts"),
+        "messages" to listOf("com.google.android.apps.messaging", "com.android.mms"),
+        "sms" to listOf("com.google.android.apps.messaging", "com.android.mms"),
+        "رسائل" to listOf("com.google.android.apps.messaging", "com.android.mms"),
+        "calendar" to listOf("com.google.android.calendar"),
+        "تقويم" to listOf("com.google.android.calendar"),
+        "clock" to listOf("com.google.android.deskclock", "com.android.deskclock"),
+        "alarm" to listOf("com.google.android.deskclock", "com.android.deskclock"),
+        "ساعة" to listOf("com.google.android.deskclock", "com.android.deskclock"),
+        "منبه" to listOf("com.google.android.deskclock", "com.android.deskclock"),
+        "horloge" to listOf("com.google.android.deskclock", "com.android.deskclock"),
+        "calculator" to listOf("com.google.android.calculator", "com.android.calculator2"),
+        "حاسبة" to listOf("com.google.android.calculator", "com.android.calculator2"),
+        "files" to listOf("com.google.android.documentsui", "com.android.documentsui"),
+        "file manager" to listOf("com.google.android.documentsui", "com.android.documentsui"),
+        "ملفات" to listOf("com.google.android.documentsui", "com.android.documentsui"),
+        "مدير الملفات" to listOf("com.google.android.documentsui", "com.android.documentsui"),
 
         // Media
-        "spotify" to "com.spotify.music",
-        "سبوتيفاي" to "com.spotify.music",
-        "netflix" to "com.netflix.mediaclient",
-        "نتفلكس" to "com.netflix.mediaclient"
+        "spotify" to listOf("com.spotify.music"),
+        "سبوتيفاي" to listOf("com.spotify.music"),
+        "netflix" to listOf("com.netflix.mediaclient"),
+        "نتفلكس" to listOf("com.netflix.mediaclient")
     )
 
+    val KNOWN_PACKAGES: Map<String, String> = PACKAGE_CANDIDATES.mapValues { it.value.first() }
+
     /**
-     * Cleans app name by stripping command verbs, articles, and "app" keywords.
+     * Cleans app name by stripping command verbs, polite prefixes, articles, and "app" keywords.
      */
     fun cleanAppName(raw: String): String {
         return raw.lowercase().trim()
-            .replace(Regex("""^(?:please\s+)?(?:open|launch|start|run|ouvre|lance|افتح|شغل|حل|خدم)\s+""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""^(?:can you\s+|could you\s+|please\s+|for\s+|to\s+|pour\s+|من فضلك\s+|ممكن\s+|عافاك\s+|بغيتك\s+)?(?:open|launch|start|run|ouvre|lance|lancer|ouvrir|افتح|شغل|حل|خدم)\s+""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""^(?:the|l'application|l'app|l'|application|app|تطبيق|برنامج)\s+""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\s+(?:application|app|تطبيق|برنامج)$""", RegexOption.IGNORE_CASE), "")
             .trim()
@@ -120,25 +124,30 @@ object AppLauncher {
      */
     fun extractAppLaunchTarget(command: String): String? {
         val clean = command.trim()
-        if (clean.length > 70) return null
+        if (clean.length > 100) return null
         val lower = clean.lowercase()
         if (lower.contains(" and ") || lower.contains(" then ") || lower.contains(" ثم ") ||
             lower.contains("write ") || lower.contains("create ") || lower.contains("code ") ||
-            lower.contains("اصنع ") || lower.contains("اكتب ") || lower.contains("برمج ")) {
+            lower.contains("اصنع ") || lower.contains("اكتب ") || lower.contains("برمج ") ||
+            lower.contains("build ") || lower.contains("make ") || lower.contains("develop ")) {
             return null
         }
 
+        val stripped = clean
+            .replace(Regex("""^(?:can you|could you|would you|please|i want to|i want you to|for|to|pour|من فضلك|ممكن|عافاك|بغيتك)\s+""", RegexOption.IGNORE_CASE), "")
+            .trim()
+
         val patterns = listOf(
-            // English: [please] open/launch/start/run [the] [app] <target> [app]
-            Regex("""^(?:please\s+)?(?:open|launch|start|run)\s+(?:the\s+)?(?:app\s+)?([a-zA-Z0-9_\u0600-\u06FF\s]+?)(?:\s+app|\s+application)?$""", RegexOption.IGNORE_CASE),
-            // French: [s'il vous plait] ouvre/lance [l'application/l'app] <target>
-            Regex("""^(?:s'il vous plait\s+)?(?:ouvre|lance)\s+(?:l'application\s+|l'app\s+|l'\s+)?([a-zA-Z0-9_\u0600-\u06FF\s]+?)(?:\s+application|\s+app)?$""", RegexOption.IGNORE_CASE),
-            // Arabic / Darija: [من فضلك] افتح/شغل/حل/خدم [تطبيق/برنامج] <target>
-            Regex("""^(?:من فضلك\s+)?(?:افتح|شغل|حل|خدم)\s+(?:تطبيق\s+|برنامج\s+)?([a-zA-Z0-9_\u0600-\u06FF\s]+?)(?:\s+تطبيق|\s+برنامج)?$""", RegexOption.IGNORE_CASE)
+            // English: [open/launch/start/run] [the] [app] <target> [app]
+            Regex("""^(?:open|launch|start|run)\s+(?:the\s+)?(?:app\s+)?([a-zA-Z0-9_\u0600-\u06FF\s]+?)(?:\s+app|\s+application)?$""", RegexOption.IGNORE_CASE),
+            // French: [ouvre/lance/ouvrir/lancer] [l'application/l'app] <target>
+            Regex("""^(?:ouvre|lance|ouvrir|lancer)\s+(?:l'application\s+|l'app\s+|l'\s+)?([a-zA-Z0-9_\u0600-\u06FF\s]+?)(?:\s+application|\s+app)?$""", RegexOption.IGNORE_CASE),
+            // Arabic / Darija: [افتح/شغل/حل/خدم] [تطبيق/برنامج] <target>
+            Regex("""^(?:افتح|شغل|حل|خدم)\s+(?:تطبيق\s+|برنامج\s+)?([a-zA-Z0-9_\u0600-\u06FF\s]+?)(?:\s+تطبيق|\s+برنامج)?$""", RegexOption.IGNORE_CASE)
         )
 
         for (p in patterns) {
-            val match = p.find(clean)
+            val match = p.find(stripped)
             if (match != null) {
                 val target = match.groupValues[1].trim()
                 if (target.isNotBlank() && !target.contains(".") && !target.contains("/") && !target.contains("http")) {
@@ -151,61 +160,68 @@ object AppLauncher {
 
     /**
      * Launches the requested application on the Android device.
-     * Tries SynapseAccessibilityService first, and falls back to Context PackageManager.
+     * Tries candidate packages and package manager activity label resolution via standard OS Intents.
      */
     fun launch(context: Context?, appName: String): Boolean {
         val clean = cleanAppName(appName)
         Log.i(TAG, "Attempting to launch app: '$clean' (raw: '$appName')")
 
-        // 1. Accessibility Service Execution
-        val service = SynapseAccessibilityService.instance
-        if (service != null && service.launchApp(clean)) {
-            return true
-        }
-
-        // 2. Direct Context Activity Launch Fallback
-        val ctx = context ?: MainActivity.instance ?: SynapseAccessibilityService.instance ?: return false
+        val ctx = context ?: MainActivity.instance ?: return false
         val pm = ctx.packageManager
 
-        val resolvedPkg = KNOWN_PACKAGES[clean]
-            ?: KNOWN_PACKAGES[clean.replace(" ", "")]
-            ?: run {
-                // Check direct package name
-                try {
-                    pm.getPackageInfo(clean, 0)
-                    clean
-                } catch (_: Exception) {
-                    // Search launcher activity labels
-                    try {
-                        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                        val list = pm.queryIntentActivities(intent, 0)
-                        list.find { it.loadLabel(pm).toString().equals(clean, ignoreCase = true) }?.activityInfo?.packageName
-                            ?: list.find { it.loadLabel(pm).toString().contains(clean, ignoreCase = true) }?.activityInfo?.packageName
-                    } catch (_: Exception) {
-                        null
-                    }
+        // Collect candidate packages in priority order
+        val candidates = mutableListOf<String>()
+        PACKAGE_CANDIDATES[clean]?.let { candidates.addAll(it) }
+        PACKAGE_CANDIDATES[clean.replace(" ", "")]?.let { candidates.addAll(it) }
+        KNOWN_PACKAGES[clean]?.let { if (!candidates.contains(it)) candidates.add(it) }
+        KNOWN_PACKAGES[clean.replace(" ", "")]?.let { if (!candidates.contains(it)) candidates.add(it) }
+
+        if (clean.contains(".")) {
+            candidates.add(clean)
+        }
+
+        // 1. Try launching through Context PackageManager candidates
+        for (pkg in candidates) {
+            try {
+                val intent = pm.getLaunchIntentForPackage(pkg)
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    ctx.startActivity(intent)
+                    Log.i(TAG, "Successfully launched candidate package via Intent: $pkg")
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Candidate $pkg launch check failed: ${e.message}")
+            }
+        }
+
+        // 2. Query launcher activities dynamically
+        try {
+            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val activities = pm.queryIntentActivities(launcherIntent, 0)
+            val match = activities.find { 
+                it.loadLabel(pm).toString().equals(clean, ignoreCase = true) 
+            } ?: activities.find {
+                it.loadLabel(pm).toString().contains(clean, ignoreCase = true)
+            } ?: activities.find {
+                it.activityInfo.packageName.contains(clean, ignoreCase = true)
+            }
+
+            if (match != null) {
+                val pkg = match.activityInfo.packageName
+                val intent = pm.getLaunchIntentForPackage(pkg)
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    ctx.startActivity(intent)
+                    Log.i(TAG, "Successfully launched query activity via Intent: $pkg")
+                    return true
                 }
             }
-
-        if (resolvedPkg == null) {
-            Log.w(TAG, "Could not resolve package for app name: '$clean'")
-            return false
-        }
-
-        return try {
-            val launchIntent = pm.getLaunchIntentForPackage(resolvedPkg)
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                ctx.startActivity(launchIntent)
-                Log.i(TAG, "Launched via Context: $resolvedPkg")
-                true
-            } else {
-                Log.w(TAG, "No launch intent found for: $resolvedPkg")
-                false
-            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error launching package $resolvedPkg: ${e.message}")
-            false
+            Log.w(TAG, "Failed querying launcher activities: ${e.message}")
         }
+
+        Log.w(TAG, "All launch strategies exhausted for app: '$clean'")
+        return false
     }
 }

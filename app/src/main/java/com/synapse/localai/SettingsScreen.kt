@@ -945,20 +945,6 @@ fun SettingsScreenContent(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     ServiceToggle(
-                        title = "Autonomous Controller",
-                        description = "Screen perception and gesture control.",
-                        isActive = uiState.isAccessibilityActive,
-                        onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                    )
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-                    ServiceToggle(
-                        title = "Neural Keyboard",
-                        description = "AI text injection.",
-                        isActive = uiState.isKeyboardActive,
-                        onClick = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
-                    )
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-                    ServiceToggle(
                         title = "Real-time Perceptor",
                         description = "Monitor notifications.",
                         isActive = uiState.isNotificationActive,

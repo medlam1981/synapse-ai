@@ -111,8 +111,6 @@ data class AgentUiState(
     val lastExecutionResult: String = "",
     val currentKeyIndex: Int = 0,
     val totalKeys: Int = 0,
-    val isAccessibilityActive: Boolean = false,
-    val isKeyboardActive: Boolean = false,
     val isNotificationActive: Boolean = false,
     val isRootAvailable: Boolean = false,
     val streamInterruptMsg: String? = null,
@@ -184,7 +182,6 @@ class AgentViewModel : ViewModel() {
     
     private var coreMission: String = ""
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
-    private var lastScreenContext: String = ""
 
 
     private fun isExecutableCodeStreaming(text: String): Boolean {
@@ -468,15 +465,6 @@ class AgentViewModel : ViewModel() {
     }
 
     fun updateServiceStatus(context: Context) {
-        val isAccessibilityActive = SynapseAccessibilityService.instance != null
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
-        val enabledImes = imm.enabledInputMethodList
-        val pkgName = context.packageName
-        
-        val isKeyboardActive = enabledImes.any { 
-            it.packageName == pkgName && it.serviceName.contains("SynapseKeyboardIME")
-        } || SynapseKeyboardIME.instance != null
-
         val isNotificationActive = try {
             val enabledListeners = android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: ""
             enabledListeners.contains(context.packageName)
@@ -485,8 +473,6 @@ class AgentViewModel : ViewModel() {
         }
 
         _uiState.update { it.copy(
-            isAccessibilityActive = isAccessibilityActive,
-            isKeyboardActive = isKeyboardActive,
             isNotificationActive = isNotificationActive
         ) }
     }
@@ -652,7 +638,7 @@ class AgentViewModel : ViewModel() {
         val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         if (keys.isEmpty()) return
         
-        val targetCtx = context ?: appContext ?: SynapseAccessibilityService.instance ?: MainActivity.instance
+        val targetCtx = context ?: appContext ?: MainActivity.instance
         val savedIdx = targetCtx?.let { prefs(it).getInt("current_key_index", 0) } ?: _uiState.value.currentKeyIndex
         val safeInitialIdx = if (keys.isNotEmpty()) savedIdx.coerceIn(0, keys.size - 1) else 0
 
@@ -712,20 +698,14 @@ class AgentViewModel : ViewModel() {
     private fun getToolsDescription(): String {
         return """
 ## Host Action & System Toolchains:
-You have direct, unconstrained access to the host Android system through these toolchains:
+You have direct programmatic access to the host Android system through these toolchains:
 
 1. `run_shell(command: String)`: Execute terminal or shell commands directly on the host Android device with Superuser/Root permissions.
 2. `web_search(query: String)`: Search the web silently for real-time facts, documentation, or live information.
-3. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed headless background execution.
-4. `queue_background_task(command: String)`: Queue a background automation script or command into the local Task Engine (tsk).
-5. `open_app(app_name: String)`: Launch any installed Android application.
-6. `click(index: Int)`: Click UI elements on screen by Accessibility index.
-7. `type(text: String)`: Type text into active focused Android UI input fields.
-8. `swipe(direction: String)`: Perform touch swipe gestures ("up", "down", "left", "right").
-9. `go_back()`: Trigger the Android system Back navigation button.
-10. `go_home()`: Trigger the Android system Home navigation button.
-11. `press_enter()`: Simulate the Enter/Search key on Android keyboard.
-12. `complete(summary: String)`: Terminate and finalize an active multi-step automation mission.
+3. `open_app(app_name: String)`: Launch any installed Android application via standard OS Intent.
+4. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed headless background execution.
+5. `queue_background_task(command: String)`: Queue a background automation script or command into the local Task Engine (tsk).
+6. `complete(summary: String)`: Terminate and finalize an active multi-step automation mission.
 
 Format for calling tools:
 <function_calls>
@@ -758,17 +738,17 @@ The file execution engine automatically parses this block and writes the file di
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """You are MEDLAM-AI, an autonomous on-device AI system controller on Android ARM64.
+            return """You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
-CRITICAL: When the user asks to open/launch an app or control the device, NEVER write HTML or code files! You MUST invoke open_app immediately.
+CRITICAL: When the user asks to open or launch an app, NEVER write HTML or code files! You MUST invoke `open_app(app_name)` immediately.
 Format for calling tools:
 <function_calls>
 <invoke name="tool_name">
 <parameter name="param_name">value</parameter>
 </invoke>
 </function_calls>
-Available tools: open_app(app_name), run_shell(command), web_search(query), click(index), type(text), swipe(direction), go_back(), go_home(), press_enter(), complete(summary).
+Available tools: run_shell(command), web_search(query), open_app(app_name), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
@@ -788,7 +768,8 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
 
         // 3. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
-## Host Toolchains & Guidelines:
+## Host Toolchains & Execution Guidelines:
+You are an autonomous on-device development and CLI agent. You have NO ability to touch, click, scroll, or interact with graphical user interfaces (GUIs). You do NOT have accessibility permissions. Solve all tasks programmatically via shell commands, code synthesis, script automation, and file manipulation.
 - Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
 - Deliver code strictly inside ```lang code fences only when programming or requested to write code.
 - Device & App Launch Rules: When asked to open or launch an app, NEVER generate HTML or code files! You MUST invoke `open_app(app_name)`.
@@ -798,7 +779,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
-- Available tools: run_shell(command), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), open_app(app_name), click(index), type(text), swipe(direction), go_back(), go_home(), press_enter(), complete(summary).
+- Available tools: run_shell(command), web_search(query), open_app(app_name), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
@@ -906,7 +887,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
             return
         }
 
-        val service = SynapseAccessibilityService.instance
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isProcessing = true) }
             
@@ -955,17 +935,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                         "No model active. Please add Gemini API keys or choose a GGUF model in Settings."
                     addLog(LogEntry(sender = "AGENT", text = hint, isError = false))
                     return@launch
-                }
-
-                // Conversational intelligence: do NOT capture screen on casual dialogue or greetings
-                val isCasual = isCasualGreetingOrChat(finalCommand)
-                if (modelType != ModelType.GGUF && !isCasual && (finalCommand.contains("open", true) || finalCommand.contains("click", true) || finalCommand.contains("app", true))) {
-                    val phoneState = service?.getDroidrunPhoneState() ?: ""
-                    val screenTree = service?.getDroidrunScreenTree() ?: ""
-                    val rawScreen = "\n[Current State]:\n$phoneState\n\n$screenTree"
-                    lastScreenContext = if (rawScreen.length > 1200) rawScreen.take(1200) + "\n...[screen tree truncated]" else rawScreen
-                } else {
-                    lastScreenContext = ""
                 }
                 
                 synchronized(conversationHistory) {
@@ -1019,16 +988,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                                 role to safeContent
                             }
                         }
-                        val historyWithScreen = historyCopy.toMutableList()
-                        if (lastScreenContext.isNotBlank() && historyWithScreen.isNotEmpty()) {
-                            val lastIdx = historyWithScreen.indexOfLast { it.first == "user" }
-                            if (lastIdx >= 0) {
-                                val (role, content) = historyWithScreen[lastIdx]
-                                historyWithScreen[lastIdx] = role to content + lastScreenContext
-                            }
-                            lastScreenContext = "" // Reset after single use to avoid re-sending screen dumps in future turns
-                        }
-
                         var lastUiUpdateTime = 0L
                         var pendingUiUpdate = false
 
@@ -1086,7 +1045,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
 
                         val stream = when (modelType) {
                             ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(
-                                history = historyWithScreen,
+                                history = historyCopy,
                                 systemPrompt = systemPrompt,
                                 onSpeedUpdate = { tps ->
                                     _uiState.update { it.copy(tokensPerSecond = tps) }
@@ -1094,9 +1053,9 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                             )
                             ModelType.GEMINI -> {
                                 val json = JSONArray()
-                                historyWithScreen.forEachIndexed { i, (r, c) ->
+                                historyCopy.forEachIndexed { i, (r, c) ->
                                     val m = JSONObject().put("role", r).put("content", c)
-                                    if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
+                                    if (i == historyCopy.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
                                     json.put(m)
                                 }
                                 geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
@@ -1178,9 +1137,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                             if (usedTools) {
                                 toolsUsedThisTurn = true
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL) }
-                                if (_uiState.value.activeModelType != ModelType.GGUF) {
-                                    lastScreenContext = "\n[Current State]:\n${service?.getDroidrunPhoneState()}\n\n${service?.getDroidrunScreenTree()}"
-                                }
                                 keepGoing = true
                             } else {
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
@@ -1250,23 +1206,18 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
     }
 
     suspend fun executeBackgroundTask(command: String, taskId: String? = null): String {
-        val service = SynapseAccessibilityService.instance
         val modelType = _uiState.value.activeModelType
             ?: throw IllegalStateException("No model loaded")
         if (!isModelLoaded()) throw IllegalStateException("Model not ready")
         
-        service?.acquireWakeLock()
+        val ctx = appContext ?: MainActivity.instance
+        val pm = ctx?.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        val wakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "synapse:BackgroundTask")
+        wakeLock?.acquire(10 * 60 * 1000L)
         
         try {
             val taskHistory = mutableListOf<Pair<String, String>>()
             taskHistory.add("user" to command)
-            
-            if (modelType != ModelType.GGUF && service != null) {
-                val pState = service.getDroidrunPhoneState()
-                val sTree = service.getDroidrunScreenTree()
-                val screenData = "\n[Current State]:\n$pState\n\n$sTree".take(1200)
-                taskHistory[0] = "user" to command + screenData
-            }
             
             val systemPrompt = buildSystemPrompt(null, forLocalModel = modelType == ModelType.GGUF)
             val resultSb = StringBuilder()
@@ -1304,13 +1255,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                 
                 val (usedTools, summary) = executeToolLoop(response)
                 if (usedTools) {
-                    if (modelType != ModelType.GGUF && service != null) {
-                        delay(1500)
-                        val pState = service.getDroidrunPhoneState()
-                        val sTree = service.getDroidrunScreenTree()
-                        val nextScreen = "[Next State]:\n$pState\n\n$sTree".take(1200)
-                        taskHistory.add("user" to nextScreen)
-                    }
+                    // Headless tool execution completed, continue loop if needed
                 } else {
                     resultSb.append(summary ?: reply)
                     keepGoing = false
@@ -1322,7 +1267,9 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
             return result
             
         } finally {
-            service?.releaseWakeLock()
+            if (wakeLock?.isHeld == true) {
+                wakeLock.release()
+            }
             updateTaskState()
         }
     }
@@ -1342,8 +1289,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
     }
 
     private suspend fun executeToolLoop(response: String): Pair<Boolean, String?> {
-        val service = SynapseAccessibilityService.instance
-
         try {
             val writtenFiles = withContext(Dispatchers.IO) {
                 ToolExecutor.extractAndWriteFiles(response)
@@ -1420,18 +1365,12 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                     }
                     "open_app" -> {
                         val appName = params["app_name"] ?: params["name"] ?: ""
-                        val targetCtx = service ?: MainActivity.instance
-                        val ok = AppLauncher.launch(targetCtx, appName)
+                        val targetCtx = appContext ?: MainActivity.instance
+                        val ok = if (targetCtx != null) AppLauncher.launch(targetCtx, appName) else false
                         val displayName = appName.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
                         finalSummary = if (ok) "Opened $displayName successfully." else "Could not find or open app \"$appName\"."
                         return false to finalSummary
                     }
-                    "click" -> service?.clickByIndex(params["index"]?.toIntOrNull() ?: -1)
-                    "type" -> service?.typeText(params["text"] ?: "")
-                    "swipe" -> service?.scrollScreen(params["direction"] ?: "down")
-                    "go_back" -> service?.goBack()
-                    "go_home" -> service?.goHome()
-                    "press_enter" -> service?.pressEnter()
                     "complete" -> { 
                         finalSummary = params["summary"]
                         return false to finalSummary 
