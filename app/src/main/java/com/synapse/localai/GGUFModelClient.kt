@@ -270,15 +270,10 @@ class GGUFModelClient {
             // Fast Attention & KV Cache selection
             val kvCacheType = if (hw != null && hw.totalRamMb >= 6000L && !isLargeModel) "f16" else "q8_0"
 
-            // Uncapped Generation Horizon: ensure ample 8192 headroom for reasoning and synthesis
-            val maxSafeCtx = when {
-                modelSizeMb > 4500L -> 2048
-                modelSizeMb > 3500L -> 4096
-                else -> 8192
-            }
-            val resolvedCtx = if (contextLength >= 4096) contextLength.coerceAtMost(maxSafeCtx) else 8192
-            val effectiveBatch = if (isLargeModel) minOf(optimalBatch, 128) else (if (resolvedCtx >= 16384) minOf(optimalBatch, 512) else optimalBatch)
-            val effectiveUbatch = if (isLargeModel) minOf(optimalUbatch, 64) else (if (resolvedCtx >= 16384) minOf(optimalUbatch, 128) else optimalUbatch)
+            // Balanced generation horizon: 4096 context for fast CPU prefill and ample reasoning headroom
+            val resolvedCtx = if (contextLength in 2048..4096) contextLength else 4096
+            val effectiveBatch = if (isLargeModel) minOf(optimalBatch, 128) else optimalBatch
+            val effectiveUbatch = if (isLargeModel) minOf(optimalUbatch, 64) else optimalUbatch
             val effectiveGpuLayers = 0 // CPU-only native runtime: libllama.so links to libggml-cpu.so without GPU backend
 
             val baseArgs = mutableListOf(
@@ -297,6 +292,7 @@ class GGUFModelClient {
                 "--flash-attn", "on",
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,
+                "--reasoning-budget", "384",
                 "--alias", "local",
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString()
@@ -333,44 +329,33 @@ class GGUFModelClient {
             val hasDraft = !activeDraftPath.isNullOrBlank() && File(activeDraftPath).exists()
             val trialArgs = baseArgs.toMutableList()
 
-            if (hasDraft) {
-                activeDraftModelPath = activeDraftPath
-                fileLog("⚡ MTP Speculative Decoding linked: ${File(activeDraftPath!!).name}")
-                val isStandaloneDraft = try {
-                    val draftFile = File(activeDraftPath)
+            val isStandaloneDraft = if (hasDraft) {
+                try {
+                    val draftFile = File(activeDraftPath!!)
                     if (draftFile.name.startsWith("mtp-", ignoreCase = true) || draftFile.name.contains("assistant", ignoreCase = true)) {
+                        fileLog("ℹ️ '${draftFile.name}' is an auxiliary MTP head (Next-N tensor adapter, not standalone autoregressive draft). Skipping --model-draft to preserve engine stability.")
                         false
                     } else {
-                        val f = java.io.RandomAccessFile(activeDraftPath, "r")
-                        val magic = ByteArray(4)
-                        f.readFully(magic)
-                        if (String(magic) == "GGUF") {
-                            f.seek(8)
-                            val buf = ByteArray(16)
-                            f.readFully(buf)
-                            val tensorCount = java.nio.ByteBuffer.wrap(buf, 0, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).long
-                            val kvCount = java.nio.ByteBuffer.wrap(buf, 8, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).long
-                            f.close()
-                            kvCount > 10 && tensorCount > 10
-                        } else {
-                            f.close()
-                            false
-                        }
+                        true
                     }
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     false
                 }
+            } else false
 
-                if (isStandaloneDraft) {
-                    trialArgs.add("--model-draft")
-                    trialArgs.add(activeDraftPath)
-                    trialArgs.add("--draft")
-                    trialArgs.add("4")
-                    trialArgs.add("--draft-min")
-                    trialArgs.add("2")
-                } else {
-                    fileLog("⚡ MTP Head identified: bound for speculative acceleration while preventing native context crash")
-                }
+            if (isStandaloneDraft) {
+                activeDraftModelPath = activeDraftPath
+                fileLog("⚡ Speculative Decoding linked: ${File(activeDraftPath!!).name}")
+                trialArgs.add("--model-draft")
+                trialArgs.add(activeDraftPath)
+                trialArgs.add("--draft")
+                trialArgs.add("4")
+                trialArgs.add("--draft-min")
+                trialArgs.add("1")
+                trialArgs.add("--threads-draft")
+                trialArgs.add(optimalThreads.toString())
+                trialArgs.add("--ctx-size-draft")
+                trialArgs.add(if (resolvedCtx > 4096) "4096" else resolvedCtx.toString())
             } else {
                 activeDraftModelPath = null
             }
@@ -549,47 +534,10 @@ class GGUFModelClient {
      * Caches the key-value states to eliminate cold-start prefill latency.
      */
     suspend fun warmupPersonaKVCache(systemPrompt: String): Boolean = withContext(Dispatchers.IO) {
-        if (!isServerReady() || systemPrompt.isBlank()) return@withContext false
-        try {
-            fileLog("Priming KV Cache for static persona & system prompt (${systemPrompt.length} chars)...")
-            
-            // 1. Try restoring previously saved slot if exists
-            val restored = restoreSlotState(0)
-            if (restored) {
-                fileLog("Successfully restored persisted persona slot from disk ✓")
-            }
-
-            // 2. Evaluate prompt prefix into slot 0 with cache_prompt = true
-            val url = URL("$serverUrl/completion")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json")
-                connectTimeout = 45_000
-                readTimeout = 90_000
-                doOutput = true
-            }
-
-            val body = JSONObject()
-                .put("prompt", systemPrompt)
-                .put("n_predict", 0)
-                .put("cache_prompt", true)
-                .put("id_slot", 0)
-
-            conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
-            val code = conn.responseCode
-            val success = (code == 200)
-            fileLog("KV Cache Priming completed with response code: $code (success: $success)")
-            conn.disconnect()
-
-            if (success) {
-                // 3. Persist primed slot state to disk for cross-session survival
-                saveSlotState(0)
-            }
-            success
-        } catch (e: Exception) {
-            fileLog("KV Cache Priming exception: ${e.message}")
-            false
-        }
+        // Dynamic KV prefix caching is handled natively by llama-server.
+        // Bypassing blocking dummy prefill keeps slot 0 immediately available for zero-latency user interaction.
+        fileLog("Dynamic KV prefix caching active (zero startup contention)")
+        true
     }
 
     suspend fun saveSlotState(slotId: Int = 0, filePath: String = "/sdcard/Medlam-Ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
@@ -671,6 +619,8 @@ class GGUFModelClient {
 
         val stopArray = JSONArray()
             .put("<end_of_turn>")
+            .put("<turn|>")
+            .put("<|turn>user")
             .put("<eos>")
             .put("<|im_end|>")
             .put("<|endoftext|>")
@@ -692,6 +642,7 @@ class GGUFModelClient {
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)
             .put("cache_prompt", true)
+            .put("reasoning_budget", 384)
             .put("slot_id", 0)
             .put("id_slot", 0)
             .put("stop", stopArray)

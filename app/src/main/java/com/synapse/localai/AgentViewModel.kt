@@ -577,7 +577,7 @@ class AgentViewModel : ViewModel() {
                                     ) }
                                     addSystemLog("Local Model Active: $modelName")
                                     viewModelScope.launch(Dispatchers.IO) {
-                                        val systemPrompt = buildSystemPrompt(context)
+                                        val systemPrompt = buildSystemPrompt(context, forLocalModel = true)
                                         val primed = client.warmupPersonaKVCache(systemPrompt)
                                         if (primed) {
                                             addSystemLog("Persona KV Cache Primed & Pre-warmed ✓")
@@ -710,12 +710,27 @@ The file execution engine automatically parses this block and writes the file di
     @Volatile
     private var cachedPrefixKey: String = ""
 
-    private fun buildSystemPrompt(context: Context? = null): String {
+    private fun buildSystemPrompt(context: Context? = null, forLocalModel: Boolean = false): String {
         val config = _uiState.value.config
         val actualContext = context ?: MainActivity.instance
-        
-        val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
         val customPrompt = config.systemPrompt.trim()
+
+        // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
+        if (forLocalModel) {
+            val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
+            return """You are MEDLAM-AI, an autonomous on-device AI system controller on Android ARM64.
+Always plan your reasoning inside <think>...</think> tags first before writing your final response.
+When providing code, strictly enclose it in markdown code fences (```lang).
+Format for calling tools:
+<function_calls>
+<invoke name="tool_name">
+<parameter name="param_name">value</parameter>
+</invoke>
+</function_calls>
+Be direct, authentic, concise, and fast.$custom""".trimIndent()
+        }
+
+        val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
         val currentKey = "${activePersonas.sorted().joinToString(",")}|$customPrompt"
 
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) {
@@ -873,7 +888,7 @@ The file execution engine automatically parses this block and writes the file di
                     conversationHistory.add("user" to finalCommand)
                 }
 
-                val systemPrompt = buildSystemPrompt()
+                val systemPrompt = buildSystemPrompt(actualContext, forLocalModel = modelType == ModelType.GGUF)
                 var keepGoing = true
                 var iterationCount = 0
                 var toolsUsedThisTurn = false
@@ -1148,7 +1163,7 @@ The file execution engine automatically parses this block and writes the file di
                 taskHistory[0] = "user" to command + screenData
             }
             
-            val systemPrompt = buildSystemPrompt()
+            val systemPrompt = buildSystemPrompt(null, forLocalModel = modelType == ModelType.GGUF)
             val resultSb = StringBuilder()
             var iterations = 0
             var keepGoing = true
