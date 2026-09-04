@@ -30,6 +30,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
+            android:alwaysRetainTaskState="true"
             android:windowSoftInputMode="adjustResize"
             android:theme="@android:style/Theme.Material.NoActionBar">
             <intent-filter>
@@ -41,8 +43,7 @@
         <service
             android:name=".ModelEngineService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|dataSync"
-            android:process=":engine">
+            android:foregroundServiceType="specialUse|dataSync">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Local LLM AI Model Execution Engine" />

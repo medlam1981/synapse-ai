@@ -40,9 +40,10 @@ object StreamDemultiplexer {
     private val THINK_TAGS = listOf(
         ThinkTagDef("<think>", "</think>"),
         ThinkTagDef("<|think|>", "<|/think|>"),
-        ThinkTagDef("<|think|>", "<|thought|>"),
+        ThinkTagDef("<|thought|>", "<|/thought|>"),
         ThinkTagDef("<thought>", "</thought>"),
-        ThinkTagDef("<reasoning>", "</reasoning>")
+        ThinkTagDef("<reasoning>", "</reasoning>"),
+        ThinkTagDef("<|reasoning|>", "<|/reasoning|>")
     )
 
     /**
@@ -71,7 +72,7 @@ object StreamDemultiplexer {
         val fencedThoughtMatch = Regex("""```(?:thought|thinking|reasoning)\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
             .find(workingText)
         if (fencedThoughtMatch != null) {
-            extractedThought = fencedThoughtMatch.groupValues[1].trim()
+            extractedThought = fencedThoughtMatch.groupValues[1].trimStart()
             currentlyThinking = !fencedThoughtMatch.value.endsWith("```")
             workingText = workingText.removeRange(fencedThoughtMatch.range).trim()
         }
@@ -85,7 +86,9 @@ object StreamDemultiplexer {
                     val closeIdx = afterOpen.indexOf(tagDef.close)
                     if (closeIdx == -1) {
                         // Unclosed thinking tag: currently in active thinking phase!
-                        extractedThought = afterOpen.trim()
+                        // Preserve trailing whitespace for real-time letter-by-letter typing and strip partial closing tag
+                        val rawThought = afterOpen.trimStart()
+                        extractedThought = rawThought.replace(Regex("""</?[a-zA-Z0-9_|]*$"""), "")
                         currentlyThinking = true
                         workingText = workingText.substring(0, openIdx).trim()
                     } else {
@@ -101,10 +104,10 @@ object StreamDemultiplexer {
             }
         }
 
-        val finalThinkingText = if (extractedThought.isNotBlank()) {
+        val finalThinkingText = if (extractedThought.isNotEmpty()) {
             extractedThought
         } else {
-            externalThinkingText.trim()
+            externalThinkingText
         }
 
         val finalIsThinking = currentlyThinking || (externalIsThinking && finalThinkingText.isNotBlank())

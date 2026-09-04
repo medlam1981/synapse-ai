@@ -258,8 +258,10 @@ class AgentViewModel : ViewModel() {
         val thinkEnd = afterStart.indexOf("</think>")
 
         return if (thinkEnd == -1) {
+            val rawThought = afterStart.trimStart()
+            val cleanThought = rawThought.replace(Regex("""</?[a-zA-Z0-9_|]*$"""), "")
             ParsedThought(
-                thought = afterStart.trim(),
+                thought = cleanThought,
                 isThinking = true,
                 content = prefix
             )
@@ -992,8 +994,8 @@ The file execution engine automatically parses this block and writes the file di
                         stream.collect { chunk ->
                             responseSb.append(chunk)
                             val now = System.currentTimeMillis()
-                            // Decouple incoming tokens from UI rendering: buffer/throttle UI recomposition to 20 FPS (50ms)
-                            if (now - lastUiUpdateTime >= 50L) {
+                            // Real-time letter-by-letter stream: 16ms (60 FPS) throttle gives instant smooth UI updates
+                            if (now - lastUiUpdateTime >= 16L) {
                                 lastUiUpdateTime = now
                                 pushUiUpdate(responseSb.toString())
                                 pendingUiUpdate = false
