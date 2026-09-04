@@ -259,6 +259,23 @@ object ToolExecutor {
 
             return writtenFiles.toList()
         }
+
+        @Synchronized
+        fun reset() {
+            try {
+                currentWriter?.flush()
+                currentWriter?.close()
+                currentFos?.close()
+            } catch (_: Exception) {}
+            currentWriter = null
+            currentFos = null
+            currentFile = null
+            inCodeBlock = false
+            pendingFilePath = null
+            lastWrittenOffset = 0
+            lastProcessedOffset = 0
+            writtenFiles.clear()
+        }
     }
 
     /**

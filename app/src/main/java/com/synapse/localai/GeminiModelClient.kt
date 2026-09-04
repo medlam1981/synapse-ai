@@ -18,13 +18,20 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlin.coroutines.coroutineContext
 
 class GeminiModelClient(
     private val apiKeys: List<String>,
     initialKeyIndex: Int = 0,
     private val onKeyRotated: ((Int) -> Unit)? = null,
-    private val onKeyUsed: ((String) -> Unit)? = null
+    private val onKeyUsed: ((String) -> Unit)? = null,
+    private val onKeyValidated: ((Int) -> Unit)? = null
 ) {
 
     companion object {
@@ -32,8 +39,9 @@ class GeminiModelClient(
     }
 
     private var currentKeyIndex = initialKeyIndex.coerceIn(0, (apiKeys.size - 1).coerceAtLeast(0))
-    // Track exhausted keys to avoid pointless retries
-    private val exhaustedKeys = mutableSetOf<Int>()
+    // Track cooldown timestamps for degraded or rate-limited keys
+    private val keyCooldowns = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+    private val keyFailureCounts = java.util.concurrent.ConcurrentHashMap<Int, Int>()
 
     var modelName: String = "gemini-1.5-flash"
     var maxTokens: Int = 8192
@@ -49,33 +57,79 @@ class GeminiModelClient(
         } catch (_: Exception) {}
     }
 
+    private fun markKeyDegraded(keyIdx: Int, isQuota: Boolean, errorMsg: String) {
+        val failures = (keyFailureCounts[keyIdx] ?: 0) + 1
+        keyFailureCounts[keyIdx] = failures
+
+        // Cooldown SLA: Quota (429) -> 60s cooldown; Timeout / Server 5xx -> 30s back-off
+        val cooldownDuration = if (isQuota) 60_000L else 30_000L
+        val cooldownUntil = System.currentTimeMillis() + cooldownDuration
+        keyCooldowns[keyIdx] = cooldownUntil
+
+        val apiKey = apiKeys.getOrNull(keyIdx) ?: ""
+        if (isQuota) {
+            onKeyUsed?.invoke(apiKey + "_EXHAUSTED")
+        }
+        fileLog("Key #${keyIdx + 1}/${apiKeys.size} marked ${if (isQuota) "EXHAUSTED (429)" else "DEGRADED"}. Cooldown ${cooldownDuration / 1000}s. Error: $errorMsg")
+    }
+
+    private fun markKeySuccess(keyIdx: Int) {
+        keyFailureCounts[keyIdx] = 0
+        keyCooldowns.remove(keyIdx)
+        onKeyValidated?.invoke(keyIdx)
+        apiKeys.getOrNull(keyIdx)?.let { onKeyUsed?.invoke(it) }
+    }
+
     private fun getNextValidKey(forceRotate: Boolean): Pair<String, Int>? {
         if (apiKeys.isEmpty()) return null
         val totalKeys = apiKeys.size
-        // Reset exhausted list only when ALL keys are used up
-        if (exhaustedKeys.size >= totalKeys) {
-            fileLog("All keys exhausted. Resetting for next round.")
-            exhaustedKeys.clear()
+        val now = System.currentTimeMillis()
+
+        // Clean up expired cooldowns
+        keyCooldowns.entries.removeIf { it.value <= now }
+
+        // If ALL keys are cooling down, clear cooldowns for circular round-robin failover
+        if (keyCooldowns.size >= totalKeys) {
+            fileLog("All keys in cooldown pool. Clearing cooldowns to allow sequential round-robin.")
+            keyCooldowns.clear()
         }
+
         if (forceRotate) {
-            // Simple round-robin: move to next key, skip exhausted ones
+            // Strict circular round-robin sequence: N+1, N+2, ...
             for (i in 1..totalKeys) {
                 val nextIdx = (currentKeyIndex + i) % totalKeys
-                if (!exhaustedKeys.contains(nextIdx)) {
+                val cooldownUntil = keyCooldowns[nextIdx] ?: 0L
+                if (now >= cooldownUntil) {
                     currentKeyIndex = nextIdx
                     onKeyRotated?.invoke(currentKeyIndex)
-                    fileLog("Rotated to key #$currentKeyIndex")
+                    fileLog("Rotated to key #${currentKeyIndex + 1}/$totalKeys")
                     break
                 }
             }
+        } else {
+            // Check if current key is valid; if cooling down, find next available
+            val currentCooldown = keyCooldowns[currentKeyIndex] ?: 0L
+            if (now < currentCooldown) {
+                for (i in 1 until totalKeys) {
+                    val nextIdx = (currentKeyIndex + i) % totalKeys
+                    val cooldownUntil = keyCooldowns[nextIdx] ?: 0L
+                    if (now >= cooldownUntil) {
+                        currentKeyIndex = nextIdx
+                        onKeyRotated?.invoke(currentKeyIndex)
+                        fileLog("Current key in cooldown. Advanced to key #${currentKeyIndex + 1}/$totalKeys")
+                        break
+                    }
+                }
+            }
         }
-        return if (!exhaustedKeys.contains(currentKeyIndex)) {
-            apiKeys[currentKeyIndex] to currentKeyIndex
-        } else null
+
+        return apiKeys[currentKeyIndex] to currentKeyIndex
     }
 
     init {
-        if (apiKeys.isNotEmpty()) onKeyRotated?.invoke(currentKeyIndex)
+        if (apiKeys.isNotEmpty()) {
+            onKeyRotated?.invoke(currentKeyIndex)
+        }
     }
 
     suspend fun generateStream(
@@ -102,11 +156,10 @@ class GeminiModelClient(
             val role = msg.optString("role", "user")
             val contentStr = msg.optString("content", "")
             val imagesArray = msg.optJSONArray("images")
-            
+
             val geminiRole = if (role == "user") "user" else "model"
-            
+
             if (i == messages.length() - 1 && role == "user") {
-                // Last user message, keep as prompt
                 promptText = contentStr
                 if (imagesArray != null) {
                     for (j in 0 until imagesArray.length()) {
@@ -121,7 +174,6 @@ class GeminiModelClient(
                     }
                 }
             } else {
-                // History message
                 chatHistory.add(content(role = geminiRole) {
                     text(contentStr)
                     if (imagesArray != null) {
@@ -149,80 +201,126 @@ class GeminiModelClient(
             val pair = getNextValidKey(forceRotate = attempt > 0)
             if (pair == null) { attempt++; continue }
             val (apiKey, keyIdx) = pair
+
+            var firstChunkReceived = false
+            val channel = Channel<String>(Channel.BUFFERED)
+            val streamScope = CoroutineScope(coroutineContext + Job())
+            val streamJob = streamScope.launch {
+                try {
+                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+
+                    val generativeModel = GenerativeModel(
+                        modelName = effectiveModelName,
+                        apiKey = apiKey,
+                        generationConfig = generationConfig {
+                            this.temperature = this@GeminiModelClient.temperature
+                            this.maxOutputTokens = this@GeminiModelClient.maxTokens
+                        },
+                        safetySettings = listOf(
+                            SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
+                            SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
+                            SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
+                            SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
+                        ),
+                        systemInstruction = content { text(systemPrompt) }
+                    )
+
+                    val chat = generativeModel.startChat(chatHistory)
+                    val responseFlow = chat.sendMessageStream(content(role = "user") {
+                        text(promptText)
+                        for (img in promptImages) {
+                            image(img)
+                        }
+                    })
+
+                    responseFlow.collect { chunk ->
+                        if (isActive && chunk.text != null) {
+                            channel.send(chunk.text!!)
+                        }
+                    }
+                    channel.close()
+                } catch (t: Throwable) {
+                    channel.close(t)
+                }
+            }
+
             try {
                 if (attempt > 0) {
                     onRetry?.invoke()
-                    kotlinx.coroutines.delay(1000L) // Fixed short wait
+                    delay(500L)
                 }
 
-                // Direct API Endpoint Routing: exact user-defined model string dynamically routed without fallback interception
-                val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
-
-                val generativeModel = GenerativeModel(
-                    modelName = effectiveModelName,
-                    apiKey = apiKey,
-                    generationConfig = generationConfig {
-                        this.temperature = this@GeminiModelClient.temperature
-                        this.maxOutputTokens = this@GeminiModelClient.maxTokens
-                    },
-                    safetySettings = listOf(
-                        SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
-                        SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
-                        SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
-                        SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
-                    ),
-                    systemInstruction = content { text(systemPrompt) }
-                )
-
-                val chat = generativeModel.startChat(chatHistory)
-                val responseFlow = chat.sendMessageStream(content(role="user"){
-                    text(promptText)
-                    for (img in promptImages) {
-                        image(img)
-                    }
-                })
-                
-                responseFlow.collect { chunk ->
-                    if (coroutineContext.isActive && chunk.text != null) {
-                        emit(chunk.text!!)
+                // Strict 5-Second SLA Timeout Window for initial connection & response chunk
+                val firstChunk = withTimeoutOrNull(5000L) {
+                    val res = channel.receiveCatching()
+                    if (res.isClosed) {
+                        val cause = res.exceptionOrNull()
+                        if (cause != null) throw cause
+                        null
+                    } else {
+                        res.getOrNull()
                     }
                 }
-                
-                onKeyUsed?.invoke(apiKey)
-                success = true 
-                fileLog( "Inference successful with Key #$keyIdx")
+
+                if (firstChunk == null) {
+                    if (!channel.isClosedForReceive) {
+                        streamJob.cancel()
+                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 5-second SLA timeout: zero response chunks received within 5000ms")
+                    } else {
+                        throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty response stream")
+                    }
+                }
+
+                // First byte received within 5-second SLA: Validate key & persist immediately
+                firstChunkReceived = true
+                markKeySuccess(keyIdx)
+                emit(firstChunk)
+
+                // Stream the remainder of the response
+                for (chunk in channel) {
+                    if (coroutineContext.isActive) {
+                        emit(chunk)
+                    }
+                }
+
+                success = true
+                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys")
 
             } catch (t: Throwable) {
+                streamJob.cancel()
+                if (t is kotlinx.coroutines.CancellationException) {
+                    throw t
+                }
+
                 val errorMsg = t.message ?: t.toString()
                 lastErrorDetail = errorMsg
                 val lowerError = errorMsg.lowercase()
-                
-                fileLog("Key #$keyIdx [${t.javaClass.simpleName}] Error: $errorMsg")
+
+                fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
                     lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
-                
-                if (isQuotaExhausted) {
-                    exhaustedKeys.add(keyIdx)
-                    onKeyUsed?.invoke(apiKey + "_EXHAUSTED")
-                    fileLog("Key #$keyIdx marked EXHAUSTED. Skipping permanently this session.")
-                }
 
-                val shouldRetry = isQuotaExhausted ||
+                val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
+                    lowerError.contains("timeout") ||
+                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("503") || lowerError.contains("504") ||
+                    t.javaClass.simpleName.contains("ServerException") ||
+                    lowerError.contains("overloaded") || lowerError.contains("unavailable")
+
+                markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
+
+                val shouldRetry = isQuotaExhausted || isTimeoutOrServer ||
                     lowerError.contains("limit") ||
-                    lowerError.contains("overloaded") ||
-                    lowerError.contains("unavailable") ||
                     lowerError.contains("deadline") ||
                     lowerError.contains("safety") ||
                     lowerError.contains("recitation") ||
                     lowerError.contains("serialization") ||
-                    t is java.net.SocketTimeoutException ||
-                    t.javaClass.simpleName.contains("ServerException") ||
+                    t is java.io.IOException ||
                     t.javaClass.simpleName.contains("SerializationException")
 
                 if (shouldRetry) {
                     attempt++
-                    Log.w(TAG, "Key #$keyIdx failed ($attempt/$totalKeys). Attempting rotation...")
+                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$totalKeys). Failover to next key in pool...")
                 } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
                     throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
                 } else {
@@ -230,9 +328,9 @@ class GeminiModelClient(
                 }
             }
         }
-        
+
         if (!success) {
-            throw RuntimeException("All $totalKeys API keys failed. Last error: $lastErrorDetail")
+            throw RuntimeException("All $totalKeys API keys in pool failed or timed out. Last error: $lastErrorDetail")
         }
     }.flowOn(Dispatchers.IO)
 
@@ -263,75 +361,123 @@ class GeminiModelClient(
             val pair = getNextValidKey(forceRotate = attempt > 0)
             if (pair == null) { attempt++; continue }
             val (apiKey, keyIdx) = pair
+
+            var firstChunkReceived = false
+            val channel = Channel<String>(Channel.BUFFERED)
+            val streamScope = CoroutineScope(coroutineContext + Job())
+            val streamJob = streamScope.launch {
+                try {
+                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+
+                    val generativeModel = GenerativeModel(
+                        modelName = effectiveModelName,
+                        apiKey = apiKey,
+                        generationConfig = generationConfig {
+                            this.temperature = this@GeminiModelClient.temperature
+                            this.maxOutputTokens = this@GeminiModelClient.maxTokens
+                        },
+                        safetySettings = listOf(
+                            SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
+                            SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
+                            SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
+                            SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
+                        ),
+                        systemInstruction = content { text(systemPrompt) }
+                    )
+
+                    val chat = generativeModel.startChat(chatHistory)
+                    val responseFlow = chat.sendMessageStream(promptText)
+
+                    responseFlow.collect { chunk ->
+                        if (isActive && chunk.text != null) {
+                            channel.send(chunk.text!!)
+                        }
+                    }
+                    channel.close()
+                } catch (t: Throwable) {
+                    channel.close(t)
+                }
+            }
+
             try {
                 if (attempt > 0) {
                     onRetry?.invoke()
-                    kotlinx.coroutines.delay(1000L)
+                    delay(500L)
                 }
 
-                // Direct API Endpoint Routing: exact user-defined model string dynamically routed without fallback interception
-                val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
-
-                val generativeModel = GenerativeModel(
-                    modelName = effectiveModelName,
-                    apiKey = apiKey,
-                    generationConfig = generationConfig {
-                        this.temperature = this@GeminiModelClient.temperature
-                        this.maxOutputTokens = this@GeminiModelClient.maxTokens
-                    },
-                    safetySettings = listOf(
-                        SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
-                        SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
-                        SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
-                        SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
-                    ),
-                    systemInstruction = content { text(systemPrompt) }
-                )
-
-                val chat = generativeModel.startChat(chatHistory)
-                val responseFlow = chat.sendMessageStream(promptText)
-                
-                responseFlow.collect { chunk ->
-                    if (coroutineContext.isActive && chunk.text != null) {
-                        emit(chunk.text!!)
+                // Strict 5-Second SLA Timeout Window for initial connection & response chunk
+                val firstChunk = withTimeoutOrNull(5000L) {
+                    val res = channel.receiveCatching()
+                    if (res.isClosed) {
+                        val cause = res.exceptionOrNull()
+                        if (cause != null) throw cause
+                        null
+                    } else {
+                        res.getOrNull()
                     }
                 }
-                
+
+                if (firstChunk == null) {
+                    if (!channel.isClosedForReceive) {
+                        streamJob.cancel()
+                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 5-second SLA timeout: zero response chunks received within 5000ms")
+                    } else {
+                        throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty response stream")
+                    }
+                }
+
+                // Initial chunk received within 5-second SLA: Validate key & persist immediately
+                firstChunkReceived = true
+                markKeySuccess(keyIdx)
+                emit(firstChunk)
+
+                // Stream the remainder of the response
+                for (chunk in channel) {
+                    if (coroutineContext.isActive) {
+                        emit(chunk)
+                    }
+                }
+
                 success = true
-                onKeyUsed?.invoke(apiKey)
-                fileLog("Inference successful with Key #$keyIdx")
+                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys")
 
             } catch (t: Throwable) {
+                streamJob.cancel()
+                if (t is kotlinx.coroutines.CancellationException) {
+                    throw t
+                }
+
                 val errorMsg = t.message ?: t.toString()
                 lastErrorDetail = errorMsg
                 val lowerError = errorMsg.lowercase()
-                
-                fileLog("Key #$keyIdx [${t.javaClass.simpleName}] Error: $errorMsg")
+
+                fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
                     lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
 
-                if (isQuotaExhausted) {
-                    exhaustedKeys.add(keyIdx)
-                    onKeyUsed?.invoke(apiKey + "_EXHAUSTED")
-                    fileLog("Key #$keyIdx marked EXHAUSTED. Skipping permanently this session.")
-                }
+                val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
+                    lowerError.contains("timeout") ||
+                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("503") || lowerError.contains("504") ||
+                    t.javaClass.simpleName.contains("ServerException") ||
+                    lowerError.contains("overloaded") || lowerError.contains("unavailable")
 
-                val shouldRetry = isQuotaExhausted ||
+                markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
+
+                val shouldRetry = isQuotaExhausted || isTimeoutOrServer ||
                     lowerError.contains("limit") ||
-                    lowerError.contains("overloaded") ||
-                    lowerError.contains("unavailable") ||
                     lowerError.contains("deadline") ||
                     lowerError.contains("safety") ||
                     lowerError.contains("recitation") ||
                     lowerError.contains("serialization") ||
-                    t is java.net.SocketTimeoutException ||
-                    t.javaClass.simpleName.contains("ServerException") ||
+                    t is java.io.IOException ||
                     t.javaClass.simpleName.contains("SerializationException")
 
                 if (shouldRetry) {
                     attempt++
-                    Log.w(TAG, "Key #$keyIdx failed ($attempt/$totalKeys). Error: $errorMsg")
+                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$totalKeys). Failover to next key in pool...")
+                } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
+                    throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
                 } else {
                     throw RuntimeException("Gemini Error: $errorMsg")
                 }
@@ -339,7 +485,7 @@ class GeminiModelClient(
         }
 
         if (!success) {
-            throw RuntimeException("All $totalKeys API keys failed. Last error: $lastErrorDetail")
+            throw RuntimeException("All $totalKeys API keys in pool failed or timed out. Last error: $lastErrorDetail")
         }
     }.flowOn(Dispatchers.IO)
 

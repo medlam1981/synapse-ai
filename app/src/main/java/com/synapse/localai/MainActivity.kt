@@ -1123,8 +1123,25 @@ fun ConsolidatedMasterHeader(
                 else -> Color(0xFFEF4444) // Coral red >75°C
             }
             val storageColor = Color(0xFF38BDF8) // Titanium / azure
-            val authColor = Color(0xFFA855F7) // Vibrant purple
-            val authText = if (isCloudMode) (if (uiState.config.geminiApiKeys.isNotBlank()) "CLOUD" else "NO KEY") else "LOCAL"
+            val registeredKeysList = remember(uiState.config.geminiApiKeys) {
+                uiState.config.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            }
+            val keyPoolSize = if (uiState.totalKeys > 0) uiState.totalKeys else registeredKeysList.size
+            val authText = if (isCloudMode) {
+                if (keyPoolSize > 0) {
+                    val activeKeyNum = (uiState.currentKeyIndex % keyPoolSize) + 1
+                    "$activeKeyNum/$keyPoolSize"
+                } else {
+                    "NO KEY"
+                }
+            } else {
+                if (uiState.localModelLoaded) "LOCAL" else "N/A"
+            }
+            val authColor = if (isCloudMode) {
+                if (keyPoolSize > 0) Color(0xFFA855F7) else Color(0xFFEF4444)
+            } else {
+                if (uiState.localModelLoaded) Color(0xFFA855F7) else textDim.copy(alpha = 0.6f)
+            }
             val mtpColor = if (hasMtp) Color(0xFFFBBF24) else textDim.copy(alpha = 0.6f) // Electric gold / dim
             val taskColor = Color(0xFF818CF8) // Vibrant indigo
 
@@ -1167,12 +1184,12 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Storage"
                 )
 
-                // 5. Auth / Engine Route: Key glyph with runtime state badge (LOCAL / CLOUD)
+                // 5. Auth / Engine Route: Key glyph with active key counter (e.g. 1/5, 2/8) or LOCAL fallback
                 TelemetryMicroChip(
                     icon = Icons.Filled.VpnKey,
                     text = authText,
                     accentColor = authColor,
-                    contentDescription = "Engine Route Auth"
+                    contentDescription = "Active API Key / Pool"
                 )
 
                 // 6. Hardware Accelerator: Lightning bolt indicating MTP status (MTP or OFF)

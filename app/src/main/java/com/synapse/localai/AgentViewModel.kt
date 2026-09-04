@@ -291,7 +291,10 @@ class AgentViewModel : ViewModel() {
         }
     }
 
+    private var appContext: Context? = null
+
     fun loadConfig(context: Context) {
+        appContext = context.applicationContext
         Log.i(TAG, "Starting loadConfig...")
         try {
             if (portalServer == null) {
@@ -320,7 +323,7 @@ class AgentViewModel : ViewModel() {
             val activePersonasSet = PersonaManager.getActivePersonas(context)
             val activePersonaName = activePersonasSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
             val cachedPersonasList = PersonaManager.getPersonas(context, forceRescan = false)
-
+            
             var localPath = savedPath ?: ""
             if (localPath.isBlank()) {
                 val cachedModels = ModelScanner.getBaseModels(context, forceRescan = false)
@@ -328,7 +331,6 @@ class AgentViewModel : ViewModel() {
                     localPath = cachedModels.first().absolutePath
                 }
             }
-
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
             val rawLower = rawDraft.lowercase()
             val draftIsInvalid = rawLower.contains("assistant") ||
@@ -386,10 +388,16 @@ class AgentViewModel : ViewModel() {
                 activePersona = activePersonaName,
                 activePersonas = activePersonasSet
             )
+
+            // Cold-Start Memory: Restore last known working key index directly from disk
+            val savedKeyIndex = prefs.getInt("current_key_index", 0)
+            val safeKeyIndex = if (activeGeminiKeyCount > 0) savedKeyIndex.coerceIn(0, activeGeminiKeyCount - 1) else 0
+
             _uiState.update { 
                 it.copy(
                     config = config, 
                     totalKeys = activeGeminiKeyCount,
+                    currentKeyIndex = safeKeyIndex,
                     activePersona = activePersonaName,
                     activePersonas = activePersonasSet,
                     availablePersonas = cachedPersonasList
@@ -426,7 +434,7 @@ class AgentViewModel : ViewModel() {
                     triggerModelLoad(context, config.localModelPath)
                 }
             } else if (config.preferredModelType == ModelType.GEMINI && activeGeminiKeyCount > 0) {
-                loadGeminiModel(config.geminiApiKeys, config.geminiModelName)
+                loadGeminiModel(config.geminiApiKeys, config.geminiModelName, context)
             }
 
             updateServiceStatus(context)
@@ -514,7 +522,7 @@ class AgentViewModel : ViewModel() {
                 finalConfig.geminiModelName != oldConfig.geminiModelName ||
                 !isModelLoaded() || oldType != ModelType.GEMINI) {
                 closeAllModels()
-                loadGeminiModel(finalConfig.geminiApiKeys, finalConfig.geminiModelName)
+                loadGeminiModel(finalConfig.geminiApiKeys, finalConfig.geminiModelName, context)
             }
         }
     }
@@ -617,36 +625,41 @@ class AgentViewModel : ViewModel() {
         }
     }
 
-    private fun loadGeminiModel(apiKeysRaw: String, modelName: String = "gemini-2.0-flash") {
+    private fun loadGeminiModel(apiKeysRaw: String, modelName: String = "gemini-2.0-flash", context: Context? = null) {
         val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         if (keys.isEmpty()) return
         
-        val initialIdx = MainActivity.instance?.let { prefs(it).getInt("current_key_index", 0) } ?: 0
-        
+        val targetCtx = context ?: appContext ?: SynapseAccessibilityService.instance ?: MainActivity.instance
+        val savedIdx = targetCtx?.let { prefs(it).getInt("current_key_index", 0) } ?: _uiState.value.currentKeyIndex
+        val safeInitialIdx = if (keys.isNotEmpty()) savedIdx.coerceIn(0, keys.size - 1) else 0
+
         closeAllModels()
         geminiClient = GeminiModelClient(
             apiKeys = keys,
-            initialKeyIndex = initialIdx,
+            initialKeyIndex = safeInitialIdx,
             onKeyRotated = { idx ->
-                _uiState.update { it.copy(currentKeyIndex = idx) }
-                val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
-                if (ctx != null) {
-                    ctx.applicationContext.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
-                        .edit().putInt("current_key_index", idx).apply()
+                _uiState.update { it.copy(currentKeyIndex = idx, totalKeys = keys.size) }
+                targetCtx?.let {
+                    prefs(it).edit().putInt("current_key_index", idx).apply()
+                }
+            },
+            onKeyValidated = { idx ->
+                _uiState.update { it.copy(currentKeyIndex = idx, totalKeys = keys.size) }
+                targetCtx?.let {
+                    prefs(it).edit().putInt("current_key_index", idx).apply()
                 }
             },
             onKeyUsed = { key ->
-                val ctx = SynapseAccessibilityService.instance ?: MainActivity.instance
-                if (ctx != null) {
-                    KeyUsageManager.incrementUsage(ctx.applicationContext, key)
+                targetCtx?.let {
+                    KeyUsageManager.incrementUsage(it.applicationContext, key)
                 }
             }
         )
         geminiClient?.modelName = modelName
         geminiClient?.isLoaded = true
-        addSystemLog("AI Services Initialized")
+        addSystemLog("AI Services Initialized (Key #${safeInitialIdx + 1}/${keys.size})")
 
-        _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size, modelLoadFailed = false) }
+        _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = safeInitialIdx, modelLoadFailed = false) }
     }
 
     private fun isModelLoaded(): Boolean {
@@ -669,7 +682,6 @@ class AgentViewModel : ViewModel() {
             loadingStatusText = "",
             activeModelType = null, 
             activeModelName = "", 
-            currentKeyIndex = 0, 
             totalKeys = 0
         ) }
     }
@@ -938,25 +950,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                             }
                         }
 
-                        val stream = when (modelType) {
-                            ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(
-                                history = historyWithScreen,
-                                systemPrompt = systemPrompt,
-                                onSpeedUpdate = { tps ->
-                                    _uiState.update { it.copy(tokensPerSecond = tps) }
-                                }
-                            )
-                            ModelType.GEMINI -> {
-                                val json = JSONArray()
-                                historyWithScreen.forEachIndexed { i, (r, c) ->
-                                    val m = JSONObject().put("role", r).put("content", c)
-                                    if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
-                                    json.put(m)
-                                }
-                                geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {}
-                            }
-                        }
-
                         var lastUiUpdateTime = 0L
                         var pendingUiUpdate = false
 
@@ -1009,6 +1002,29 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                                     streamVersion = state.streamVersion + 1,
                                     logs = updatedLogs
                                 )
+                            }
+                        }
+
+                        val stream = when (modelType) {
+                            ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(
+                                history = historyWithScreen,
+                                systemPrompt = systemPrompt,
+                                onSpeedUpdate = { tps ->
+                                    _uiState.update { it.copy(tokensPerSecond = tps) }
+                                }
+                            )
+                            ModelType.GEMINI -> {
+                                val json = JSONArray()
+                                historyWithScreen.forEachIndexed { i, (r, c) ->
+                                    val m = JSONObject().put("role", r).put("content", c)
+                                    if (i == historyWithScreen.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
+                                    json.put(m)
+                                }
+                                geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
+                                    responseSb.setLength(0)
+                                    liveDiskStreamer.reset()
+                                    pushUiUpdate("")
+                                }
                             }
                         }
 
