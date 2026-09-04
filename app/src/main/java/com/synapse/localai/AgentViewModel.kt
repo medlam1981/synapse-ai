@@ -826,7 +826,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
         val service = SynapseAccessibilityService.instance
-        currentJob = viewModelScope.launch {
+        currentJob = viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isProcessing = true) }
             
             try {
@@ -989,19 +989,20 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
                             }
 
                             _uiState.update { state ->
+                                val updatedLogs = state.logs.toMutableList()
+                                val lastIdx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                if (lastIdx >= 0) {
+                                    updatedLogs[lastIdx] = updatedLogs[lastIdx].copy(
+                                        text = rawText,
+                                        thinkingText = demuxed.thinkingText,
+                                        isThinking = demuxed.isThinking
+                                    )
+                                }
                                 state.copy(
                                     currentPhase = currentPhase,
                                     activeStatusDetail = statusDetail,
                                     streamVersion = state.streamVersion + 1,
-                                    logs = state.logs.map { log ->
-                                        if (log.id == liveLogId) {
-                                            log.copy(
-                                                text = rawText,
-                                                thinkingText = demuxed.thinkingText,
-                                                isThinking = demuxed.isThinking
-                                            )
-                                        } else log
-                                    }
+                                    logs = updatedLogs
                                 )
                             }
                         }

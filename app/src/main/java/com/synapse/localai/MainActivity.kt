@@ -38,8 +38,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -750,16 +752,63 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
     if (showSettings) {
         BackHandler { showSettings = false }
-        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
+                        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
     }
 }
 
 /**
- * UI/UX Architectural Specification: Consolidated Master Header Frame
+ * Vibrant Micro-3D Telemetry Indicator Chip.
+ * Features subtle depth, specular highlight gradients, and distinct hardware theme color-coding.
+ */
+@Composable
+private fun TelemetryMicroChip(
+    icon: ImageVector,
+    text: String,
+    accentColor: Color,
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(3.5.dp),
+        color = accentColor.copy(alpha = 0.08f),
+        border = BorderStroke(
+            0.5.dp,
+            Brush.verticalGradient(
+                listOf(accentColor.copy(alpha = 0.40f), accentColor.copy(alpha = 0.12f))
+            )
+        ),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = accentColor,
+                modifier = Modifier.size(10.dp)
+            )
+            Text(
+                text = text,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
+/**
+ * Consolidated Master Header Frame docked at the top of the viewport.
  * Single structured container docked at top of viewport with 3 organized internal rows:
- * - Top Row: Drawer toggle button, centered MEDLAM-AI AGENT title with status badge (IDLE / RUNNING), settings gear icon.
+ * - Top Row: Tactile micro-card drawer toggle, centered MEDLAM-AI AGENT title with status badge (IDLE / RUNNING), tactile micro-card settings gear.
  * - Middle Row: Compact inline spec chip detailing active Base Model & Companion MTP profile (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16).
- * - Bottom Row: Compact hardware telemetry bar showing Battery, RAM, Storage, Thermals, MTP status, Task counter, and Session Clock.
+ * - Bottom Row: Vibrant micro-3D hardware telemetry ribbon: CPU Usage • RAM • Thermals • Storage • Auth Route • MTP Accelerator • Task Queue.
  * Minimal internal vertical padding to retain maximum screen real estate for message stream.
  */
 @Composable
@@ -773,11 +822,12 @@ fun ConsolidatedMasterHeader(
     var stats by remember { mutableStateOf(SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)) }
 
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            while (true) {
-                stats = getSystemStats(context)
-                kotlinx.coroutines.delay(2000)
+        while (true) {
+            val nextStats = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                getSystemStats(context)
             }
+            stats = nextStats
+            kotlinx.coroutines.delay(2500)
         }
     }
 
@@ -807,7 +857,7 @@ fun ConsolidatedMasterHeader(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             // -------------------------------------------------------------
-            // 1. TOP ROW: Left-Aligned [Menu Icon] MEDLAM-AI AGENT [Status Badge] ──── [Settings Gear] (Right)
+            // 1. TOP ROW: Left-Aligned [Menu Card] MEDLAM-AI AGENT [Status Badge] ──── [Settings Card] (Right)
             // -------------------------------------------------------------
             Row(
                 modifier = Modifier
@@ -816,21 +866,26 @@ fun ConsolidatedMasterHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left Anchor: Drawer toggle button + MEDLAM-AI AGENT title + status badge
+                // Left Anchor: Tactile micro-card drawer toggle button + MEDLAM-AI AGENT title + status badge
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    IconButton(
+                    Surface(
                         onClick = onOpenDrawer,
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Widgets,
-                            contentDescription = "Menu",
-                            tint = primaryAccent,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Icon(
+                                imageVector = Icons.Outlined.Widgets,
+                                contentDescription = "Menu",
+                                tint = primaryAccent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
 
                     Text(
@@ -869,17 +924,22 @@ fun ConsolidatedMasterHeader(
                     }
                 }
 
-                // Right: Settings gear icon anchored flush to far right
-                IconButton(
+                // Right: Tactile micro-card settings gear icon anchored flush to far right
+                Surface(
                     onClick = onOpenSettings,
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                     modifier = Modifier.size(28.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Settings,
-                        contentDescription = "Settings",
-                        tint = textDim,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = "Settings",
+                            tint = textDim,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
 
@@ -950,164 +1010,85 @@ fun ConsolidatedMasterHeader(
             }
 
             // -------------------------------------------------------------
-            // 3. BOTTOM ROW: Resizable hardware telemetry ribbon (Adaptive, full-width, no horizontal scroll)
-            // Showing: RAM (GB) • CPU & Temp • Storage (GB) • Auth Key (🔑) • MTP Acceleration (⚡ MTP) • Task Counter (TSK #)
-            // Battery removed as specified. All elements adapt and fit cleanly within the viewport.
+            // 3. BOTTOM ROW: Hardware telemetry ribbon (Disentangled 7-item sequence)
+            // Showing: CPU Usage • RAM • Thermals • Storage • Auth Route • MTP Accelerator • Task Queue
             // -------------------------------------------------------------
+            val cpuColor = Color(0xFF10B981) // Dynamic emerald
+            val ramColor = Color(0xFF06B6D4) // Electric cyan
+            val thermalColor = when {
+                stats.cpuTempInt <= 0 -> Color(0xFF2DD4BF)
+                stats.cpuTempInt < 50 -> Color(0xFF2DD4BF) // Turquoise <50°C
+                stats.cpuTempInt <= 75 -> Color(0xFFF59E0B) // Warm amber 50–75°C
+                else -> Color(0xFFEF4444) // Coral red >75°C
+            }
+            val storageColor = Color(0xFF38BDF8) // Titanium / azure
+            val authColor = Color(0xFFA855F7) // Vibrant purple
+            val authText = if (isCloudMode) (if (uiState.config.geminiApiKeys.isNotBlank()) "CLOUD" else "NO KEY") else "LOCAL"
+            val mtpColor = if (hasMtp) Color(0xFFFBBF24) else textDim.copy(alpha = 0.6f) // Electric gold / dim
+            val taskColor = Color(0xFF818CF8) // Vibrant indigo
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 1. RAM (GB)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Memory,
-                        contentDescription = "RAM",
-                        tint = primaryAccent,
-                        modifier = Modifier.size(11.5.dp)
-                    )
-                    Text(
-                        text = stats.ramFree,
-                        color = textBright,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
+                // 1. CPU Usage: Dedicated chip icon [CPU] followed by live load %
+                TelemetryMicroChip(
+                    icon = Icons.Filled.DeveloperBoard,
+                    text = stats.cpuUsage,
+                    accentColor = cpuColor,
+                    contentDescription = "CPU Usage"
+                )
 
-                // Micro-divider
-                Box(modifier = Modifier.width(1.dp).height(9.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)))
+                // 2. RAM Allocation: Memory module icon [RAM] followed by active working set size
+                TelemetryMicroChip(
+                    icon = Icons.Filled.Memory,
+                    text = stats.ramFree,
+                    accentColor = ramColor,
+                    contentDescription = "RAM Allocation"
+                )
 
-                // 2. CPU / Thermals
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Thermostat,
-                        contentDescription = "CPU",
-                        tint = if (stats.cpuTempInt > 55) MaterialTheme.colorScheme.error else primaryAccent,
-                        modifier = Modifier.size(11.5.dp)
-                    )
-                    Text(
-                        text = "${stats.cpuUsage} ${stats.cpuTemp}",
-                        color = textBright,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
+                // 3. Thermals: Dedicated thermometer glyph followed strictly by hardware temp in °C
+                TelemetryMicroChip(
+                    icon = Icons.Filled.Thermostat,
+                    text = stats.cpuTemp,
+                    accentColor = thermalColor,
+                    contentDescription = "Thermals"
+                )
 
-                // Micro-divider
-                Box(modifier = Modifier.width(1.dp).height(9.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)))
+                // 4. Storage: Hard drive icon followed strictly by available storage
+                TelemetryMicroChip(
+                    icon = Icons.Filled.Storage,
+                    text = stats.storageFree,
+                    accentColor = storageColor,
+                    contentDescription = "Storage"
+                )
 
-                // 3. Storage (GB)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Storage,
-                        contentDescription = "Storage",
-                        tint = primaryAccent,
-                        modifier = Modifier.size(11.5.dp)
-                    )
-                    Text(
-                        text = stats.storageFree,
-                        color = textBright,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
+                // 5. Auth / Engine Route: Key glyph with runtime state badge (LOCAL / CLOUD)
+                TelemetryMicroChip(
+                    icon = Icons.Filled.VpnKey,
+                    text = authText,
+                    accentColor = authColor,
+                    contentDescription = "Engine Route Auth"
+                )
 
-                // Micro-divider
-                Box(modifier = Modifier.width(1.dp).height(9.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)))
+                // 6. Hardware Accelerator: Lightning bolt indicating MTP status (MTP or OFF)
+                TelemetryMicroChip(
+                    icon = Icons.Filled.Bolt,
+                    text = if (hasMtp) "MTP" else "OFF",
+                    accentColor = mtpColor,
+                    contentDescription = "Hardware Accelerator"
+                )
 
-                // 4. Auth Key (🔑)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.VpnKey,
-                        contentDescription = "Auth Key",
-                        tint = secondaryAccent,
-                        modifier = Modifier.size(11.5.dp)
-                    )
-                    Text(
-                        text = if (isCloudMode) (if (uiState.config.geminiApiKeys.isNotBlank()) "AUTH" else "NO KEY") else "LOCAL",
-                        color = secondaryAccent,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-
-                // Micro-divider
-                Box(modifier = Modifier.width(1.dp).height(9.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)))
-
-                // 5. MTP Acceleration (⚡ MTP)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Bolt,
-                        contentDescription = "MTP Acceleration",
-                        tint = if (hasMtp) primaryAccent else textDim,
-                        modifier = Modifier.size(11.5.dp)
-                    )
-                    Text(
-                        text = if (hasMtp) "MTP" else "OFF",
-                        color = if (hasMtp) primaryAccent else textDim,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-
-                // Micro-divider
-                Box(modifier = Modifier.width(1.dp).height(9.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)))
-
-                // 6. Task Counter (TSK #)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = "TSK",
-                        color = primaryAccent,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        text = "$totalTasks",
-                        color = textBright,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
+                // 7. Task Queue: Clipboard/task glyph with active task count (TSK 0)
+                TelemetryMicroChip(
+                    icon = Icons.Filled.Assignment,
+                    text = "TSK $totalTasks",
+                    accentColor = taskColor,
+                    contentDescription = "Task Queue"
+                )
             }
         }
     }
@@ -1607,22 +1588,22 @@ fun CliLogMessageView(
                     modifier = Modifier.padding(top = 1.dp)
                 )
 
-                CompositionLocalProvider(
-                    LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
-                ) {
-                    Text(
-                        text = log.text,
-                        color = textBright,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = if (isLogArabic) 18.sp else 16.5.sp,
-                        textAlign = if (isLogArabic) TextAlign.End else TextAlign.Start,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                Box(modifier = Modifier.weight(1f)) {
+                    CompositionLocalProvider(
+                        LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+                    ) {
+                        Text(
+                            text = log.text,
+                            color = textBright,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = if (isLogArabic) 19.sp else 17.5.sp,
+                            textAlign = if (isLogArabic) TextAlign.End else TextAlign.Start,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
-
-                Spacer(modifier = Modifier.weight(1f))
 
                 Text(
                     text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
