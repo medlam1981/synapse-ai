@@ -48,6 +48,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -462,16 +463,18 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
             // Fixed Central Workspace Chassis (Outer Frame Geometry)
             // Dedicated structural frame wrapping the entire dynamic interaction zone
+            val chassisBg = if (isDark) Color(0xFF0B0F17) else Color(0xFFFFFFFF)
+            val chassisBorder = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
-                    .tactileCardElevation(isDark, cornerRadius = 16.dp)
-                    .clip(RoundedCornerShape(16.dp)),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    .clip(RoundedCornerShape(14.dp)),
+                shape = RoundedCornerShape(14.dp),
+                color = chassisBg,
+                border = BorderStroke(1.dp, chassisBorder)
             ) {
                 Box(
                     modifier = Modifier
@@ -491,8 +494,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             modifier = Modifier
                                 .fillMaxSize()
                                 .clipToBounds(),
-                            contentPadding = PaddingValues(start = 10.dp, top = 10.dp, end = 10.dp, bottom = 14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            contentPadding = PaddingValues(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             items(uiState.logs, key = { it.id }) { log ->
                                 CliLogMessageView(log = log, isDark = isDark)
@@ -511,20 +514,20 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
                                     .padding(bottom = 12.dp),
-                                shape = RoundedCornerShape(16.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-                                shadowElevation = 6.dp
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (isDark) Color(0xFF161B22).copy(alpha = 0.95f) else Color(0xFFF1F5F9).copy(alpha = 0.95f),
+                                border = BorderStroke(1.dp, if (isDark) Color(0xFF30363D) else Color(0xFFCBD5E1))
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(12.dp))
+                                    Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(11.dp))
                                     Text(
-                                        text = if (uiState.isProcessing) "Live Stream Tail ↓" else "Jump to Latest ↓",
+                                        text = if (uiState.isProcessing) "● Live Stream Tail ↓" else "Jump to Latest ↓",
                                         color = primaryAccent,
-                                        fontSize = 10.sp,
+                                        fontSize = 9.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace
                                     )
@@ -607,9 +610,9 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 .fillMaxWidth()
                                 .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
                                 .heightIn(min = 42.dp, max = 96.dp)
-                                .tactileGlassGlow(cornerRadius = 16.dp, isDark = isDark, borderWidth = 0.dp),
+                                .tactileGlassGlow(cornerRadius = 14.dp, isDark = isDark, borderWidth = 0.dp),
                             color = inputBg,
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Row(
@@ -1111,8 +1114,11 @@ fun ConsolidatedMasterHeader(
 }
 
 /**
- * Dedicated Collapsible Thought Container for streaming reasoning progression in real time.
- * Enclosed in an executive cadre frame with structured metadata ribbon.
+ * CLI Terminal Activity Trace for Thinking & Reasoning.
+ * Replaces the nested "Reasoning Tray" card with an authentic live terminal activity trace:
+ * > Thinking Process: [● LIVE / (N tokens)] (collapse / expand)
+ * Followed by the reasoning body indented with a thin vertical left gutter line,
+ * dimmed / italicized monospace text, and real-time blinking block cursor ▌.
  */
 @Composable
 fun CliThoughtContainer(
@@ -1130,7 +1136,7 @@ fun CliThoughtContainer(
         initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(850, easing = LinearEasing),
+            animation = tween(650, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "alpha"
@@ -1141,138 +1147,137 @@ fun CliThoughtContainer(
         initialValue = 0.15f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(450, easing = LinearEasing),
+            animation = tween(400, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "cursorAlpha"
     )
 
-    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
-    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f)
-    val borderColor = MaterialTheme.colorScheme.outlineVariant
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val textHeading = MaterialTheme.colorScheme.onSurfaceVariant
-    val textBody = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f)
+    val traceColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val traceAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val gutterColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)
+    val amberBullet = if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309)
 
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = containerBg,
-        border = BorderStroke(1.dp, borderColor)
+            .padding(vertical = 3.dp)
     ) {
-        Column {
-            // Header Ribbon: Status indicator + Functional Toggle ([Hide] / [Show])
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = topBarBg,
-                shape = RoundedCornerShape(topStart = 11.dp, topEnd = 11.dp),
-                border = BorderStroke(1.dp, borderColor.copy(alpha = 0.4f))
-            ) {
+        // Line Header: > Thinking Process [● LIVE / (N tokens)] (collapse / expand)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = ">",
+                color = traceAccent,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.5.sp,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = "Thinking Process",
+                color = traceColor,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace
+            )
+
+            if (isThinking) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = primaryColor.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = "🧠 REASONING",
-                                color = primaryColor,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
-                            )
-                        }
-
-                        Text(
-                            text = if (isThinking) {
-                                if (thinkingText.isBlank()) "Formulating architecture..." else "Thinking in real-time..."
-                            } else {
-                                val tokenCount = thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size
-                                "$tokenCount tokens"
-                            },
-                            color = if (isThinking) primaryColor else textHeading,
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = if (isThinking) FontWeight.Bold else FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (isThinking) {
-                            Box(
-                                modifier = Modifier
-                                    .size(5.dp)
-                                    .alpha(alphaAnim)
-                                    .clip(CircleShape)
-                                    .background(primaryColor)
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
-                        modifier = Modifier.clickable { userExpanded = !isExpanded }
-                    ) {
-                        Text(
-                            text = if (isExpanded) "[Hide]" else "[Show]",
-                            color = primaryColor,
-                            fontSize = 8.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-            }
-
-            // Contained reasoning text with live letter-by-letter typing indicator
-            AnimatedVisibility(visible = isExpanded) {
-                Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .alpha(alphaAnim)
+                            .clip(CircleShape)
+                            .background(amberBullet)
+                    )
                     Text(
-                        text = androidx.compose.ui.text.buildAnnotatedString {
-                            if (thinkingText.isNotBlank()) {
-                                append(thinkingText)
-                                if (isThinking) {
-                                    pushStyle(androidx.compose.ui.text.SpanStyle(color = primaryColor.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
-                                    append(" ▌")
-                                    pop()
-                                }
-                            } else {
-                                append("Formulating architecture and reasoning progression...")
-                                if (isThinking) {
-                                    pushStyle(androidx.compose.ui.text.SpanStyle(color = primaryColor.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
-                                    append(" ▌")
-                                    pop()
-                                }
-                            }
-                        },
-                        color = textBody,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 16.5.sp,
-                        modifier = Modifier.fillMaxWidth()
+                        text = "● LIVE",
+                        color = amberBullet,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
                     )
                 }
+            } else {
+                val tokenCount = thinkingText.split(Regex("\\s+")).filter { it.isNotBlank() }.size
+                Text(
+                    text = "($tokenCount tokens)",
+                    color = traceColor.copy(alpha = 0.7f),
+                    fontSize = 9.5.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            Text(
+                text = if (isExpanded) "(collapse)" else "(expand)",
+                color = traceAccent,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clickable { userExpanded = !isExpanded }
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+
+        // Expanded Reasoning Body with vertical gutter line
+        AnimatedVisibility(visible = isExpanded) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp, top = 3.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(1.5.dp)
+                        .fillMaxHeight()
+                        .padding(top = 2.dp)
+                        .background(gutterColor)
+                )
+
+                Text(
+                    text = androidx.compose.ui.text.buildAnnotatedString {
+                        if (thinkingText.isNotBlank()) {
+                            append(thinkingText)
+                            if (isThinking) {
+                                pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
+                                append(" ▌")
+                                pop()
+                            }
+                        } else {
+                            append("Formulating architecture & execution strategy...")
+                            if (isThinking) {
+                                pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
+                                append(" ▌")
+                                pop()
+                            }
+                        }
+                    },
+                    color = traceColor,
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontStyle = FontStyle.Italic,
+                    lineHeight = 15.5.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }
 }
 
 /**
- * Interactive & Syntax-Highlighted Code Block Container with actionable top bar and continuous 1dp border.
+ * Sleek Terminal Code Block Container with terminal ASCII header bar:
+ * ┌── <LANG> • <FILE_PATH> ─────── [COPY] [-]
+ * Monospace syntax highlighting, horizontally scrollable, 4dp corner radius.
  */
 @Composable
 fun CliCodeBlockContainer(
@@ -1288,144 +1293,114 @@ fun CliCodeBlockContainer(
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
-    val containerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
-    val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHigh
-    val borderColor = MaterialTheme.colorScheme.outlineVariant
-    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
-    val primaryColor = MaterialTheme.colorScheme.primary
+    val blockBg = if (isDark) Color(0xFF0D1117) else Color(0xFFF8FAFC)
+    val headerBg = if (isDark) Color(0xFF161B22) else Color(0xFFF1F5F9)
+    val borderColor = if (isDark) Color(0xFF21262D) else Color(0xFFE2E8F0)
+    val langAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val pathColor = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = containerBg,
+        shape = RoundedCornerShape(4.dp),
+        color = blockBg,
         border = BorderStroke(1.dp, borderColor)
     ) {
         Column {
-            // Header Ribbon: Dedicated top metadata bar
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = topBarBg,
-                shape = RoundedCornerShape(topStart = 11.dp, topEnd = 11.dp),
-                border = BorderStroke(1.dp, borderColor.copy(alpha = 0.4f))
+            // Header Bar: Minimalist Terminal Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(headerBg)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                // Left: ┌── <LANG> • <FILE_PATH>
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    // Left: Language badge + Target file path + Stream indicator
-                    Row(
-                        modifier = Modifier.weight(1f, fill = false),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = primaryColor.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = language.uppercase().ifBlank { "CODE" },
-                                color = primaryColor,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
-                            )
-                        }
-
-                        if (!filePath.isNullOrBlank()) {
-                            val displayPath = if (filePath.startsWith("file:")) filePath else "file: $filePath"
-                            Text(
-                                text = displayPath,
-                                color = textDim,
-                                fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        if (isStreaming) {
-                            Surface(
-                                shape = RoundedCornerShape(3.dp),
-                                color = Color(0xFF10B981).copy(alpha = 0.15f)
-                            ) {
-                                Text(
-                                    text = "● STREAMING",
-                                    color = Color(0xFF10B981),
-                                    fontSize = 7.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                )
-                            }
-                        }
+                    Text(
+                        text = "┌──",
+                        color = textDim,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = language.uppercase().ifBlank { "CODE" },
+                        color = langAccent,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (!filePath.isNullOrBlank()) {
+                        Text(
+                            text = "•",
+                            color = textDim,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = filePath,
+                            color = pathColor,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
+                    if (isStreaming) {
+                        Text(
+                            text = "● LIVE",
+                            color = Color(0xFF10B981),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
 
-                    // Right: Functional [COPY] action + Expand/Collapse toggle chevron
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = if (copied) primaryColor.copy(alpha = 0.18f) else Color.Transparent,
-                            modifier = Modifier.clickable {
+                // Right: [COPY] [-]/[+]
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = if (copied) "[COPIED]" else "[COPY]",
+                        color = if (copied) Color(0xFF10B981) else textDim,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .clickable {
                                 clipboard.setText(AnnotatedString(code))
                                 copied = true
                                 coroutineScope.launch {
-                                    delay(2000)
+                                    delay(1800)
                                     copied = false
                                 }
                             }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (copied) Icons.Filled.Check else Icons.Outlined.ContentCopy,
-                                    contentDescription = "Copy code",
-                                    tint = if (copied) primaryColor else textDim,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Text(
-                                    text = if (copied) "COPIED" else "COPY",
-                                    color = if (copied) primaryColor else textDim,
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
 
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color.Transparent,
-                            modifier = Modifier.clickable { userExpanded = !isExpanded }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = if (isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                                    tint = textDim,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = if (isExpanded) "[-]" else "[+]",
+                        color = textDim,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .clickable { userExpanded = !isExpanded }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
                 }
             }
 
-            // Contained Monospace Viewport: Strictly enclosed and horizontally locked within container
+            // Horizontally Scrollable Monospace Code
             AnimatedVisibility(visible = isExpanded) {
                 val highlighted = remember(code, language, isDark) {
                     SyntaxHighlighter.highlight(code, language, isDark)
@@ -1435,24 +1410,19 @@ fun CliCodeBlockContainer(
                         .fillMaxWidth()
                         .clipToBounds()
                         .horizontalScroll(rememberScrollState())
-                        .padding(10.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = highlighted,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurface
+                        lineHeight = 15.5.sp,
+                        color = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
                     )
                 }
             }
         }
     }
-}
-
-sealed class MessageSegment {
-    data class Text(val content: String) : MessageSegment()
-    data class Code(val language: String, val code: String, val filePath: String?) : MessageSegment()
 }
 
 val EXECUTABLE_LANGUAGES = setOf(
@@ -1469,7 +1439,6 @@ val EXECUTABLE_LANGUAGES = setOf(
 
 fun isExecutableCode(lang: String, detectedPath: String?): Boolean {
     val cleanLang = lang.lowercase().trim()
-    // Strict Code Fence Containment: All generated source code must be parsed and isolated exclusively inside the interactive code block widget.
     if (cleanLang in setOf("thought", "thinking", "reasoning")) {
         return false
     }
@@ -1504,288 +1473,215 @@ fun filterCodeLeaksFromText(text: String): String {
     return sanitized.joinToString("\n").trim()
 }
 
-fun parseMessageSegments(text: String): List<MessageSegment> {
-    val segments = mutableListOf<MessageSegment>()
-    val codeRegex = Regex("""```([a-zA-Z0-9_-]*)\n([\s\S]*?)```""")
-    var currentIndex = 0
+/**
+ * CLI Terminal Execution Line for Tool Invocations, Shell Commands & Process Outputs.
+ * Formats:
+ * ● ManageTask(...) [expand/collapse]
+ * ● Bash(...)
+ * ● FileWrite(...)
+ */
+@Composable
+fun CliTerminalToolLine(
+    rawLine: String,
+    isDark: Boolean
+) {
+    var expanded by remember { mutableStateOf(false) }
 
-    for (match in codeRegex.findAll(text)) {
-        if (match.range.first > currentIndex) {
-            val textPart = text.substring(currentIndex, match.range.first).trim()
-            val lowerPart = textPart.lowercase()
-            if (lowerPart.startsWith("<!doctype html") || lowerPart.startsWith("<html")) {
-                val detected = ToolExecutor.detectFilePath(textPart) ?: ToolExecutor.defaultPathForLanguage("html", textPart)
-                segments.add(MessageSegment.Code(language = "html", code = textPart, filePath = detected))
-            } else {
-                val cleanTextPart = filterCodeLeaksFromText(textPart)
-                if (cleanTextPart.isNotEmpty()) {
-                    segments.add(MessageSegment.Text(cleanTextPart))
-                }
-            }
-        }
+    val isManageTask = rawLine.contains("ManageTask", ignoreCase = true)
+    val isBash = rawLine.contains("Bash", ignoreCase = true) || rawLine.startsWith("$ ")
+    val isFileWrite = rawLine.contains("File written", ignoreCase = true) || rawLine.contains("Writing to", ignoreCase = true) || rawLine.contains("FileWrite", ignoreCase = true)
+    val isSuccess = rawLine.contains("done", ignoreCase = true) || rawLine.contains("success", ignoreCase = true) || rawLine.contains("exit 0", ignoreCase = true)
 
-        val lang = match.groupValues[1].trim()
-        val code = match.groupValues[2].trimEnd()
-
-        var detectedPath: String? = null
-        if (match.range.first > 0) {
-            val precedingText = text.substring(0, match.range.first)
-            val lines = precedingText.lines().takeLast(6)
-            for (line in lines) {
-                val p = ToolExecutor.detectFilePath(line)
-                if (p != null) {
-                    detectedPath = p
-                    break
-                }
-            }
-        }
-        if (detectedPath == null) {
-            val codeLines = code.lines().take(3)
-            for (cLine in codeLines) {
-                val p = ToolExecutor.detectFilePath(cLine)
-                if (p != null) {
-                    detectedPath = p
-                    break
-                }
-            }
-        }
-        if (detectedPath == null && lang.isNotBlank()) {
-            detectedPath = ToolExecutor.defaultPathForLanguage(lang, code)
-        }
-
-        if (isExecutableCode(lang, detectedPath)) {
-            segments.add(MessageSegment.Code(language = lang.ifBlank { "code" }, code = code, filePath = detectedPath))
-        } else {
-            segments.add(MessageSegment.Text(code))
-        }
-        currentIndex = match.range.last + 1
+    val bulletColor = when {
+        isManageTask -> if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309) // Amber/Orange
+        isBash -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)       // Electric Cyan / Cobalt
+        isSuccess || isFileWrite -> if (isDark) Color(0xFF10B981) else Color(0xFF059669) // Emerald / Green
+        else -> if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
     }
 
-    if (currentIndex < text.length) {
-        val remainder = text.substring(currentIndex)
-        val unclosedStart = remainder.indexOf("```")
-        if (unclosedStart != -1) {
-            val beforeCode = remainder.substring(0, unclosedStart).trim()
-            val cleanBeforeCode = filterCodeLeaksFromText(beforeCode)
-            if (cleanBeforeCode.isNotEmpty()) {
-                segments.add(MessageSegment.Text(cleanBeforeCode))
+    val cmdColor = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val gutterColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)
+
+    val displayText = rawLine.trim().replace(Regex("^[●*•\\s]+"), "")
+    val hasExpandableOutput = displayText.contains(" -> ") || displayText.contains("\n")
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "●",
+                color = bulletColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = displayText.substringBefore(" -> "),
+                color = cmdColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+
+            if (hasExpandableOutput) {
+                Text(
+                    text = if (expanded) "(collapse)" else "(expand)",
+                    color = bulletColor,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
             }
-            val afterBackticks = remainder.substring(unclosedStart + 3)
-            val langLine = afterBackticks.substringBefore('\n').trim()
-            val codeContent = if (afterBackticks.contains('\n')) afterBackticks.substringAfter('\n') else ""
-            val detected = if (langLine.isNotBlank()) ToolExecutor.defaultPathForLanguage(langLine, codeContent) else null
-            if (isExecutableCode(langLine, detected)) {
-                segments.add(MessageSegment.Code(language = langLine.ifBlank { "code" }, code = codeContent, filePath = detected))
-            } else {
-                val fullText = (cleanBeforeCode + "\n" + codeContent).trim()
-                if (fullText.isNotEmpty()) {
-                    segments.add(MessageSegment.Text(fullText))
-                }
-            }
-        } else {
-            val remainingText = remainder.trim()
-            val lowerRemaining = remainingText.lowercase()
-            if (lowerRemaining.startsWith("<!doctype html") || lowerRemaining.startsWith("<html")) {
-                val detected = ToolExecutor.detectFilePath(remainingText) ?: ToolExecutor.defaultPathForLanguage("html", remainingText)
-                segments.add(MessageSegment.Code(language = "html", code = remainingText, filePath = detected))
-            } else {
-                val cleanRemaining = filterCodeLeaksFromText(remainingText)
-                if (cleanRemaining.isNotEmpty()) {
-                    segments.add(MessageSegment.Text(cleanRemaining))
+        }
+
+        if (hasExpandableOutput && expanded) {
+            val output = displayText.substringAfter(" -> ", "")
+            if (output.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 6.dp, top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(1.5.dp)
+                            .fillMaxHeight()
+                            .background(gutterColor)
+                    )
+                    Text(
+                        text = output,
+                        color = textDim,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 14.sp
+                    )
                 }
             }
         }
     }
-
-    if (segments.isEmpty() && text.isNotBlank()) {
-        segments.add(MessageSegment.Text(filterCodeLeaksFromText(text)))
-    }
-
-    return segments
 }
 
 @Composable
 fun CliLogMessageView(
-    log: LogEntry, 
+    log: LogEntry,
     isDark: Boolean
 ) {
     val clipboard = LocalClipboardManager.current
     val isUser = log.sender == "USER"
     val isSystem = log.sender == "SYSTEM"
 
-    val textBright = MaterialTheme.colorScheme.onSurface
-    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
-    val primaryAccent = MaterialTheme.colorScheme.primary
-    val borderColor = MaterialTheme.colorScheme.outlineVariant
-
-    if (isSystem && !log.isError) return
+    val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val primaryAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
 
     val isLogArabic = isArabic(log.text)
 
-    if (isUser) {
-        // Modern User Message Cadre
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 3.dp)
-                .tactileCardElevation(isDark, cornerRadius = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, borderColor)
-        ) {
+    when {
+        isUser -> {
+            // Authentic Developer Terminal Input Prompt: ❯ <prompt>
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                    .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = primaryAccent.copy(alpha = 0.15f)
-                ) {
-                    Text(
-                        text = if (isLogArabic) "المستخدم" else "USER",
-                        color = primaryAccent,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
-                    )
-                }
+                Text(
+                    text = "❯",
+                    color = primaryAccent,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(top = 1.dp)
+                )
+
                 CompositionLocalProvider(
                     LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                 ) {
                     Text(
                         text = log.text,
                         color = textBright,
-                        fontSize = 12.5.sp,
-                        fontFamily = FontFamily.SansSerif,
-                        fontWeight = FontWeight.Medium,
-                        lineHeight = if (isLogArabic) 20.sp else 18.5.sp,
-                        textAlign = TextAlign.Start,
-                        modifier = Modifier.weight(1f, fill = true)
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = if (isLogArabic) 18.sp else 16.5.sp,
+                        textAlign = if (isLogArabic) TextAlign.End else TextAlign.Start,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                 }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                Text(
+                    text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
+                    color = textDim.copy(alpha = 0.5f),
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
             }
         }
-    } else {
-        // Master Cadre Frame for AI Agent Logic, Coding & Structured Response
-        val demuxed = remember(log.text, log.thinkingText, log.isThinking) {
-            StreamDemultiplexer.demux(
-                rawText = log.text,
-                externalThinkingText = log.thinkingText,
-                externalIsThinking = log.isThinking
-            )
+
+        isSystem -> {
+            // Clean Terminal System & Error Output Lines
+            val isError = log.isError
+            val bulletColor = if (isError) Color(0xFFEF4444) else textDim
+            val marker = if (isError) "✖ Error:" else "● System:"
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = marker,
+                    color = bulletColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = log.text,
+                    color = if (isError) Color(0xFFEF4444) else textDim,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 14.sp,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
         }
 
-        val isAgentArabic = demuxed.blocks.any {
-            it is StreamDemultiplexer.DemuxBlock.Prose && isArabic(it.text)
-        }
+        else -> {
+            // AI Agent Terminal Output Stream: Direct continuous vertical flow, NO outer card container
+            val demuxed = remember(log.text, log.thinkingText, log.isThinking) {
+                StreamDemultiplexer.demux(
+                    rawText = log.text,
+                    externalThinkingText = log.thinkingText,
+                    externalIsThinking = log.isThinking
+                )
+            }
 
-        val cadreBg = MaterialTheme.colorScheme.surfaceContainer
-        val topBarBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest
-
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .tactileCardElevation(isDark, cornerRadius = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = cadreBg,
-            border = BorderStroke(1.dp, borderColor)
-        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // 1. Cadre Master Header: MEDLAM AI + Status Indicator + Copy Turn
-                CompositionLocalProvider(
-                    LocalLayoutDirection provides if (isAgentArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = primaryAccent.copy(alpha = 0.15f)
-                            ) {
-                                Text(
-                                    text = if (isAgentArabic) "ميدلام" else "MEDLAM AI",
-                                    color = primaryAccent,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 9.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-
-                            val isGenerating = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code && !it.isClosed }
-                            val statusText = when {
-                                demuxed.isThinking -> "REASONING"
-                                isGenerating -> "GENERATING"
-                                else -> "READY"
-                            }
-                            val badgeColor = when {
-                                demuxed.isThinking -> primaryAccent
-                                isGenerating -> Color(0xFF10B981)
-                                else -> textDim
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = if (demuxed.isThinking || isGenerating) primaryAccent.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(4.5.dp)
-                                            .clip(CircleShape)
-                                            .background(badgeColor)
-                                    )
-                                    Text(
-                                        text = statusText,
-                                        color = badgeColor,
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
-                                color = textDim.copy(alpha = 0.6f),
-                                fontSize = 8.5.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            if (log.text.isNotBlank()) {
-                                IconButton(onClick = { clipboard.setText(AnnotatedString(log.text)) }, modifier = Modifier.size(22.dp)) {
-                                    Icon(Icons.Outlined.ContentCopy, "Copy Turn", tint = textDim, modifier = Modifier.size(12.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2. AI Agent Logic: Reasoning Tray in dedicated cadre frame
+                // 1. Thinking Process Activity Trace
                 if (demuxed.thinkingText.isNotBlank() || demuxed.isThinking) {
                     CliThoughtContainer(
                         thinkingText = demuxed.thinkingText,
@@ -1794,28 +1690,52 @@ fun CliLogMessageView(
                     )
                 }
 
-                // 3. AI Agent Coding & Organized Markdown Text (strictly inside cadre frame)
+                // 2. Sequential Blocks (Prose and Code)
                 if (demuxed.blocks.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        demuxed.blocks.forEach { block ->
-                            when (block) {
-                                is StreamDemultiplexer.DemuxBlock.Prose -> {
-                                    CliFormattedBody(block.text, isDark)
-                                }
-                                is StreamDemultiplexer.DemuxBlock.Code -> {
-                                    CliCodeBlockContainer(
-                                        code = block.code,
-                                        language = block.language,
-                                        filePath = block.filePath,
-                                        isDark = isDark,
-                                        isStreaming = !block.isClosed
-                                    )
-                                }
+                    demuxed.blocks.forEach { block ->
+                        when (block) {
+                            is StreamDemultiplexer.DemuxBlock.Prose -> {
+                                CliFormattedBody(block.text, isDark)
+                            }
+                            is StreamDemultiplexer.DemuxBlock.Code -> {
+                                CliCodeBlockContainer(
+                                    code = block.code,
+                                    language = block.language,
+                                    filePath = block.filePath,
+                                    isDark = isDark,
+                                    isStreaming = !block.isClosed
+                                )
                             }
                         }
+                    }
+                }
+
+                // 3. Subtle Inline Turn Indicator with Copy Action
+                if (!demuxed.isThinking && log.text.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Text(
+                            text = "[copy turn]",
+                            color = textDim.copy(alpha = 0.6f),
+                            fontSize = 8.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clickable { clipboard.setText(AnnotatedString(log.text)) }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                        Text(
+                            text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
+                            color = textDim.copy(alpha = 0.4f),
+                            fontSize = 8.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
                     }
                 }
             }
@@ -1826,101 +1746,147 @@ fun CliLogMessageView(
 @Composable
 fun CliFormattedBody(raw: String, isDark: Boolean) {
     val text = StreamDemultiplexer.sanitizeProse(raw).trim()
-
     if (text.isBlank()) return
 
-    val textBright = MaterialTheme.colorScheme.onSurface
-    val primaryAccent = MaterialTheme.colorScheme.primary
+    val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val headingColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF0369A1)
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        text.lines().forEach { line ->
+        val lines = text.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
             val trimmed = line.trim()
-            if (trimmed.isEmpty()) return@forEach
+            if (trimmed.isEmpty()) {
+                i++
+                continue
+            }
+
+            // Check if this line is a tool or process event line
+            val isToolLine = trimmed.startsWith("● ManageTask") || trimmed.startsWith("ManageTask(") ||
+                             trimmed.startsWith("● Bash") || trimmed.startsWith("Bash(") ||
+                             trimmed.startsWith("● FileWrite") || trimmed.startsWith("File written:") ||
+                             trimmed.startsWith("Background task done:") || trimmed.startsWith("$ ")
+
+            if (isToolLine) {
+                CliTerminalToolLine(trimmed, isDark)
+                i++
+                continue
+            }
 
             val isLineArabic = isArabic(trimmed)
             val isExecConfirmation = trimmed.contains("Executive Deployment Confirmation")
-            val isHeader = trimmed.startsWith("#") || (trimmed.endsWith(":") && trimmed.length < 50 && !trimmed.contains("http"))
+            val isHeader = trimmed.startsWith("#") || (trimmed.endsWith(":") && trimmed.length < 50 && !trimmed.contains("http") && !trimmed.contains("/"))
             val isBullet = trimmed.startsWith("- ") || trimmed.startsWith("• ") || trimmed.matches(Regex("^[0-9]+[.)].*"))
             val clean = trimmed.replace(Regex("^#+\\s*"), "")
 
             CompositionLocalProvider(
                 LocalLayoutDirection provides if (isLineArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
             ) {
-                if (isExecConfirmation) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp, bottom = 4.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
-                        border = BorderStroke(1.dp, primaryAccent.copy(alpha = 0.35f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                when {
+                    isExecConfirmation -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
                         ) {
-                            Text("📋", fontSize = 11.sp)
                             Text(
-                                text = clean.uppercase(),
-                                color = primaryAccent,
+                                text = "┌── EXECUTIVE DEPLOYMENT CONFIRMATION ────────────────────────",
+                                color = headingColor,
                                 fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "│ Status: Synced & Verified on Device Storage",
+                                color = textDim,
+                                fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
-                                letterSpacing = 0.5.sp
+                                modifier = Modifier.padding(vertical = 1.dp)
+                            )
+                            Text(
+                                text = "└────────────────────────────────────────────────────────────",
+                                color = headingColor,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
                             )
                         }
                     }
-                } else if (isHeader) {
-                    Text(
-                        text = clean,
-                        color = primaryAccent,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.SansSerif,
-                        textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-                    )
-                } else if (isBullet) {
-                    val bulletContent = clean.replace(Regex("^[-•0-9.)]+\\s*"), "")
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = if (isLineArabic) Arrangement.End else Arrangement.Start
-                    ) {
-                        if (!isLineArabic) {
-                            Text("• ", color = primaryAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
+                    isHeader -> {
                         Text(
-                            text = buildOrganizedMarkdownString(bulletContent, isDark),
-                            color = textBright,
+                            text = clean,
+                            color = headingColor,
                             fontSize = 12.sp,
-                            fontFamily = FontFamily.SansSerif,
-                            lineHeight = if (isLineArabic) 20.sp else 18.sp,
-                            letterSpacing = if (isLineArabic) 0.sp else 0.2.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
                             textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
-                            modifier = Modifier.weight(1f, fill = false)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp, bottom = 2.dp)
                         )
-                        if (isLineArabic) {
-                            Text(" •", color = primaryAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    isBullet -> {
+                        val bulletMarker = if (trimmed.matches(Regex("^[0-9]+[.)].*"))) {
+                            trimmed.substringBefore(" ") + " "
+                        } else {
+                            "• "
+                        }
+                        val bulletContent = clean.replace(Regex("^[-•0-9.)]+\\s*"), "")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 4.dp),
+                            verticalAlignment = Alignment.Top,
+                            horizontalArrangement = if (isLineArabic) Arrangement.End else Arrangement.Start
+                        ) {
+                            if (!isLineArabic) {
+                                Text(
+                                    text = bulletMarker,
+                                    color = headingColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Text(
+                                text = buildOrganizedMarkdownString(bulletContent, isDark),
+                                color = textBright,
+                                fontSize = 11.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = if (isLineArabic) 18.sp else 16.sp,
+                                textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (isLineArabic) {
+                                Text(
+                                    text = " •",
+                                    color = headingColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
                     }
-                } else {
-                    Text(
-                        text = buildOrganizedMarkdownString(clean, isDark),
-                        color = textBright,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.SansSerif,
-                        lineHeight = if (isLineArabic) 20.sp else 18.sp,
-                        letterSpacing = if (isLineArabic) 0.sp else 0.2.sp,
-                        textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    else -> {
+                        Text(
+                            text = buildOrganizedMarkdownString(clean, isDark),
+                            color = textBright,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = if (isLineArabic) 18.sp else 16.sp,
+                            textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
+            i++
         }
     }
 }
@@ -1933,8 +1899,8 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean): AnnotatedString
 
     val amberAccent = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
     val pathBg = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
-    val codeBg = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9)
-    val codeColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
+    val codeBg = if (isDark) Color(0xFF161B22) else Color(0xFFF1F5F9)
+    val codeColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
 
     val builder = AnnotatedString.Builder()
     var lastIndex = 0
@@ -1959,7 +1925,7 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean): AnnotatedString
             }
             v.startsWith("**") && v.endsWith("**") && v.length >= 4 -> {
                 val boldContent = v.substring(2, v.length - 2)
-                builder.pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
+                builder.pushStyle(SpanStyle(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
                 builder.append(boldContent)
                 builder.pop()
             }
@@ -2001,52 +1967,89 @@ fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
 fun CliWelcomeScreen(
     onSelectPrompt: (String) -> Unit
 ) {
-    val indigoAccent = MaterialTheme.colorScheme.primary
-    val cyanAccent = indigoAccent
-    val textBright = MaterialTheme.colorScheme.onSurface
-    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val borderColor = MaterialTheme.colorScheme.outlineVariant
-
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainerLowest
+    val headerAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val borderAccent = if (isDark) Color(0xFF1E293B) else Color(0xFFCBD5E1)
+    val promptChevron = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
         verticalArrangement = Arrangement.Center
     ) {
-        Text("MEDLAM-AI AGENT", color = cyanAccent, fontSize = 16.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-        Text("Autonomous On-Device Agent & Chat CLI", color = textDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-        Spacer(modifier = Modifier.height(16.dp))
+        // Terminal ASCII Banner Header
+        Text(
+            text = "┌────────────────────────────────────────────────────────┐",
+            color = borderAccent,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp
+        )
+        Text(
+            text = "│  SYNAPSE // MEDLAM-AI AGENT v2.0                       │",
+            color = headerAccent,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp
+        )
+        Text(
+            text = "│  Autonomous On-Device Execution & CLI Terminal         │",
+            color = textDim,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp
+        )
+        Text(
+            text = "└────────────────────────────────────────────────────────┘",
+            color = borderAccent,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp
+        )
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        Text(
+            text = "Quick Command Presets:",
+            color = textDim,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
 
         listOf(
             "Create a responsive modern web dashboard in /sdcard/Medlam-Ai/webapp",
             "Write a python automation script to organize downloads folder",
-            "Inspect system hardware, memory cache, and optimize background performance"
+            "Inspect system hardware, memory cache, and optimize performance"
         ).forEach { prompt ->
-            Surface(
-                onClick = { onSelectPrompt(prompt) },
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 5.dp)
-                    .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark),
-                color = cardBg,
-                shape = RoundedCornerShape(8.dp)
+                    .clickable { onSelectPrompt(prompt) }
+                    .padding(vertical = 5.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = prompt,
-                        color = textBright,
-                        fontSize = 11.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(Icons.Default.ArrowForward, null, tint = cyanAccent, modifier = Modifier.size(14.dp))
-                }
+                Text(
+                    text = "❯",
+                    color = promptChevron,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = prompt,
+                    color = textBright,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 16.sp,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
