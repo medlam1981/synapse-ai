@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.synapse.localai.ui.theme.*
 import androidx.lifecycle.lifecycleScope
@@ -804,6 +805,82 @@ private fun TelemetryMicroChip(
 }
 
 /**
+ * Model Engine Lifecycle Beacon (Neural Core Status Indicator).
+ * Lifecycle State Machine:
+ * - Loading / Booting (INITIALIZING / LOADING): Animated breathing green beacon (#10B981 / #22C55E) with soft outward halo.
+ * - Ready / Operational (LOADED / READY): Crisp, solid static green indicator (#22C55E) without animation.
+ * - Error / Fallback: Solid red/amber error indicator (#EF4444 / #F59E0B).
+ */
+@Composable
+fun ModelLifecycleBeacon(
+    isLoading: Boolean,
+    isReady: Boolean,
+    isError: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (isLoading) {
+        val pulseTransition = rememberInfiniteTransition(label = "beaconPulse")
+        val alphaAnim by pulseTransition.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(750, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "beaconAlpha"
+        )
+        val haloScale by pulseTransition.animateFloat(
+            initialValue = 1.0f,
+            targetValue = 1.8f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(750, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "beaconScale"
+        )
+
+        Box(
+            modifier = modifier.size(10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // Soft outward green halo (40% to 100% alpha breathing pulse)
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .scale(haloScale)
+                    .clip(CircleShape)
+                    .background(Color(0xFF22C55E).copy(alpha = (1.8f - haloScale) * 0.45f * alphaAnim))
+            )
+            // Vibrant green core beacon (#10B981 / #22C55E)
+            Box(
+                modifier = Modifier
+                    .size(5.5.dp)
+                    .alpha(alphaAnim)
+                    .clip(CircleShape)
+                    .background(Color(0xFF22C55E))
+            )
+        }
+    } else {
+        val dotColor = when {
+            isReady -> Color(0xFF22C55E)
+            isError -> Color(0xFFEF4444)
+            else -> MaterialTheme.colorScheme.outline
+        }
+        Box(
+            modifier = modifier.size(10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(5.5.dp)
+                    .clip(CircleShape)
+                    .background(dotColor)
+            )
+        }
+    }
+}
+
+/**
  * Consolidated Master Header Frame docked at the top of the viewport.
  * Single structured container docked at top of viewport with 3 organized internal rows:
  * - Top Row: Tactile micro-card drawer toggle, centered MEDLAM-AI AGENT title with status badge (IDLE / RUNNING), tactile micro-card settings gear.
@@ -871,33 +948,49 @@ fun ConsolidatedMasterHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Surface(
-                        onClick = onOpenDrawer,
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                        modifier = Modifier.size(28.dp)
+                    val cyanAccent = Color(0xFF00D2FF)
+                    val cyanBorder = Color(0xFF00B4D8)
+
+                    // Sidebar Drawer Button: Tactile micro-plate container with ambient cyan back-glow
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(7.dp))
                     ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            Icon(
-                                imageVector = Icons.Outlined.Widgets,
-                                contentDescription = "Menu",
-                                tint = primaryAccent,
-                                modifier = Modifier.size(16.dp)
-                            )
+                        Surface(
+                            onClick = onOpenDrawer,
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            border = BorderStroke(
+                                1.dp,
+                                Brush.verticalGradient(
+                                    listOf(cyanAccent.copy(alpha = 0.6f), cyanBorder.copy(alpha = 0.25f))
+                                )
+                            ),
+                            shadowElevation = 2.dp,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Widgets,
+                                    contentDescription = "Menu",
+                                    tint = cyanAccent,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
 
                     Text(
                         text = "MEDLAM-AI AGENT",
                         color = textBright,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.SansSerif,
-                        letterSpacing = 0.5.sp
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.09.em
                     )
 
-                    // Solid Status Badge
+                    // Solid Status Badge docked inline on exact baseline
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
@@ -924,21 +1017,33 @@ fun ConsolidatedMasterHeader(
                     }
                 }
 
-                // Right: Tactile micro-card settings gear icon anchored flush to far right
-                Surface(
-                    onClick = onOpenSettings,
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                    modifier = Modifier.size(28.dp)
+                // Right: Symmetric micro-plate settings gear icon anchored flush to far right
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .background(textDim.copy(alpha = 0.06f), RoundedCornerShape(7.dp))
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        Icon(
-                            imageVector = Icons.Outlined.Settings,
-                            contentDescription = "Settings",
-                            tint = textDim,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    Surface(
+                        onClick = onOpenSettings,
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(textDim.copy(alpha = 0.4f), textDim.copy(alpha = 0.18f))
+                            )
+                        ),
+                        shadowElevation = 2.dp,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Icon(
+                                imageVector = Icons.Outlined.Settings,
+                                contentDescription = "Settings",
+                                tint = textBright.copy(alpha = 0.85f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -948,6 +1053,7 @@ fun ConsolidatedMasterHeader(
             // (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16)
             // -------------------------------------------------------------
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
+            val isLocalMode = !isCloudMode
             val hasMtp = uiState.config.draftModelPath.isNotBlank() && File(uiState.config.draftModelPath).exists()
             val draftName = if (hasMtp) File(uiState.config.draftModelPath).nameWithoutExtension else null
             val rawBaseName = uiState.activeModelName.ifBlank {
@@ -970,7 +1076,8 @@ fun ConsolidatedMasterHeader(
             }
 
             val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
-            val isModelReady = uiState.localModelLoaded && !isModelLoading
+            val isModelReady = (uiState.localModelLoaded && !isModelLoading) || (isCloudMode && uiState.config.geminiApiKeys.isNotBlank())
+            val isModelError = uiState.modelLoadFailed || (isCloudMode && uiState.config.geminiApiKeys.isBlank()) || (isLocalMode && !uiState.localModelLoaded && !isModelLoading && uiState.config.localModelPath.isNotBlank() && uiState.streamInterruptMsg != null)
 
             Surface(
                 shape = RoundedCornerShape(5.dp),
@@ -984,17 +1091,10 @@ fun ConsolidatedMasterHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(5.dp)
-                            .clip(CircleShape)
-                            .background(
-                                when {
-                                    isModelLoading -> primaryAccent
-                                    isModelReady -> primaryAccent
-                                    else -> MaterialTheme.colorScheme.outline
-                                }
-                            )
+                    ModelLifecycleBeacon(
+                        isLoading = isModelLoading,
+                        isReady = isModelReady,
+                        isError = isModelError
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
@@ -1112,27 +1212,38 @@ fun CliThoughtContainer(
     var userExpanded by remember { mutableStateOf<Boolean?>(null) }
     val isExpanded = userExpanded ?: isThinking
 
-    val transition = rememberInfiniteTransition(label = "pulse")
-    val alphaAnim by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(650, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "alpha"
-    )
+    // Conditional animation transitions: isolated strictly to when streaming/thinking is actively running
+    val alphaAnim = if (isThinking) {
+        val transition = rememberInfiniteTransition(label = "pulse")
+        val alpha by transition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(650, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "alpha"
+        )
+        alpha
+    } else {
+        1f
+    }
 
-    val cursorTransition = rememberInfiniteTransition(label = "cursor")
-    val cursorAlpha by cursorTransition.animateFloat(
-        initialValue = 0.15f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(400, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "cursorAlpha"
-    )
+    val cursorAlpha = if (isThinking) {
+        val cursorTransition = rememberInfiniteTransition(label = "cursor")
+        val cAlpha by cursorTransition.animateFloat(
+            initialValue = 0.15f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(400, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "cursorAlpha"
+        )
+        cAlpha
+    } else {
+        0f
+    }
 
     val traceColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
     val traceAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
@@ -1144,7 +1255,7 @@ fun CliThoughtContainer(
             .fillMaxWidth()
             .padding(vertical = 3.dp)
     ) {
-        // Line Header: > Thinking Process [● LIVE / (N tokens)] (collapse / expand)
+        // Line Header: > Thinking Process : [● LIVE / (N tokens)] (collapse / expand)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1158,7 +1269,7 @@ fun CliThoughtContainer(
                 fontFamily = FontFamily.Monospace
             )
             Text(
-                text = "Thinking Process",
+                text = "Thinking Process :",
                 color = traceColor,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 11.sp,
@@ -1170,6 +1281,7 @@ fun CliThoughtContainer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    // Single crisp pulsing beacon dot preceding LIVE text
                     Box(
                         modifier = Modifier
                             .size(5.dp)
@@ -1178,7 +1290,7 @@ fun CliThoughtContainer(
                             .background(amberBullet)
                     )
                     Text(
-                        text = "● LIVE",
+                        text = "LIVE",
                         color = amberBullet,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -1572,23 +1684,25 @@ fun CliLogMessageView(
     when {
         isUser -> {
             // Authentic Developer Terminal Input Prompt: ❯ <prompt>
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(vertical = 3.dp)
             ) {
-                Text(
-                    text = "❯",
-                    color = primaryAccent,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(top = 1.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "❯",
+                        color = primaryAccent,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
 
-                Box(modifier = Modifier.weight(1f)) {
                     CompositionLocalProvider(
                         LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                     ) {
@@ -1597,20 +1711,22 @@ fun CliLogMessageView(
                             color = textBright,
                             fontSize = 13.sp,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = if (isLogArabic) 19.sp else 17.5.sp,
+                            fontWeight = FontWeight.Normal,
+                            lineHeight = if (isLogArabic) 18.5.sp else 17.sp,
                             textAlign = if (isLogArabic) TextAlign.End else TextAlign.Start,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
 
                 Text(
                     text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
-                    color = textDim.copy(alpha = 0.5f),
-                    fontSize = 8.5.sp,
+                    color = textDim.copy(alpha = 0.35f),
+                    fontSize = 8.sp,
                     fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(top = 1.dp)
                 )
             }
         }

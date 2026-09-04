@@ -95,6 +95,7 @@ data class AgentUiState(
     val keyboardActive: Boolean = false,
     val localModelLoading: Boolean = false,
     val localModelLoaded: Boolean = false,
+    val modelLoadFailed: Boolean = false,
     val loadingProgress: Float? = null,
     val loadingStatusText: String = "",
     val activeModelType: ModelType? = null,
@@ -537,6 +538,7 @@ class AgentViewModel : ViewModel() {
                 _uiState.update { it.copy(
                     localModelLoading = true, 
                     localModelLoaded = false, 
+                    modelLoadFailed = false,
                     activeModelType = null,
                     loadingProgress = 0.05f,
                     loadingStatusText = "Initializing Neural Core..."
@@ -570,6 +572,7 @@ class AgentViewModel : ViewModel() {
                                     _uiState.update { it.copy(
                                         localModelLoaded = true, 
                                         localModelLoading = false, 
+                                        modelLoadFailed = false,
                                         activeModelType = ModelType.GGUF, 
                                         activeModelName = modelName,
                                         loadingProgress = null,
@@ -587,6 +590,7 @@ class AgentViewModel : ViewModel() {
                                     _uiState.update { it.copy(
                                         localModelLoaded = false, 
                                         localModelLoading = false, 
+                                        modelLoadFailed = true,
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
@@ -601,6 +605,7 @@ class AgentViewModel : ViewModel() {
                         _uiState.update { it.copy(
                             localModelLoaded = false, 
                             localModelLoading = false, 
+                            modelLoadFailed = true,
                             loadingProgress = null,
                             loadingStatusText = ""
                         ) }
@@ -641,7 +646,7 @@ class AgentViewModel : ViewModel() {
         geminiClient?.isLoaded = true
         addSystemLog("AI Services Initialized")
 
-        _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size) }
+        _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = initialIdx % keys.size, modelLoadFailed = false) }
     }
 
     private fun isModelLoaded(): Boolean {
