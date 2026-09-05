@@ -1872,27 +1872,34 @@ fun CliLogMessageView(
                     )
                 }
 
-                // 2. Sequential Blocks (Prose and Code)
+                // 2. Sequential Blocks (Prose, Code, Tools, and Terminal Frames)
                 if (demuxed.blocks.isNotEmpty()) {
                     demuxed.blocks.forEach { block ->
-                        when (block) {
-                            is StreamDemultiplexer.DemuxBlock.Prose -> {
-                                CliFormattedBody(block.text, isDark)
-                            }
-                            is StreamDemultiplexer.DemuxBlock.Code -> {
-                                CliCodeBlockContainer(
-                                    code = block.code,
-                                    language = block.language,
-                                    filePath = block.filePath,
-                                    isDark = isDark,
-                                    isStreaming = !block.isClosed
-                                )
-                            }
-                            is StreamDemultiplexer.DemuxBlock.ToolCall -> {
-                                CliToolCallEvent(block, isDark)
-                            }
-                            is StreamDemultiplexer.DemuxBlock.TerminalFrame -> {
-                                CliTerminalFrame(block, isDark)
+                        key(when (block) {
+                            is StreamDemultiplexer.DemuxBlock.TerminalFrame -> block.executionId
+                            is StreamDemultiplexer.DemuxBlock.ToolCall -> block.executionId
+                            is StreamDemultiplexer.DemuxBlock.Code -> "${block.filePath}_${block.language}_${block.code.hashCode()}"
+                            is StreamDemultiplexer.DemuxBlock.Prose -> "prose_${block.text.hashCode()}"
+                        }) {
+                            when (block) {
+                                is StreamDemultiplexer.DemuxBlock.Prose -> {
+                                    CliFormattedBody(block.text, isDark)
+                                }
+                                is StreamDemultiplexer.DemuxBlock.Code -> {
+                                    CliCodeBlockContainer(
+                                        code = block.code,
+                                        language = block.language,
+                                        filePath = block.filePath,
+                                        isDark = isDark,
+                                        isStreaming = !block.isClosed
+                                    )
+                                }
+                                is StreamDemultiplexer.DemuxBlock.ToolCall -> {
+                                    CliToolCallEvent(block, isDark)
+                                }
+                                is StreamDemultiplexer.DemuxBlock.TerminalFrame -> {
+                                    CliTerminalFrame(block, isDark)
+                                }
                             }
                         }
                     }
@@ -1941,7 +1948,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
     val totalLines = cmdLines.size + outLines.size
     val isLongOutput = totalLines > 8
 
-    var isExpanded by remember(block.command, block.output) { mutableStateOf(!isLongOutput) }
+    var isExpanded by remember(block.executionId, block.command) { mutableStateOf(!isLongOutput) }
     var copiedRecently by remember { mutableStateOf(false) }
 
     LaunchedEffect(copiedRecently) {

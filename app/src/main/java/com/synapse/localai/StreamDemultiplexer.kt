@@ -2,6 +2,8 @@ package com.synapse.localai
 
 import android.util.Log
 import org.json.JSONObject
+import java.util.UUID
+import java.nio.charset.StandardCharsets
 
 /**
  * State Machine Token Parser & Stream Demultiplexer:
@@ -35,11 +37,13 @@ object StreamDemultiplexer {
             val isClosed: Boolean
         ) : DemuxBlock()
         data class ToolCall(
+            val executionId: String = UUID.randomUUID().toString(),
             val toolName: String,
             val params: Map<String, String>,
             val isClosed: Boolean = true
         ) : DemuxBlock()
         data class TerminalFrame(
+            val executionId: String = UUID.randomUUID().toString(),
             val command: String,
             val output: String,
             val exitCode: Int = 0,
@@ -389,22 +393,39 @@ object StreamDemultiplexer {
     private fun quarantineToolCalls(text: String): Pair<String, List<DemuxBlock>> {
         val blocks = mutableListOf<DemuxBlock>()
         var cleanText = text
+        val seenCommands = mutableSetOf<String>()
+        val seenToolCalls = mutableSetOf<String>()
 
-        // 1. Intercept explicit <terminal_frame command="..." exit_code="...">output</terminal_frame>
-        val tfRegex = Regex("""<terminal_frame\s+command=(["'])(.*?)\1\s+exit_code=(["'])(.*?)\3>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
+        // 1. Intercept explicit <terminal_frame ...>output</terminal_frame>
+        val tfRegex = Regex("""<terminal_frame([^>]*)>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
+        val attrRegex = Regex("""([a-zA-Z0-9_-]+)=(["'])(.*?)\2""")
+
         tfRegex.findAll(cleanText).forEach { m ->
-            val cmd = unescapeXml(m.groupValues[2].trim())
-            val exitCode = m.groupValues[4].trim().toIntOrNull() ?: 0
-            val output = unescapeXml(m.groupValues[5].trim())
+            val attrs = m.groupValues[1]
+            val innerContent = m.groupValues[2]
+            val attrMap = attrRegex.findAll(attrs).associate { it.groupValues[1].lowercase() to it.groupValues[3] }
+
+            val cmd = unescapeXml(attrMap["command"] ?: "")
+            val exitCode = attrMap["exit_code"]?.toIntOrNull() ?: 0
+            val explicitId = attrMap["id"] ?: attrMap["execution_id"]
+            val output = unescapeXml(innerContent.trim())
             val isClosed = m.value.contains("</terminal_frame>")
-            blocks.add(
-                DemuxBlock.TerminalFrame(
-                    command = cmd,
-                    output = output,
-                    exitCode = exitCode,
-                    isRunning = !isClosed
+
+            val normalizedCmd = cmd.trim()
+            if (normalizedCmd.isNotBlank() && !seenCommands.contains(normalizedCmd)) {
+                seenCommands.add(normalizedCmd)
+                val execId = explicitId?.takeIf { it.isNotBlank() }
+                    ?: UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
+                blocks.add(
+                    DemuxBlock.TerminalFrame(
+                        executionId = execId,
+                        command = cmd,
+                        output = output,
+                        exitCode = exitCode,
+                        isRunning = !isClosed
+                    )
                 )
-            )
+            }
         }
         cleanText = tfRegex.replace(cleanText, "")
 
@@ -414,14 +435,20 @@ object StreamDemultiplexer {
             val cmd = m.groupValues[1].trim()
             val output = m.groupValues[2].trim()
             val isClosed = m.value.endsWith("```")
-            blocks.add(
-                DemuxBlock.TerminalFrame(
-                    command = cmd,
-                    output = output,
-                    exitCode = 0,
-                    isRunning = !isClosed
+            val normalizedCmd = cmd.trim()
+            if (normalizedCmd.isNotBlank() && !seenCommands.contains(normalizedCmd)) {
+                seenCommands.add(normalizedCmd)
+                val execId = UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
+                blocks.add(
+                    DemuxBlock.TerminalFrame(
+                        executionId = execId,
+                        command = cmd,
+                        output = output,
+                        exitCode = 0,
+                        isRunning = !isClosed
+                    )
                 )
-            )
+            }
         }
         cleanText = legacyShellRegex.replace(cleanText, "")
 
@@ -441,16 +468,35 @@ object StreamDemultiplexer {
 
                     if (toolName in listOf("run_shell", "execute_shell", "terminal", "bash", "sh")) {
                         val cmd = params["command"] ?: params["cmd"] ?: inner.removeSurrounding("\"").trim()
-                        blocks.add(
-                            DemuxBlock.TerminalFrame(
-                                command = cmd,
-                                output = if (isClosed) "" else "[Executing command...]",
-                                exitCode = 0,
-                                isRunning = !isClosed
+                        val normalizedCmd = cmd.trim()
+                        // If this command has already been captured via <terminal_frame> or previous invoke, DROP IT!
+                        if (normalizedCmd.isNotBlank() && !seenCommands.contains(normalizedCmd)) {
+                            seenCommands.add(normalizedCmd)
+                            val execId = UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
+                            blocks.add(
+                                DemuxBlock.TerminalFrame(
+                                    executionId = execId,
+                                    command = cmd,
+                                    output = if (isClosed) "" else "[Executing command...]",
+                                    exitCode = 0,
+                                    isRunning = !isClosed
+                                )
                             )
-                        )
+                        }
                     } else {
-                        blocks.add(DemuxBlock.ToolCall(toolName, params, isClosed))
+                        val toolKey = "$toolName:${params.toSortedMap().entries.joinToString("&") { "${it.key}=${it.value}" }}"
+                        if (!seenToolCalls.contains(toolKey)) {
+                            seenToolCalls.add(toolKey)
+                            val execId = UUID.nameUUIDFromBytes("tc:$toolKey".toByteArray(StandardCharsets.UTF_8)).toString()
+                            blocks.add(
+                                DemuxBlock.ToolCall(
+                                    executionId = execId,
+                                    toolName = toolName,
+                                    params = params,
+                                    isClosed = isClosed
+                                )
+                            )
+                        }
                     }
                 }
             }

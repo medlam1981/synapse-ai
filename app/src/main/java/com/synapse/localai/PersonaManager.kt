@@ -54,6 +54,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
     const val DEFAULT_CONTROLLER_PERSONA = """# MEDLAM-AI [CLI AUTOMATION CORE]
 Headless Programmatic Execution Engine on Android ARM64.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
+- App Launching: Use `open_app(package_name)` to launch Android applications natively (e.g. com.android.chrome). Never pipe `am start` through `run_shell`.
 - Shell Execution: Execute terminal commands directly via `run_shell(command)`.
 - Task Scheduling: Queue background jobs via `schedule_task` or `queue_background_task`.
 - Pure Headless: Never simulate UI clicks, screen touches, or virtual keyboard inputs."""
@@ -76,17 +77,17 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             if (!dir.exists()) dir.mkdirs()
 
             val codingFile = File(dir, "coding.md")
-            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("do not generate HTML files") || codingFile.readText().contains("open_app")) {
+            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("do not generate HTML files")) {
                 codingFile.writeText(DEFAULT_CODING_PERSONA)
             }
 
             val chatFile = File(dir, "chat.md")
-            if (!chatFile.exists() || chatFile.length() == 0L || !chatFile.readText().contains("do not generate HTML files") || chatFile.readText().contains("open_app")) {
+            if (!chatFile.exists() || chatFile.length() == 0L || !chatFile.readText().contains("do not generate HTML files")) {
                 chatFile.writeText(DEFAULT_CHAT_PERSONA)
             }
 
             val controllerFile = File(dir, "android_controller.md")
-            if (!controllerFile.exists() || controllerFile.length() == 0L || !controllerFile.readText().contains("do not generate HTML files") || controllerFile.readText().contains("open_app") || controllerFile.readText().contains("App Launch")) {
+            if (!controllerFile.exists() || controllerFile.length() == 0L || !controllerFile.readText().contains("open_app")) {
                 controllerFile.writeText(DEFAULT_CONTROLLER_PERSONA)
             }
         } catch (e: Exception) {

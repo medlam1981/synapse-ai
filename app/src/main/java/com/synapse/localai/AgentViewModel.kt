@@ -1,6 +1,8 @@
 package com.synapse.localai
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.util.Log
 import android.net.Uri
@@ -8,6 +10,8 @@ import android.provider.MediaStore
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
+import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -186,6 +190,126 @@ class AgentViewModel : ViewModel() {
     
     private var coreMission: String = ""
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+
+    // ── Turn-Level Tool Deduplication & Idempotency Lock ──────────────────────
+    private val executedCallsThisTurn = Collections.synchronizedSet(mutableSetOf<String>())
+    private val inFlightCalls = Collections.synchronizedSet(mutableSetOf<String>())
+
+    fun computeCallHash(toolName: String, params: Map<String, String>): String {
+        val normalizedTool = toolName.trim().lowercase()
+        val normalizedParams = params.toSortedMap().entries
+            .joinToString("&") { "${it.key.trim().lowercase()}=${it.value.trim()}" }
+        val raw = "$normalizedTool|$normalizedParams"
+        val md = MessageDigest.getInstance("SHA-256")
+        val bytes = md.digest(raw.toByteArray(StandardCharsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    fun resolvePackageName(target: String, pm: PackageManager?): String {
+        var clean = target.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+        if (clean.contains("/")) {
+            clean = clean.substringBefore("/")
+        }
+        val lower = clean.lowercase()
+
+        val aliasMap = mapOf(
+            "chrome" to "com.android.chrome",
+            "google chrome" to "com.android.chrome",
+            "google-chrome" to "com.android.chrome",
+            "browser" to "com.android.chrome",
+            "web browser" to "com.android.chrome",
+            "youtube" to "com.google.android.youtube",
+            "yt" to "com.google.android.youtube",
+            "settings" to "com.android.settings",
+            "android settings" to "com.android.settings",
+            "camera" to "com.android.camera2",
+            "calculator" to "com.google.android.calculator",
+            "maps" to "com.google.android.apps.maps",
+            "google maps" to "com.google.android.apps.maps",
+            "photos" to "com.google.android.apps.photos",
+            "gallery" to "com.google.android.apps.photos",
+            "gmail" to "com.google.android.gm",
+            "mail" to "com.google.android.gm",
+            "email" to "com.google.android.gm",
+            "files" to "com.google.android.documentsui",
+            "file manager" to "com.google.android.documentsui",
+            "play store" to "com.android.vending",
+            "playstore" to "com.android.vending",
+            "clock" to "com.google.android.deskclock",
+            "contacts" to "com.google.android.contacts",
+            "messages" to "com.google.android.apps.messaging",
+            "sms" to "com.google.android.apps.messaging",
+            "phone" to "com.google.android.dialer",
+            "dialer" to "com.google.android.dialer"
+        )
+
+        aliasMap[lower]?.let { return it }
+
+        if (clean.contains(".")) {
+            return clean
+        }
+
+        if (pm != null) {
+            try {
+                val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                }
+                val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+                for (ri in resolveInfos) {
+                    val label = ri.loadLabel(pm).toString().lowercase()
+                    if (label == lower || label.contains(lower)) {
+                        return ri.activityInfo.packageName
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return clean
+    }
+
+    fun launchApplication(target: String, context: Context? = null): Pair<Boolean, String> {
+        val ctx = context ?: appContext ?: MainActivity.instance ?: return false to "Context unavailable"
+        val pm = ctx.packageManager
+        val packageName = resolvePackageName(target, pm)
+
+        return try {
+            val launchIntent = pm.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            } ?: return false to "Package '$packageName' not installed or has no launch intent"
+
+            ctx.startActivity(launchIntent)
+
+            val appLabel = try {
+                val appInfo = pm.getApplicationInfo(packageName, 0)
+                pm.getApplicationLabel(appInfo).toString()
+            } catch (_: Exception) {
+                packageName
+            }
+            true to appLabel
+        } catch (e: Exception) {
+            false to (e.message ?: "Failed to start activity")
+        }
+    }
+
+    private fun extractTargetFromAmStart(cmd: String): String? {
+        val nMatch = Regex("""-n\s+([a-zA-Z0-9_.]+)(?:/[^\s]+)?""").find(cmd)
+        if (nMatch != null) return nMatch.groupValues[1].trim()
+
+        val pMatch = Regex("""-p\s+([a-zA-Z0-9_.]+)""").find(cmd)
+        if (pMatch != null) return pMatch.groupValues[1].trim()
+
+        val words = cmd.split(Regex("""\s+"""))
+        for (word in words) {
+            val cleanWord = word.trim()
+            if (cleanWord.contains(".") && !cleanWord.startsWith("-") && cleanWord != "am" && cleanWord != "start") {
+                val pkg = if (cleanWord.contains("/")) cleanWord.substringBefore("/") else cleanWord
+                if (pkg.matches(Regex("""^[a-zA-Z0-9_.]+$"""))) {
+                    return pkg
+                }
+            }
+        }
+        return null
+    }
 
 
     private fun isExecutableCodeStreaming(text: String): Boolean {
@@ -720,7 +844,7 @@ The file execution engine automatically parses this block and writes the file di
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
+            return """CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
@@ -730,7 +854,7 @@ Format for calling tools:
 <parameter name="param_name">value</parameter>
 </invoke>
 </function_calls>
-Available tools: run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
@@ -751,9 +875,10 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         // 3. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
+CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
+- App Launching: Use open_app(package_name) (e.g. com.android.chrome) to launch Android applications natively. Do NOT pipe am start through run_shell.
 - Deliver code strictly inside ```lang code fences only when programming or requested to write code.
 - To write files to device storage (/sdcard/Medlam-Ai/...), use write_file(path, content) or place `file: <path>` immediately above the code fence.
 - Conclude with a high-level summary confirmation without echoing raw code.
@@ -761,7 +886,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
-- Available tools: run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
@@ -833,6 +958,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         }
 
         currentJob = viewModelScope.launch(Dispatchers.IO) {
+            executedCallsThisTurn.clear()
+            inFlightCalls.clear()
             _uiState.update { 
                 it.copy(
                     isProcessing = true,
@@ -1282,14 +1409,20 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             }
                             keepGoing = false
                         } else {
-                            val (usedTools, summary) = executeToolLoop(fullResponse)
+                            val (usedTools, summary) = executeToolLoop(fullResponse, actualContext)
                             val cleanSummary = summary ?: ""
                             if (usedTools) {
                                 toolsUsedThisTurn = true
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL, activeStatusDetail = "Synthesizing tool results...") }
+                                val proseOnly = cleanHistoryReply
+                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*?</(?:tool_calls|function_calls)>""", RegexOption.IGNORE_CASE), "")
+                                    .replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
+                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+                                    .replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+                                    .trim()
                                 val toolResultText = when {
-                                    cleanHistoryReply.isNotBlank() && cleanSummary.isNotBlank() && !cleanHistoryReply.contains(cleanSummary) -> "$cleanHistoryReply\n\n$cleanSummary"
-                                    cleanHistoryReply.isNotBlank() -> cleanHistoryReply
+                                    proseOnly.isNotBlank() && cleanSummary.isNotBlank() && !proseOnly.contains(cleanSummary) -> "$proseOnly\n\n$cleanSummary"
+                                    proseOnly.isNotBlank() -> proseOnly
                                     cleanSummary.isNotBlank() -> cleanSummary
                                     else -> ""
                                 }
@@ -1322,9 +1455,15 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 keepGoing = true
                             } else {
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
+                                val proseOnly = cleanHistoryReply
+                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*?</(?:tool_calls|function_calls)>""", RegexOption.IGNORE_CASE), "")
+                                    .replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
+                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+                                    .replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+                                    .trim()
                                 val finalText = when {
-                                    cleanHistoryReply.isNotBlank() && cleanSummary.isNotBlank() && !cleanHistoryReply.contains(cleanSummary) -> "$cleanHistoryReply\n\n$cleanSummary"
-                                    cleanHistoryReply.isNotBlank() -> cleanHistoryReply
+                                    proseOnly.isNotBlank() && cleanSummary.isNotBlank() && !proseOnly.contains(cleanSummary) -> "$proseOnly\n\n$cleanSummary"
+                                    proseOnly.isNotBlank() -> proseOnly
                                     cleanSummary.isNotBlank() -> cleanSummary
                                     else -> ""
                                 }
@@ -1435,7 +1574,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 taskHistory.add("assistant" to stripThinkingForHistory(reply))
                 while (taskHistory.size > 6) taskHistory.removeAt(0)
                 
-                val (usedTools, summary) = executeToolLoop(response)
+                val (usedTools, summary) = executeToolLoop(response, ctx)
                 if (usedTools) {
                     // Headless tool execution completed, continue loop if needed
                 } else {
@@ -1658,7 +1797,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         }
     }
 
-    private suspend fun executeToolLoop(response: String): Pair<Boolean, String?> = withTimeoutOrNull(25_000L) {
+    private suspend fun executeToolLoop(response: String, context: Context? = null): Pair<Boolean, String?> = withTimeoutOrNull(25_000L) {
+        val actualContext = context ?: appContext ?: MainActivity.instance
         try {
             val writtenFiles = withContext(Dispatchers.IO) {
                 ToolExecutor.extractAndWriteFiles(response)
@@ -1695,70 +1835,149 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
 
             for (m in iRegex.findAll(block)) {
-                val action = m.groupValues[1].trim()
+                val action = m.groupValues[1].trim().lowercase()
                 val innerBody = m.groupValues[2].trim()
                 _uiState.update { it.copy(activeStatusDetail = "Executing Tool / Task ($action)...") }
                 val params = StreamDemultiplexer.extractToolParams(innerBody)
 
-                when (action) {
-                    "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
-                        val rawCmd = params["command"] ?: params["cmd"] ?: innerBody.removeSurrounding("\"").trim()
-                        if (rawCmd.isNotBlank()) {
+                // ── Idempotency Gate ──────────────────────────────────────────
+                val callHash = computeCallHash(action, params)
+                if (executedCallsThisTurn.contains(callHash) || inFlightCalls.contains(callHash)) {
+                    Log.d(TAG, "Idempotency Lock: Suppressed duplicate tool call [$action] with hash $callHash")
+                    val preview = when (action) {
+                        "open_app", "launch_app", "start_app" -> {
+                            val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: innerBody.trim()
+                            resolvePackageName(target, actualContext?.packageManager)
+                        }
+                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
+                            params["command"] ?: params["cmd"] ?: innerBody.trim()
+                        }
+                        else -> params.values.firstOrNull() ?: innerBody.take(40)
+                    }
+                    val statusMsg = when (action) {
+                        "open_app", "launch_app", "start_app" -> "$preview brought to front."
+                        else -> "Identical operation already executed in active turn."
+                    }
+                    summaries.add("⚡ Tool($action: $preview) ─── [DUPLICATE SUPPRESSED]\n✔ Status: $statusMsg")
+                    continue
+                }
+
+                inFlightCalls.add(callHash)
+                try {
+                    when (action) {
+                        "open_app", "launch_app", "start_app" -> {
                             actionToolUsed = true
-                            val heredoc = interceptHeredocFileWrite(rawCmd)
-                            val (finalCmd, exitCode, output) = if (heredoc != null) {
-                                heredoc
-                            } else {
-                                val (code, out) = runShellWithExitCode(rawCmd)
-                                Triple(rawCmd, code, out)
+                            val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: params["name"] ?: innerBody.removeSurrounding("\"").trim()
+                            if (target.isNotBlank()) {
+                                val (success, appNameOrErr) = launchApplication(target, actualContext)
+                                val resolvedPkg = resolvePackageName(target, actualContext?.packageManager)
+                                if (success) {
+                                    summaries.add("⚡ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appNameOrErr brought to front.")
+                                    addSystemLog("Native app launch: $appNameOrErr ($resolvedPkg)")
+                                } else {
+                                    summaries.add("⚡ Tool(open_app: $target) ─── [FAILED]\n✖ Status: $appNameOrErr")
+                                    addSystemLog("Launch failed: $target ($appNameOrErr)")
+                                }
                             }
-                            val safeCmd = StreamDemultiplexer.escapeXml(finalCmd)
-                            val safeOut = StreamDemultiplexer.escapeXml(output.trim())
-                            summaries.add("""<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>""")
+                        }
+                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
+                            val rawCmd = params["command"] ?: params["cmd"] ?: innerBody.removeSurrounding("\"").trim()
+                            if (rawCmd.isNotBlank()) {
+                                actionToolUsed = true
+                                val trimmedCmd = rawCmd.trim()
+
+                                // Fast-Path Native Intent Routing: Intercept am start for zero-latency app launch
+                                if (trimmedCmd.startsWith("am start", ignoreCase = true)) {
+                                    val extractedTarget = extractTargetFromAmStart(trimmedCmd)
+                                    if (extractedTarget != null) {
+                                        val openAppParams = mapOf("package_name" to extractedTarget)
+                                        val openAppHash = computeCallHash("open_app", openAppParams)
+                                        if (executedCallsThisTurn.contains(openAppHash) || inFlightCalls.contains(openAppHash)) {
+                                            Log.d(TAG, "Idempotency Lock: Intercepted duplicate am start as open_app [$extractedTarget]")
+                                            val resolvedPkg = resolvePackageName(extractedTarget, actualContext?.packageManager)
+                                            summaries.add("⚡ Tool(open_app: $resolvedPkg) ─── [DUPLICATE SUPPRESSED]\n✔ Status: $resolvedPkg already brought to front in active turn.")
+                                        } else {
+                                            inFlightCalls.add(openAppHash)
+                                            try {
+                                                val (success, appLabel) = launchApplication(extractedTarget, actualContext)
+                                                if (success) {
+                                                    val resolvedPkg = resolvePackageName(extractedTarget, actualContext?.packageManager)
+                                                    executedCallsThisTurn.add(openAppHash)
+                                                    summaries.add("⚡ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appLabel brought to front.")
+                                                    addSystemLog("Native fast-path launch (intercepted am start): $appLabel ($resolvedPkg)")
+                                                } else {
+                                                    // Fallback to real shell execution if native intent fails
+                                                    val (code, out) = runShellWithExitCode(rawCmd)
+                                                    val safeCmd = StreamDemultiplexer.escapeXml(rawCmd)
+                                                    val safeOut = StreamDemultiplexer.escapeXml(out.trim())
+                                                    summaries.add("""<terminal_frame command="$safeCmd" exit_code="$code">$safeOut</terminal_frame>""")
+                                                }
+                                            } finally {
+                                                inFlightCalls.remove(openAppHash)
+                                            }
+                                        }
+                                        continue
+                                    }
+                                }
+
+                                val heredoc = interceptHeredocFileWrite(rawCmd)
+                                val (finalCmd, exitCode, output) = if (heredoc != null) {
+                                    heredoc
+                                } else {
+                                    val (code, out) = runShellWithExitCode(rawCmd)
+                                    Triple(rawCmd, code, out)
+                                }
+                                val safeCmd = StreamDemultiplexer.escapeXml(finalCmd)
+                                val safeOut = StreamDemultiplexer.escapeXml(output.trim())
+                                summaries.add("""<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>""")
+                            }
+                        }
+                        "write_file", "write_to_file", "create_file", "edit_file" -> {
+                            val path = params["path"] ?: params["file_path"] ?: params["target_file"] ?: params["filepath"] ?: ""
+                            val content = params["content"] ?: params["code"] ?: params["text"] ?: ""
+                            if (path.isNotBlank()) {
+                                actionToolUsed = true
+                                val resolved = ToolExecutor.resolvePath(path, ToolExecutor.BASE_DIR)
+                                val f = File(resolved)
+                                f.parentFile?.let { if (!it.exists()) it.mkdirs() }
+                                f.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
+                                addSystemLog("File written natively: ${f.absolutePath} (${f.length()} bytes)")
+                                summaries.add("⚡ Tool(write_file: ${f.name}) ─── [SAVED]\n✔ Status: Wrote ${f.length()} bytes to ${f.absolutePath}")
+                            }
+                        }
+                        "web_search", "search", "google_search" -> {
+                            val q = params["query"] ?: params["q"] ?: innerBody.removeSurrounding("\"").trim()
+                            if (q.isNotBlank()) {
+                                actionToolUsed = true
+                                val searchRes = WebSearchTool.search(q)
+                                summaries.add(searchRes)
+                            }
+                        }
+                        "schedule_task" -> {
+                            val desc = params["description"] ?: "Scheduled Task"
+                            val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
+                            val delay = params["delay_minutes"]?.toIntOrNull() ?: 5
+                            val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
+                            updateTaskState()
+                            summaries.add("Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)")
+                        }
+                        "queue_background_task", "queue_task" -> {
+                            val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
+                            val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
+                            updateTaskState()
+                            summaries.add("Queued background task [tsk #$tid]: $cmd")
+                        }
+                        "complete" -> {
+                            val s = params["summary"] ?: innerBody
+                            if (s.isNotBlank()) {
+                                summaries.add(s)
+                            }
+                            return@withTimeoutOrNull false to summaries.joinToString("\n\n")
                         }
                     }
-                    "write_file", "write_to_file", "create_file", "edit_file" -> {
-                        val path = params["path"] ?: params["file_path"] ?: params["target_file"] ?: params["filepath"] ?: ""
-                        val content = params["content"] ?: params["code"] ?: params["text"] ?: ""
-                        if (path.isNotBlank()) {
-                            actionToolUsed = true
-                            val resolved = ToolExecutor.resolvePath(path, ToolExecutor.BASE_DIR)
-                            val f = File(resolved)
-                            f.parentFile?.let { if (!it.exists()) it.mkdirs() }
-                            f.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
-                            addSystemLog("File written natively: ${f.absolutePath} (${f.length()} bytes)")
-                            summaries.add("[Native I/O File Succeeded]: Saved ${f.length()} bytes to ${f.absolutePath}")
-                        }
-                    }
-                    "web_search", "search", "google_search" -> {
-                        val q = params["query"] ?: params["q"] ?: innerBody.removeSurrounding("\"").trim()
-                        if (q.isNotBlank()) {
-                            actionToolUsed = true
-                            val searchRes = WebSearchTool.search(q)
-                            summaries.add(searchRes)
-                        }
-                    }
-                    "schedule_task" -> {
-                        val desc = params["description"] ?: "Scheduled Task"
-                        val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
-                        val delay = params["delay_minutes"]?.toIntOrNull() ?: 5
-                        val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
-                        updateTaskState()
-                        summaries.add("Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)")
-                    }
-                    "queue_background_task", "queue_task" -> {
-                        val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
-                        val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
-                        updateTaskState()
-                        summaries.add("Queued background task [tsk #$tid]: $cmd")
-                    }
-                    "complete" -> {
-                        val s = params["summary"] ?: innerBody
-                        if (s.isNotBlank()) {
-                            summaries.add(s)
-                        }
-                        return@withTimeoutOrNull false to summaries.joinToString("\n\n")
-                    }
+                } finally {
+                    inFlightCalls.remove(callHash)
+                    executedCallsThisTurn.add(callHash)
                 }
                 delay(100)
             }
