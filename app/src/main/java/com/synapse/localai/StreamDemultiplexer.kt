@@ -1,6 +1,7 @@
 package com.synapse.localai
 
 import android.util.Log
+import org.json.JSONObject
 
 /**
  * State Machine Token Parser & Stream Demultiplexer:
@@ -237,69 +238,130 @@ object StreamDemultiplexer {
     }
 
     /**
+     * Resilient parameter parser that handles:
+     * 1. XML parameter tags: <parameter name="param">value</parameter>
+     * 2. Direct named tags: <command>...</command>, <query>...</query>
+     * 3. Key-Value lines: command: "..." or query: "..."
+     * 4. JSON objects: {"command": "..."}
+     * 5. Raw text body inside <invoke> or <parameters>
+     */
+    fun extractToolParams(rawBody: String): Map<String, String> {
+        val params = mutableMapOf<String, String>()
+
+        // 1. Standard XML: <parameter name="param_name">value</parameter>
+        val pRegex = Regex("<parameter name=[\"'](.*?)[\"']>(.*?)(?:</parameter>|$)", RegexOption.DOT_MATCHES_ALL)
+        pRegex.findAll(rawBody).forEach { p ->
+            val k = p.groupValues[1].trim()
+            val v = p.groupValues[2].trim()
+            if (v.isNotBlank()) params[k] = v
+        }
+        if (params.isNotEmpty()) return params
+
+        // 2. Direct tag names: <command>...</command>, <query>...</query>, etc.
+        val tagRegex = Regex("<([a-zA-Z0-9_-]+)>(.*?)</\\1>", RegexOption.DOT_MATCHES_ALL)
+        tagRegex.findAll(rawBody).forEach { t ->
+            val k = t.groupValues[1].trim().lowercase()
+            val v = t.groupValues[2].trim()
+            if (k != "parameters" && k != "parameter" && v.isNotBlank()) {
+                params[k] = v
+            }
+        }
+        if (params.isNotEmpty()) return params
+
+        // 3. Key-Value pairs: command: "..." or query: "..."
+        val kvRegex = Regex("""(?:^|\n)\s*([a-zA-Z0-9_-]+)\s*[:=]\s*["']?([\s\S]*?)["']?\s*(?:$|\n)""")
+        kvRegex.findAll(rawBody).forEach { kv ->
+            val k = kv.groupValues[1].trim().lowercase()
+            val v = kv.groupValues[2].trim().removeSurrounding("\"").removeSurrounding("'")
+            if (k in listOf("command", "cmd", "query", "q", "description", "desc", "delay_minutes", "summary") && v.isNotBlank()) {
+                params[k] = v
+            }
+        }
+        if (params.isNotEmpty()) return params
+
+        // 4. JSON structure: {"command": "..."}
+        val trimmed = rawBody.trim()
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            try {
+                val json = JSONObject(trimmed)
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    params[k] = json.optString(k, "")
+                }
+                if (params.isNotEmpty()) return params
+            } catch (_: Exception) {}
+        }
+
+        // 5. Raw text fallback inside <invoke> or <parameters>
+        val clean = rawBody
+            .replace("<parameters>", "")
+            .replace("</parameters>", "")
+            .replace("command:", "")
+            .trim()
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+        if (clean.isNotBlank()) {
+            params["command"] = clean
+            params["cmd"] = clean
+            params["query"] = clean
+            params["q"] = clean
+            params["summary"] = clean
+        }
+
+        return params
+    }
+
+    /**
      * Intercepts and quarantines tool calls from the raw stream text.
      * Removes all tool call XML/fences from the returned prose text so that code containers
      * and file I/O operations are completely muted.
      */
     private fun quarantineToolCalls(text: String): Pair<String, List<DemuxBlock.ToolCall>> {
-        if (!text.contains("<function_calls") && !text.contains("<invoke") && !text.contains("</invoke>")) {
+        if (!text.contains("<function_calls") && !text.contains("<tool_calls") && !text.contains("<invoke") && !text.contains("</invoke>")) {
             return text to emptyList()
         }
 
         val toolCalls = mutableListOf<DemuxBlock.ToolCall>()
         val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
-        val pRegex = Regex("<parameter name=[\"'](.*?)[\"']>(.*?)(?:</parameter>|$)", RegexOption.DOT_MATCHES_ALL)
 
         var cleanText = text
 
-        // 1. Strip fenced tool calls: ```xml\n<function_calls>...``` or ```\n<function_calls>...```
-        val fencedXmlRegex = Regex("""```(?:xml)?\s*(<function_calls>[\s\S]*?(?:</function_calls>|```|$))""", RegexOption.IGNORE_CASE)
-        fencedXmlRegex.findAll(cleanText).forEach { m ->
-            val inner = m.groupValues[1]
-            iRegex.findAll(inner).forEach { inv ->
+        val parseInvokes = { source: String ->
+            iRegex.findAll(source).forEach { inv ->
                 val toolName = inv.groupValues[1].trim()
-                val params = mutableMapOf<String, String>()
-                pRegex.findAll(inv.groupValues[2]).forEach { p ->
-                    params[p.groupValues[1].trim()] = p.groupValues[2].trim()
-                }
+                val inner = inv.groupValues[2].trim()
+                val params = extractToolParams(inner)
                 val isClosed = inv.value.contains("</invoke>")
                 toolCalls.add(DemuxBlock.ToolCall(toolName, params, isClosed))
             }
         }
+
+        // 1. Strip fenced tool calls: ```xml\n<function_calls>...``` or ```\n<function_calls>...```
+        val fencedXmlRegex = Regex("""```(?:xml)?\s*(<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|```|$))""", RegexOption.IGNORE_CASE)
+        fencedXmlRegex.findAll(cleanText).forEach { m ->
+            parseInvokes(m.groupValues[1])
+        }
         cleanText = fencedXmlRegex.replace(cleanText, "")
 
-        // 2. Strip unfenced <function_calls> blocks
-        val fnRegex = Regex("""<function_calls>[\s\S]*?(?:</function_calls>|$)""", RegexOption.IGNORE_CASE)
+        // 2. Strip unfenced <function_calls> or <tool_calls> blocks
+        val fnRegex = Regex("""<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|$)""", RegexOption.IGNORE_CASE)
         fnRegex.findAll(cleanText).forEach { m ->
-            iRegex.findAll(m.value).forEach { inv ->
-                val toolName = inv.groupValues[1].trim()
-                val params = mutableMapOf<String, String>()
-                pRegex.findAll(inv.groupValues[2]).forEach { p ->
-                    params[p.groupValues[1].trim()] = p.groupValues[2].trim()
-                }
-                val isClosed = inv.value.contains("</invoke>")
-                toolCalls.add(DemuxBlock.ToolCall(toolName, params, isClosed))
-            }
+            parseInvokes(m.value)
         }
         cleanText = fnRegex.replace(cleanText, "")
 
         // 3. Strip any standalone <invoke> tags
-        iRegex.findAll(cleanText).forEach { inv ->
-            val toolName = inv.groupValues[1].trim()
-            val params = mutableMapOf<String, String>()
-            pRegex.findAll(inv.groupValues[2]).forEach { p ->
-                params[p.groupValues[1].trim()] = p.groupValues[2].trim()
-            }
-            val isClosed = inv.value.contains("</invoke>")
-            toolCalls.add(DemuxBlock.ToolCall(toolName, params, isClosed))
-        }
+        parseInvokes(cleanText)
         cleanText = iRegex.replace(cleanText, "")
 
         // 4. Strip any residual XML tags / artifacts
         cleanText = cleanText
+            .replace("<tool_calls>", "")
+            .replace("</tool_calls>", "")
             .replace("<function_calls>", "")
             .replace("</function_calls>", "")
-            .replace(Regex("""<function_calls\b.*"""), "")
+            .replace(Regex("""<(?:tool_calls|function_calls)\b.*"""), "")
             .trim()
 
         return cleanText to toolCalls
@@ -314,9 +376,10 @@ object StreamDemultiplexer {
         val execIdx1 = text.indexOf("### Executive Deployment Confirmation", fromIndex)
         val execIdx2 = text.indexOf("Executive Deployment Confirmation:", fromIndex)
         val toolIdx1 = text.indexOf("<function_calls", fromIndex)
-        val toolIdx2 = text.indexOf("<invoke", fromIndex)
+        val toolIdx2 = text.indexOf("<tool_calls", fromIndex)
+        val toolIdx3 = text.indexOf("<invoke", fromIndex)
 
-        val boundaries = listOf(execIdx1, execIdx2, toolIdx1, toolIdx2).filter { it != -1 }
+        val boundaries = listOf(execIdx1, execIdx2, toolIdx1, toolIdx2, toolIdx3).filter { it != -1 }
         val earliestBoundary = if (boundaries.isNotEmpty()) boundaries.minOrNull() ?: -1 else -1
 
         val fence = text.indexOf("```", fromIndex)
@@ -346,9 +409,11 @@ object StreamDemultiplexer {
                 continue
             }
 
-            // Filter out any XML invoke / function_calls tags
+            // Filter out any XML invoke / function_calls / tool_calls tags
             if (trimmed.startsWith("<invoke") || trimmed.startsWith("</invoke>") ||
                 trimmed.startsWith("<function_calls>") || trimmed.startsWith("</function_calls>") ||
+                trimmed.startsWith("<tool_calls>") || trimmed.startsWith("</tool_calls>") ||
+                trimmed.startsWith("<parameters>") || trimmed.startsWith("</parameters>") ||
                 trimmed.startsWith("<parameter") || trimmed.startsWith("</parameter>")) {
                 continue
             }

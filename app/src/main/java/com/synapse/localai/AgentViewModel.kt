@@ -1209,23 +1209,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 val nextCycleMsg = "⚡ Auto-extending token stream [Cycle ${continuationCycle + 1}]..."
                                 Log.i(TAG, "$chunkFinalizedMsg\n$nextCycleMsg")
 
-                                val progressLog = LogEntry(
-                                    id = UUID.randomUUID().toString(),
-                                    sender = "AGENT",
-                                    text = "$chunkFinalizedMsg\n$nextCycleMsg",
-                                    isThinking = false
-                                )
-
                                 _uiState.update { state ->
-                                    val updatedLogs = state.logs.toMutableList()
-                                    val liveIdx = updatedLogs.indexOfLast { it.id == liveLogId }
-                                    if (liveIdx >= 0) {
-                                        updatedLogs.add(liveIdx, progressLog)
-                                    } else {
-                                        updatedLogs.add(progressLog)
-                                    }
                                     state.copy(
-                                        logs = updatedLogs,
                                         activeStatusDetail = "⚡ Auto-extending token stream [Cycle ${continuationCycle + 1}]...",
                                         currentPhase = AgentActionPhase.GENERATING_CODE,
                                         isProcessing = true
@@ -1238,26 +1223,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 // Clean termination with STOP or natural stream completion
                                 continueRecursion = false
                                 val formattedTotalTokens = NumberFormat.getNumberInstance(Locale.US).format(totalAccumulatedTokens)
-                                val completeMsg = "⚡ Execution Complete: Stream terminated cleanly with STOP [Total Tokens: $formattedTotalTokens]"
+                                val completeMsg = "⚡ Execution Complete [Total Tokens: $formattedTotalTokens]"
                                 Log.i(TAG, completeMsg)
 
-                                val completeLog = LogEntry(
-                                    id = UUID.randomUUID().toString(),
-                                    sender = "AGENT",
-                                    text = completeMsg,
-                                    isThinking = false
-                                )
-
                                 _uiState.update { state ->
-                                    val updatedLogs = state.logs.toMutableList()
-                                    val liveIdx = updatedLogs.indexOfLast { it.id == liveLogId }
-                                    if (liveIdx >= 0) {
-                                        updatedLogs.add(liveIdx + 1, completeLog)
-                                    } else {
-                                        updatedLogs.add(completeLog)
-                                    }
                                     state.copy(
-                                        logs = updatedLogs
+                                        activeStatusDetail = "⚡ Ready [${formattedTotalTokens} tokens]"
                                     )
                                 }
                             }
@@ -1333,7 +1304,38 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             val (usedTools, summary) = executeToolLoop(fullResponse)
                             if (usedTools) {
                                 toolsUsedThisTurn = true
-                                _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL) }
+                                _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL, activeStatusDetail = "Synthesizing tool results...") }
+                                val toolResultText = if (!summary.isNullOrBlank()) {
+                                    if (assistantReply.isNotBlank() && !assistantReply.contains(summary)) "$assistantReply\n\n$summary" else summary
+                                } else {
+                                    assistantReply
+                                }
+                                _uiState.update { state ->
+                                    val updated = state.logs.map { log ->
+                                        if (log.id == liveLogId) log.copy(text = toolResultText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
+                                    }
+                                    state.copy(logs = updated)
+                                }
+                                val sid = currentSessionId.value
+                                val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$toolResultText" else toolResultText
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    chatDb?.insertMessage(
+                                        ChatMessageEntity(
+                                            id = liveLogId,
+                                            sessionId = sid,
+                                            sender = "AGENT",
+                                            text = dbText,
+                                            timestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                    refreshSessions()
+                                }
+
+                                synchronized(conversationHistory) {
+                                    val toolFeedback = "[System Tool Execution Output]:\n${summary ?: "Tool executed successfully."}\n\nPlease analyze the above results and present your complete final response to the user."
+                                    conversationHistory.add("user" to toolFeedback)
+                                    while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
+                                }
                                 keepGoing = true
                             } else {
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
@@ -1637,73 +1639,74 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         }
 
         val clean = response.replace("```xml", "").replace("```", "").trim()
-        val hasFunctionCalls = clean.contains("<function_calls>")
+        val hasFunctionCalls = clean.contains("<function_calls>") || clean.contains("<tool_calls>")
         val hasInvoke = clean.contains("<invoke")
 
         if (!hasInvoke) return@withTimeoutOrNull false to null
 
         val block = if (hasFunctionCalls) {
-            val start = clean.indexOf("<function_calls>")
-            var b = clean.substring(start + 16)
-            val end = b.indexOf("</function_calls>")
+            val start = if (clean.contains("<function_calls>")) clean.indexOf("<function_calls>") + 16 else clean.indexOf("<tool_calls>") + 12
+            var b = clean.substring(start)
+            val end = if (b.contains("</function_calls>")) b.indexOf("</function_calls>") else if (b.contains("</tool_calls>")) b.indexOf("</tool_calls>") else -1
             if (end != -1) b.substring(0, end) else b
         } else {
             clean
         }
 
         val summaries = mutableListOf<String>()
+        var actionToolUsed = false
         try {
-            val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)</invoke>", RegexOption.DOT_MATCHES_ALL)
-            val pRegex = Regex("<parameter name=[\"'](.*?)[\"']>(.*?)</parameter>", RegexOption.DOT_MATCHES_ALL)
+            val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
 
             for (m in iRegex.findAll(block)) {
                 val action = m.groupValues[1].trim()
+                val innerBody = m.groupValues[2].trim()
                 _uiState.update { it.copy(activeStatusDetail = "Executing Tool / Task ($action)...") }
-                val params = mutableMapOf<String, String>()
-                pRegex.findAll(m.groupValues[2]).forEach { p ->
-                    params[p.groupValues[1].trim()] = p.groupValues[2].trim()
-                }
+                val params = StreamDemultiplexer.extractToolParams(innerBody)
 
                 when (action) {
                     "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
-                        val cmd = params["command"] ?: params["cmd"] ?: ""
+                        val cmd = params["command"] ?: params["cmd"] ?: innerBody.removeSurrounding("\"").trim()
                         if (cmd.isNotBlank()) {
+                            actionToolUsed = true
                             val res = runShellInternal(cmd)
                             summaries.add("Shell output (`$cmd`):\n```bash\n${res.trim()}\n```")
                         }
                     }
                     "web_search", "search", "google_search" -> {
-                        val q = params["query"] ?: params["q"] ?: ""
+                        val q = params["query"] ?: params["q"] ?: innerBody.removeSurrounding("\"").trim()
                         if (q.isNotBlank()) {
+                            actionToolUsed = true
                             val searchRes = WebSearchTool.search(q)
                             summaries.add(searchRes)
                         }
                     }
                     "schedule_task" -> {
                         val desc = params["description"] ?: "Scheduled Task"
-                        val cmd = params["command"] ?: params["cmd"] ?: ""
+                        val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
                         val delay = params["delay_minutes"]?.toIntOrNull() ?: 5
                         val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                         updateTaskState()
                         summaries.add("Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)")
                     }
                     "queue_background_task", "queue_task" -> {
-                        val cmd = params["command"] ?: params["cmd"] ?: ""
+                        val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
                         val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                         updateTaskState()
                         summaries.add("Queued background task [tsk #$tid]: $cmd")
                     }
                     "complete" -> {
-                        val s = params["summary"]
-                        if (!s.isNullOrBlank()) {
+                        val s = params["summary"] ?: innerBody
+                        if (s.isNotBlank()) {
                             summaries.add(s)
                         }
+                        return@withTimeoutOrNull false to summaries.joinToString("\n\n")
                     }
                 }
-                delay(200)
+                delay(100)
             }
             val finalSummary = if (summaries.isNotEmpty()) summaries.joinToString("\n\n") else null
-            false to finalSummary
+            actionToolUsed to finalSummary
         } catch (e: Exception) {
             Log.e(TAG, "Tool loop error: ${e.message}")
             false to null
@@ -1854,7 +1857,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
     fun switchSession(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val session = chatDb?.getSession(sessionId) ?: return@launch
-            val messages = chatDb?.getMessagesForSession(sessionId) ?: emptyList()
+            val messages = (chatDb?.getMessagesForSession(sessionId) ?: emptyList())
+                .filter { !it.text.startsWith("⚡ Execution Complete") && !it.text.startsWith("⚡ Generation Chunk") }
             val restoredLogs = messages.map { msg ->
                 val parsed = parseThoughtAndContent(msg.text)
                 LogEntry(
