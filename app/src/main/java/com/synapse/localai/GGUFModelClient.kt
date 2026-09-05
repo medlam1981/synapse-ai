@@ -87,6 +87,9 @@ class GGUFModelClient {
     var isLoaded: Boolean = false
         private set
 
+    @Volatile var lastFinishReason: String? = null
+    @Volatile var lastTokenCount: Int = 0
+
     private fun resolveModelPath(
         context: Context,
         modelIdentifier: String,
@@ -699,6 +702,9 @@ class GGUFModelClient {
         var line: String? = null
         var inReasoningMode = false
 
+        lastFinishReason = null
+        lastTokenCount = 0
+
         try {
             while (coroutineContext.isActive && reader.readLine().also { line = it } != null) {
                 val l = line?.trim() ?: continue
@@ -709,7 +715,17 @@ class GGUFModelClient {
 
                 try {
                     val json = JSONObject(data)
-                    val deltaObj = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
+                    val choice0 = json.optJSONArray("choices")?.optJSONObject(0)
+                    val finishReason = choice0?.optString("finish_reason")
+                    if (!finishReason.isNullOrBlank() && finishReason != "null") {
+                        lastFinishReason = when (finishReason.lowercase()) {
+                            "length" -> "MAX_TOKENS"
+                            "stop" -> "STOP"
+                            else -> finishReason.uppercase()
+                        }
+                    }
+
+                    val deltaObj = choice0?.optJSONObject("delta")
                     val reasoning = if (deltaObj != null && deltaObj.has("reasoning_content") && !deltaObj.isNull("reasoning_content")) {
                         deltaObj.getString("reasoning_content")
                     } else ""
@@ -749,9 +765,14 @@ class GGUFModelClient {
             if (inReasoningMode) {
                 emit("</think>")
             }
+            lastTokenCount = tokenCount
+            if (lastFinishReason == null) {
+                lastFinishReason = "STOP"
+            }
         } catch (e: Exception) {
             emit("[ERROR: ${e.message}]")
         } finally {
+            lastTokenCount = tokenCount
             reader.close()
             conn.disconnect()
         }

@@ -25,6 +25,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.text.NumberFormat
 import java.io.File
 import java.util.*
 import com.synapse.localai.tools.YouTubeTool
@@ -1018,6 +1019,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         streamInterruptMsg = null
                     ) }
 
+                    var continuationCycle = 1
+                    var totalAccumulatedTokens = 0
+                    var continueRecursion = true
+                    var hitStorageLimit = false
+                    val continuationPromptPayload = "Continue generation exactly from the last emitted token. Do not repeat prior lines. Continue directly with the remaining code/text."
+
                     try {
                         val historyCopy = synchronized(conversationHistory) {
                             val historyList = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
@@ -1086,50 +1093,184 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             }
                         }
 
-                        val stream = when (modelType) {
-                            ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(
-                                history = historyCopy,
-                                systemPrompt = systemPrompt,
-                                onSpeedUpdate = { tps ->
-                                    _uiState.update { it.copy(tokensPerSecond = tps) }
-                                }
-                            )
-                            ModelType.GEMINI -> {
-                                val json = JSONArray()
-                                historyCopy.forEachIndexed { i, (r, c) ->
-                                    val m = JSONObject().put("role", r).put("content", c)
-                                    if (i == historyCopy.size - 1 && imageBase64List.isNotEmpty()) m.put("images", JSONArray(imageBase64List))
-                                    json.put(m)
-                                }
-                                geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
-                                    responseSb.setLength(0)
-                                    liveDiskStreamer.reset()
-                                    pushUiUpdate("")
+                        while (continueRecursion && !streamInterrupted) {
+                            // Hardware Storage Sentinel Guardrail before continuation cycle
+                            if (continuationCycle > 1) {
+                                if (StorageSentinel.isStorageCritical()) {
+                                    hitStorageLimit = true
+                                    liveDiskStreamer.flushAndSeal()
+                                    val sentinelMsg = "⚡ Storage Sentinel: Disk limit reached (< 500MB remaining). Stream gracefully sealed."
+                                    Log.w(TAG, sentinelMsg)
+                                    val sentinelLog = LogEntry(
+                                        id = UUID.randomUUID().toString(),
+                                        sender = "AGENT",
+                                        text = sentinelMsg,
+                                        isThinking = false
+                                    )
+                                    _uiState.update { state ->
+                                        state.copy(
+                                            logs = state.logs + sentinelLog,
+                                            isProcessing = false,
+                                            activeStatusDetail = "⚡ Idle / Ready",
+                                            currentPhase = AgentActionPhase.IDLE
+                                        )
+                                    }
+                                    break
                                 }
                             }
-                        }
 
-                        stream.collect { chunk ->
-                            responseSb.append(chunk)
-                            val now = System.currentTimeMillis()
-                            // Real-time letter-by-letter stream: 33ms (~30 FPS) throttle gives instant smooth UI updates while preventing CPU starvation
-                            if (now - lastUiUpdateTime >= 33L) {
-                                lastUiUpdateTime = now
+                            val cycleStartOffset = responseSb.length
+
+                            val stream = when (modelType) {
+                                ModelType.GGUF -> {
+                                    val ggufHistory = if (continuationCycle == 1) {
+                                        historyCopy
+                                    } else {
+                                        historyCopy + listOf(
+                                            "assistant" to responseSb.toString(),
+                                            "user" to continuationPromptPayload
+                                        )
+                                    }
+                                    ggufClient!!.generateStreamWithHistory(
+                                        history = ggufHistory,
+                                        systemPrompt = systemPrompt,
+                                        onSpeedUpdate = { tps ->
+                                            _uiState.update { it.copy(tokensPerSecond = tps) }
+                                        }
+                                    )
+                                }
+                                ModelType.GEMINI -> {
+                                    val json = JSONArray()
+                                    historyCopy.forEachIndexed { i, (r, c) ->
+                                        val m = JSONObject().put("role", r).put("content", c)
+                                        if (i == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
+                                            m.put("images", JSONArray(imageBase64List))
+                                        }
+                                        json.put(m)
+                                    }
+                                    if (continuationCycle > 1) {
+                                        json.put(JSONObject().put("role", "model").put("content", responseSb.toString()))
+                                        json.put(JSONObject().put("role", "user").put("content", continuationPromptPayload))
+                                    }
+                                    geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
+                                        if (continuationCycle == 1) {
+                                            responseSb.setLength(0)
+                                            liveDiskStreamer.reset()
+                                            pushUiUpdate("")
+                                        }
+                                    }
+                                }
+                            }
+
+                            stream.collect { chunk ->
+                                responseSb.append(chunk)
+                                val now = System.currentTimeMillis()
+                                // Real-time letter-by-letter stream: 33ms (~30 FPS) throttle gives instant smooth UI updates while preventing CPU starvation
+                                if (now - lastUiUpdateTime >= 33L) {
+                                    lastUiUpdateTime = now
+                                    pushUiUpdate(responseSb.toString())
+                                    pendingUiUpdate = false
+                                } else {
+                                    pendingUiUpdate = true
+                                }
+                            }
+
+                            if (pendingUiUpdate) {
                                 pushUiUpdate(responseSb.toString())
-                                pendingUiUpdate = false
-                            } else {
-                                pendingUiUpdate = true
                             }
-                        }
 
-                        if (pendingUiUpdate) {
-                            pushUiUpdate(responseSb.toString())
+                            // Intercept finishReason at stream processor level
+                            val finishReason = when (modelType) {
+                                ModelType.GEMINI -> geminiClient?.lastFinishReason ?: "STOP"
+                                ModelType.GGUF -> ggufClient?.lastFinishReason ?: "STOP"
+                            }
+
+                            val chunkTokensEmitted = when (modelType) {
+                                ModelType.GEMINI -> {
+                                    val reported = geminiClient?.lastTokenCount ?: 0
+                                    if (reported > 0) reported else maxOf(1, (responseSb.length - cycleStartOffset + 3) / 4)
+                                }
+                                ModelType.GGUF -> {
+                                    val reported = ggufClient?.lastTokenCount ?: 0
+                                    if (reported > 0) reported else maxOf(1, (responseSb.length - cycleStartOffset + 3) / 4)
+                                }
+                            }
+
+                            totalAccumulatedTokens += chunkTokensEmitted
+
+                            if (finishReason == "MAX_TOKENS") {
+                                // Direct-to-Disk Stream Sinks: Commit tokens to storage & keep file open
+                                liveDiskStreamer.flush()
+
+                                val formattedChunkTokens = NumberFormat.getNumberInstance(Locale.US).format(chunkTokensEmitted)
+                                val chunkFinalizedMsg = "⚡ Generation Chunk $continuationCycle finalized ($formattedChunkTokens tokens) -> Storage Synced"
+                                val nextCycleMsg = "⚡ Auto-extending token stream [Cycle ${continuationCycle + 1}]..."
+                                Log.i(TAG, "$chunkFinalizedMsg\n$nextCycleMsg")
+
+                                val progressLog = LogEntry(
+                                    id = UUID.randomUUID().toString(),
+                                    sender = "AGENT",
+                                    text = "$chunkFinalizedMsg\n$nextCycleMsg",
+                                    isThinking = false
+                                )
+
+                                _uiState.update { state ->
+                                    val updatedLogs = state.logs.toMutableList()
+                                    val liveIdx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                    if (liveIdx >= 0) {
+                                        updatedLogs.add(liveIdx, progressLog)
+                                    } else {
+                                        updatedLogs.add(progressLog)
+                                    }
+                                    state.copy(
+                                        logs = updatedLogs,
+                                        activeStatusDetail = "⚡ Auto-extending token stream [Cycle ${continuationCycle + 1}]...",
+                                        currentPhase = AgentActionPhase.GENERATING_CODE,
+                                        isProcessing = true
+                                    )
+                                }
+
+                                continuationCycle++
+                                continueRecursion = true
+                            } else {
+                                // Clean termination with STOP or natural stream completion
+                                continueRecursion = false
+                                val formattedTotalTokens = NumberFormat.getNumberInstance(Locale.US).format(totalAccumulatedTokens)
+                                val completeMsg = "⚡ Execution Complete: Stream terminated cleanly with STOP [Total Tokens: $formattedTotalTokens]"
+                                Log.i(TAG, completeMsg)
+
+                                val completeLog = LogEntry(
+                                    id = UUID.randomUUID().toString(),
+                                    sender = "AGENT",
+                                    text = completeMsg,
+                                    isThinking = false
+                                )
+
+                                _uiState.update { state ->
+                                    val updatedLogs = state.logs.toMutableList()
+                                    val liveIdx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                    if (liveIdx >= 0) {
+                                        updatedLogs.add(liveIdx + 1, completeLog)
+                                    } else {
+                                        updatedLogs.add(completeLog)
+                                    }
+                                    state.copy(
+                                        logs = updatedLogs
+                                    )
+                                }
+                            }
                         }
                     } catch (e: Exception) {
-                        streamInterrupted = true
-                        interruptMsg = e.message ?: e.javaClass.simpleName
-                        Log.w(TAG, "Stream interrupted: $interruptMsg")
-                        _uiState.update { it.copy(streamInterruptMsg = interruptMsg) }
+                        val lowerErr = (e.message ?: "").lowercase()
+                        val isTokenCeiling = lowerErr.contains("max_tokens") || lowerErr.contains("token limit")
+                        if (isTokenCeiling) {
+                            Log.i(TAG, "Suppressed single-turn token error banner: ${e.message}")
+                        } else {
+                            streamInterrupted = true
+                            interruptMsg = e.message ?: e.javaClass.simpleName
+                            Log.w(TAG, "Stream interrupted: $interruptMsg")
+                            _uiState.update { it.copy(streamInterruptMsg = interruptMsg) }
+                        }
                     }
 
                     val fullResponse = responseSb.toString()
@@ -1137,6 +1278,17 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
                     // Finalize and auto-flush any in-flight file streaming with full synthesis
                     val writtenFilesFromStream = liveDiskStreamer.closeAll(fullResponse)
+
+                    if (hitStorageLimit) {
+                        keepGoing = false
+                        _uiState.update { state ->
+                            state.copy(
+                                isProcessing = false,
+                                activeStatusDetail = "⚡ Idle / Ready",
+                                currentPhase = AgentActionPhase.IDLE
+                            )
+                        }
+                    }
 
                     if (fullResponse.isNotBlank()) {
                         // Strict No-Echo Protocol: Sanitize post-execution response to eliminate code regurgitation
@@ -1327,20 +1479,51 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         userPrompt: String
     ): String = withContext(Dispatchers.IO) {
         val sb = StringBuilder()
-        when (modelType) {
-            ModelType.GEMINI -> {
-                val json = org.json.JSONArray().apply {
-                    put(org.json.JSONObject().put("role", "user").put("content", userPrompt))
+        val continuationPromptPayload = "Continue generation exactly from the last emitted token. Do not repeat prior lines. Continue directly with the remaining code/text."
+        var continueRecursion = true
+        var cycle = 1
+
+        while (continueRecursion && cycle <= 10) {
+            if (cycle > 1 && StorageSentinel.isStorageCritical()) {
+                Log.w(TAG, "Storage critical in executeSingleModelCall. Gracefully stopping continuation.")
+                break
+            }
+
+            when (modelType) {
+                ModelType.GEMINI -> {
+                    val json = org.json.JSONArray().apply {
+                        put(org.json.JSONObject().put("role", "user").put("content", userPrompt))
+                        if (cycle > 1) {
+                            put(org.json.JSONObject().put("role", "model").put("content", sb.toString()))
+                            put(org.json.JSONObject().put("role", "user").put("content", continuationPromptPayload))
+                        }
+                    }
+                    geminiClient?.generateStreamWithOllamaMessages(json, systemPrompt)?.collect { chunk ->
+                        sb.append(chunk)
+                    }
                 }
-                geminiClient?.generateStreamWithOllamaMessages(json, systemPrompt)?.collect { chunk ->
-                    sb.append(chunk)
+                ModelType.GGUF -> {
+                    val history = if (cycle == 1) {
+                        listOf("user" to userPrompt)
+                    } else {
+                        listOf("user" to userPrompt, "assistant" to sb.toString(), "user" to continuationPromptPayload)
+                    }
+                    ggufClient?.generateStreamWithHistory(history, systemPrompt)?.collect { chunk ->
+                        sb.append(chunk)
+                    }
                 }
             }
-            ModelType.GGUF -> {
-                val history = listOf("user" to userPrompt)
-                ggufClient?.generateStreamWithHistory(history, systemPrompt)?.collect { chunk ->
-                    sb.append(chunk)
-                }
+
+            val finishReason = when (modelType) {
+                ModelType.GEMINI -> geminiClient?.lastFinishReason ?: "STOP"
+                ModelType.GGUF -> ggufClient?.lastFinishReason ?: "STOP"
+            }
+
+            if (finishReason == "MAX_TOKENS") {
+                cycle++
+                continueRecursion = true
+            } else {
+                continueRecursion = false
             }
         }
         sb.toString()

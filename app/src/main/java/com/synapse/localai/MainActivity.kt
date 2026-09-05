@@ -1642,7 +1642,13 @@ fun CliTerminalToolLine(
     val isFileWrite = rawLine.contains("File written", ignoreCase = true) || rawLine.contains("Writing to", ignoreCase = true) || rawLine.contains("FileWrite", ignoreCase = true)
     val isSuccess = rawLine.contains("done", ignoreCase = true) || rawLine.contains("success", ignoreCase = true) || rawLine.contains("exit 0", ignoreCase = true)
 
+    val isTelemetry = rawLine.contains("⚡") || rawLine.contains("Storage Synced", ignoreCase = true) ||
+                      rawLine.contains("Generation Chunk", ignoreCase = true) || rawLine.contains("Auto-extending", ignoreCase = true) ||
+                      rawLine.contains("Execution Complete", ignoreCase = true) || rawLine.contains("Storage Sentinel", ignoreCase = true)
+
     val bulletColor = when {
+        rawLine.contains("Storage Sentinel", ignoreCase = true) -> if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626) // Red warning
+        isTelemetry -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7) // Cyan telemetry
         isManageTask -> if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309) // Amber/Orange
         isBash -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)       // Electric Cyan / Cobalt
         isSuccess || isFileWrite -> if (isDark) Color(0xFF10B981) else Color(0xFF059669) // Emerald / Green
@@ -1654,7 +1660,7 @@ fun CliTerminalToolLine(
     val gutterColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)
 
     val displayText = rawLine.trim().replace(Regex("^[●*•\\s]+"), "")
-    val hasExpandableOutput = displayText.contains(" -> ") || displayText.contains("\n")
+    val hasExpandableOutput = !isTelemetry && (displayText.contains(" -> ") || displayText.contains("\n"))
 
     Column(
         modifier = Modifier
@@ -1673,7 +1679,7 @@ fun CliTerminalToolLine(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = displayText.substringBefore(" -> "),
+                text = if (isTelemetry) displayText else displayText.substringBefore(" -> "),
                 color = cmdColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,

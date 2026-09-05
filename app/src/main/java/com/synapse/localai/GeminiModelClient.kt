@@ -44,9 +44,12 @@ class GeminiModelClient(
     private val keyFailureCounts = java.util.concurrent.ConcurrentHashMap<Int, Int>()
 
     var modelName: String = "gemini-1.5-flash"
-    var maxTokens: Int = 2048 // Reduced from 8192 to 2048 to drastically cut TPM rate-limiter reservation and save quota
+    var maxTokens: Int = 8192 // Maximized API ceiling to 8192 for unbounded output streaming
     var temperature: Float = 0.7f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
+
+    @Volatile var lastFinishReason: String? = null
+    @Volatile var lastTokenCount: Int = 0
 
     private fun fileLog(msg: String) {
         Log.d(TAG, msg)
@@ -243,10 +246,25 @@ class GeminiModelClient(
                         }
                     })
 
+                    lastFinishReason = null
+                    lastTokenCount = 0
+
                     responseFlow.collect { chunk ->
+                        val candidate = chunk.candidates.firstOrNull()
+                        val reason = candidate?.finishReason?.name
+                        if (!reason.isNullOrBlank()) {
+                            lastFinishReason = reason
+                        }
+                        val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
+                        if (candTokens > 0) {
+                            lastTokenCount = candTokens
+                        }
                         if (isActive && chunk.text != null) {
                             channel.send(chunk.text!!)
                         }
+                    }
+                    if (lastFinishReason == "MAX_TOKENS" && lastTokenCount == 0) {
+                        lastTokenCount = maxTokens
                     }
                     channel.close()
                 } catch (t: Throwable) {
@@ -408,10 +426,25 @@ class GeminiModelClient(
                     val chat = generativeModel.startChat(chatHistory)
                     val responseFlow = chat.sendMessageStream(promptText)
 
+                    lastFinishReason = null
+                    lastTokenCount = 0
+
                     responseFlow.collect { chunk ->
+                        val candidate = chunk.candidates.firstOrNull()
+                        val reason = candidate?.finishReason?.name
+                        if (!reason.isNullOrBlank()) {
+                            lastFinishReason = reason
+                        }
+                        val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
+                        if (candTokens > 0) {
+                            lastTokenCount = candTokens
+                        }
                         if (isActive && chunk.text != null) {
                             channel.send(chunk.text!!)
                         }
+                    }
+                    if (lastFinishReason == "MAX_TOKENS" && lastTokenCount == 0) {
+                        lastTokenCount = maxTokens
                     }
                     channel.close()
                 } catch (t: Throwable) {

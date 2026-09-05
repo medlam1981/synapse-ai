@@ -146,8 +146,8 @@ object ToolExecutor {
                             val targetFile = File(resolved)
                             targetFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
 
-                            // Immediate File Provisioning
-                            val fos = FileOutputStream(targetFile, false)
+                            // Immediate File Provisioning with Append-Safe Disk Sink (Zero-OOM RAM Protection)
+                            val fos = FileOutputStream(targetFile, true)
                             currentFos = fos
                             currentWriter = BufferedWriter(OutputStreamWriter(fos, StandardCharsets.UTF_8))
                             currentFile = targetFile
@@ -159,7 +159,7 @@ object ToolExecutor {
                                 writtenFiles.add(targetFile.absolutePath)
                             }
 
-                            Log.i(TAG, "⚡ LiveDiskStreamer: Explicit file provisioned: ${targetFile.absolutePath}")
+                            Log.i(TAG, "⚡ LiveDiskStreamer: Explicit file provisioned (append=true): ${targetFile.absolutePath}")
                             onStatusUpdate?.invoke("Writing to ${targetFile.absolutePath}...")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed provisioning $resolved: ${e.message}")
@@ -184,6 +184,7 @@ object ToolExecutor {
                         try {
                             currentWriter?.write(finalChunk)
                             currentWriter?.flush()
+                            try { currentFos?.fd?.sync() } catch (_: Exception) {}
                             currentWriter?.close()
                             currentFos?.close()
                             Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & saved (${currentFile?.length()} bytes): ${currentFile?.absolutePath}")
@@ -208,6 +209,7 @@ object ToolExecutor {
                         try {
                             currentWriter?.write(chunk)
                             currentWriter?.flush()
+                            try { currentFos?.fd?.sync() } catch (_: Exception) {}
                             lastWrittenOffset = safeEnd
                             lastProcessedOffset = safeEnd
                         } catch (e: Exception) {
@@ -217,6 +219,37 @@ object ToolExecutor {
                 }
             }
         }
+
+        @Synchronized
+        fun flush() {
+            try {
+                currentWriter?.flush()
+                try { currentFos?.fd?.sync() } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "Error flushing stream: ${e.message}")
+            }
+        }
+
+        @Synchronized
+        fun flushAndSeal() {
+            try {
+                currentWriter?.flush()
+                try { currentFos?.fd?.sync() } catch (_: Exception) {}
+                currentWriter?.close()
+                currentFos?.close()
+                Log.i(TAG, "⚡ LiveDiskStreamer: Stream gracefully sealed on disk: ${currentFile?.absolutePath}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sealing stream: ${e.message}")
+            } finally {
+                currentWriter = null
+                currentFos = null
+                currentFile = null
+                inCodeBlock = false
+                pendingFilePath = null
+            }
+        }
+
+        fun isStreamActive(): Boolean = inCodeBlock && currentWriter != null
 
         @Synchronized
         fun closeAll(finalFullText: String = ""): List<String> {
@@ -232,11 +265,13 @@ object ToolExecutor {
                         }
                     }
                     currentWriter?.flush()
+                    try { currentFos?.fd?.sync() } catch (_: Exception) {}
                     currentWriter?.close()
                     currentFos?.close()
                     Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & closed remaining on closeAll: ${currentFile?.absolutePath}")
                 } else {
                     currentWriter?.flush()
+                    try { currentFos?.fd?.sync() } catch (_: Exception) {}
                     currentWriter?.close()
                     currentFos?.close()
                 }
