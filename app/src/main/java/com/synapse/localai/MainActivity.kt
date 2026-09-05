@@ -1891,6 +1891,9 @@ fun CliLogMessageView(
                             is StreamDemultiplexer.DemuxBlock.ToolCall -> {
                                 CliToolCallEvent(block, isDark)
                             }
+                            is StreamDemultiplexer.DemuxBlock.TerminalFrame -> {
+                                CliTerminalFrame(block, isDark)
+                            }
                         }
                     }
                 }
@@ -1920,6 +1923,232 @@ fun CliLogMessageView(
                             fontSize = 8.sp,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.padding(start = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark: Boolean) {
+    val clipboard = LocalClipboardManager.current
+
+    // Auto-collapse if command + output exceeds 8 lines
+    val cmdLines = block.command.lines()
+    val outLines = if (block.output.isNotBlank()) block.output.lines() else emptyList()
+    val totalLines = cmdLines.size + outLines.size
+    val isLongOutput = totalLines > 8
+
+    var isExpanded by remember(block.command, block.output) { mutableStateOf(!isLongOutput) }
+    var copiedRecently by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copiedRecently) {
+        if (copiedRecently) {
+            delay(1500)
+            copiedRecently = false
+        }
+    }
+
+    val accentColor = when {
+        block.isRunning -> Color(0xFF38BDF8) // Cyan for running
+        block.exitCode == 0 -> Color(0xFF10B981) // Emerald for exit 0
+        else -> Color(0xFFEF4444) // Coral Red for non-zero errors
+    }
+
+    val obsidianBg = Color(0xFF0B0F17)
+    val subtleBorder = Color.White.copy(alpha = 0.08f)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(6.dp),
+        color = obsidianBg,
+        border = BorderStroke(1.dp, subtleBorder)
+    ) {
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            // Left Accent Indicator Bar
+            Box(
+                modifier = Modifier
+                    .width(3.5.dp)
+                    .fillMaxHeight()
+                    .background(accentColor)
+            )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                // Header: ┌─ TERMINAL • bash [exit: 0]      [COPY] [-] ──┐
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = ">_",
+                            color = accentColor,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (block.isRunning) "TERMINAL • bash [running...]" else "TERMINAL • bash [exit: ${block.exitCode}]",
+                            color = accentColor,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (copiedRecently) "[COPIED]" else "[COPY]",
+                            color = if (copiedRecently) Color(0xFF10B981) else Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clickable {
+                                    val copyText = buildString {
+                                        append("$ ").append(block.command).append("\n")
+                                        if (block.output.isNotBlank()) {
+                                            append(block.output).append("\n")
+                                        }
+                                        if (!block.isRunning) {
+                                            append("[Process completed with exit code ").append(block.exitCode).append("]")
+                                        }
+                                    }
+                                    clipboard.setText(AnnotatedString(copyText))
+                                    copiedRecently = true
+                                }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+
+                        Text(
+                            text = if (isExpanded) "[-]" else "[+]",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clickable { isExpanded = !isExpanded }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Divider(color = subtleBorder, thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Terminal Execution Body
+                if (isExpanded) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        // Command line: $ <command>
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "$ ",
+                                color = accentColor,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = block.command,
+                                color = Color(0xFFF1F5F9),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 16.sp
+                            )
+                        }
+
+                        // Output content
+                        if (block.output.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = block.output,
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 16.sp
+                            )
+                        }
+
+                        // Process completion indicator
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (block.isRunning) {
+                                "[Process running...]"
+                            } else {
+                                "[Process completed with exit code ${block.exitCode}]"
+                            },
+                            color = accentColor.copy(alpha = 0.85f),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        if (isLongOutput) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "[-] Collapse console output",
+                                color = Color(0xFF64748B),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clickable { isExpanded = false }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                } else {
+                    // Collapsed preview: single-line prompt preview
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "$ ",
+                                color = accentColor,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = cmdLines.firstOrNull() ?: block.command,
+                                color = Color(0xFFF1F5F9),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Text(
+                            text = "[+] Show full console output ($totalLines lines)",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clickable { isExpanded = true }
+                                .padding(vertical = 2.dp)
                         )
                     }
                 }

@@ -39,6 +39,12 @@ object StreamDemultiplexer {
             val params: Map<String, String>,
             val isClosed: Boolean = true
         ) : DemuxBlock()
+        data class TerminalFrame(
+            val command: String,
+            val output: String,
+            val exitCode: Int = 0,
+            val isRunning: Boolean = false
+        ) : DemuxBlock()
     }
 
     private data class ThinkTagDef(val open: String, val close: String)
@@ -360,59 +366,129 @@ object StreamDemultiplexer {
         return params
     }
 
+    fun escapeXml(text: String): String {
+        return text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+    }
+
+    fun unescapeXml(text: String): String {
+        return text.replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&gt;", ">")
+            .replace("&lt;", "<")
+            .replace("&amp;", "&")
+    }
+
     /**
-     * Intercepts and quarantines tool calls from the raw stream text.
-     * Removes all tool call XML/fences from the returned prose text so that code containers
-     * and file I/O operations are completely muted.
+     * Intercepts and quarantines tool calls, terminal frames, and raw command traces
+     * from the raw stream text. Completely decouples terminal execution from conversational prose.
      */
-    private fun quarantineToolCalls(text: String): Pair<String, List<DemuxBlock.ToolCall>> {
-        if (!text.contains("<function_calls") && !text.contains("<tool_calls") && !text.contains("<invoke") && !text.contains("</invoke>")) {
-            return text to emptyList()
-        }
-
-        val toolCalls = mutableListOf<DemuxBlock.ToolCall>()
-        val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
-
+    private fun quarantineToolCalls(text: String): Pair<String, List<DemuxBlock>> {
+        val blocks = mutableListOf<DemuxBlock>()
         var cleanText = text
 
-        val parseInvokes = { source: String ->
-            iRegex.findAll(source).forEach { inv ->
-                val toolName = inv.groupValues[1].trim()
-                val inner = inv.groupValues[2].trim()
-                val params = extractToolParams(inner)
-                val isClosed = inv.value.contains("</invoke>")
-                toolCalls.add(DemuxBlock.ToolCall(toolName, params, isClosed))
+        // 1. Intercept explicit <terminal_frame command="..." exit_code="...">output</terminal_frame>
+        val tfRegex = Regex("""<terminal_frame\s+command=(["'])(.*?)\1\s+exit_code=(["'])(.*?)\3>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
+        tfRegex.findAll(cleanText).forEach { m ->
+            val cmd = unescapeXml(m.groupValues[2].trim())
+            val exitCode = m.groupValues[4].trim().toIntOrNull() ?: 0
+            val output = unescapeXml(m.groupValues[5].trim())
+            val isClosed = m.value.contains("</terminal_frame>")
+            blocks.add(
+                DemuxBlock.TerminalFrame(
+                    command = cmd,
+                    output = output,
+                    exitCode = exitCode,
+                    isRunning = !isClosed
+                )
+            )
+        }
+        cleanText = tfRegex.replace(cleanText, "")
+
+        // 2. Intercept legacy shell output: Shell output (`<cmd>`):\n```(?:bash|sh)?\n<output>\n```
+        val legacyShellRegex = Regex("""Shell output \(`([^`]+)`\):\s*```(?:bash|sh)?\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
+        legacyShellRegex.findAll(cleanText).forEach { m ->
+            val cmd = m.groupValues[1].trim()
+            val output = m.groupValues[2].trim()
+            val isClosed = m.value.endsWith("```")
+            blocks.add(
+                DemuxBlock.TerminalFrame(
+                    command = cmd,
+                    output = output,
+                    exitCode = 0,
+                    isRunning = !isClosed
+                )
+            )
+        }
+        cleanText = legacyShellRegex.replace(cleanText, "")
+
+        // 3. Strip System Tool Execution Output headers from prose canvas
+        cleanText = cleanText.replace(Regex("""\[System Tool Execution Output\]:?\r?\n?"""), "")
+
+        // 4. Intercept function calls / invoke tags
+        if (cleanText.contains("<function_calls") || cleanText.contains("<tool_calls") || cleanText.contains("<invoke") || cleanText.contains("</invoke>")) {
+            val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
+
+            val parseInvokes = { source: String ->
+                iRegex.findAll(source).forEach { inv ->
+                    val toolName = inv.groupValues[1].trim()
+                    val inner = inv.groupValues[2].trim()
+                    val params = extractToolParams(inner)
+                    val isClosed = inv.value.contains("</invoke>")
+
+                    if (toolName in listOf("run_shell", "execute_shell", "terminal", "bash", "sh")) {
+                        val cmd = params["command"] ?: params["cmd"] ?: inner.removeSurrounding("\"").trim()
+                        blocks.add(
+                            DemuxBlock.TerminalFrame(
+                                command = cmd,
+                                output = if (isClosed) "" else "[Executing command...]",
+                                exitCode = 0,
+                                isRunning = !isClosed
+                            )
+                        )
+                    } else {
+                        blocks.add(DemuxBlock.ToolCall(toolName, params, isClosed))
+                    }
+                }
             }
+
+            // Strip fenced tool calls: ```xml\n<function_calls>...```
+            val fencedXmlRegex = Regex("""```(?:xml)?\s*(<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|```|$))""", RegexOption.IGNORE_CASE)
+            fencedXmlRegex.findAll(cleanText).forEach { m ->
+                parseInvokes(m.groupValues[1])
+            }
+            cleanText = fencedXmlRegex.replace(cleanText, "")
+
+            // Strip unfenced <function_calls> or <tool_calls> blocks
+            val fnRegex = Regex("""<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|$)""", RegexOption.IGNORE_CASE)
+            fnRegex.findAll(cleanText).forEach { m ->
+                parseInvokes(m.value)
+            }
+            cleanText = fnRegex.replace(cleanText, "")
+
+            // Strip standalone <invoke> tags
+            parseInvokes(cleanText)
+            cleanText = iRegex.replace(cleanText, "")
+
+            // Strip residual XML tags / artifacts
+            cleanText = cleanText
+                .replace("<tool_calls>", "")
+                .replace("</tool_calls>", "")
+                .replace("<function_calls>", "")
+                .replace("</function_calls>", "")
+                .replace(Regex("""<(?:tool_calls|function_calls)\b.*"""), "")
         }
 
-        // 1. Strip fenced tool calls: ```xml\n<function_calls>...``` or ```\n<function_calls>...```
-        val fencedXmlRegex = Regex("""```(?:xml)?\s*(<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|```|$))""", RegexOption.IGNORE_CASE)
-        fencedXmlRegex.findAll(cleanText).forEach { m ->
-            parseInvokes(m.groupValues[1])
-        }
-        cleanText = fencedXmlRegex.replace(cleanText, "")
-
-        // 2. Strip unfenced <function_calls> or <tool_calls> blocks
-        val fnRegex = Regex("""<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|$)""", RegexOption.IGNORE_CASE)
-        fnRegex.findAll(cleanText).forEach { m ->
-            parseInvokes(m.value)
-        }
-        cleanText = fnRegex.replace(cleanText, "")
-
-        // 3. Strip any standalone <invoke> tags
-        parseInvokes(cleanText)
-        cleanText = iRegex.replace(cleanText, "")
-
-        // 4. Strip any residual XML tags / artifacts
+        // 5. Clean up any residual terminal frame tags
         cleanText = cleanText
-            .replace("<tool_calls>", "")
-            .replace("</tool_calls>", "")
-            .replace("<function_calls>", "")
-            .replace("</function_calls>", "")
-            .replace(Regex("""<(?:tool_calls|function_calls)\b.*"""), "")
+            .replace("<terminal_frame>", "")
+            .replace("</terminal_frame>", "")
             .trim()
 
-        return cleanText to toolCalls
+        return cleanText to blocks
     }
 
     /**
@@ -476,10 +552,20 @@ object StreamDemultiplexer {
                 continue
             }
 
+            // Filter out terminal frames and legacy shell output tags
+            if (trimmed.startsWith("<terminal_frame", ignoreCase = true) || trimmed.startsWith("</terminal_frame>", ignoreCase = true) ||
+                trimmed.startsWith("Shell output (", ignoreCase = true) || trimmed.startsWith("[Process completed with exit code", ignoreCase = true) ||
+                trimmed.startsWith("[System Tool Execution Output]", ignoreCase = true) || trimmed.startsWith("cat <<", ignoreCase = true) ||
+                trimmed.startsWith("cat <<-", ignoreCase = true)) {
+                continue
+            }
+
             // Filter raw backtick artifacts
             if (trimmed.startsWith("```")) continue
 
             val cleanLine = line.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("""<terminal_frame[^>]*>""", RegexOption.IGNORE_CASE), "")
+                .replace("</terminal_frame>", "", ignoreCase = true)
             if (cleanLine.isNotBlank()) {
                 sanitizedLines.add(cleanLine)
             }

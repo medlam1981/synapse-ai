@@ -205,13 +205,17 @@ class AgentViewModel : ViewModel() {
         text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
         // 3. Remove unclosed thinking tags at end
         text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        // 4. Remove tool calls
+        // 4. Remove tool calls and terminal frames
         text = text.replace(Regex("""<function_calls>[\s\S]*?</function_calls>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<function_calls>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<terminal_frame[\s\S]*?</terminal_frame>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<terminal_frame[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""Shell output \(`[^`]+`\):\s*```(?:bash|sh)?\r?\n[\s\S]*?```""", RegexOption.IGNORE_CASE), "")
         // 5. Remove any orphan or stray tags
         text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""</?terminal_frame>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL), "")
         return text.trim()
     }
@@ -255,6 +259,11 @@ class AgentViewModel : ViewModel() {
                     val lang = block.language
                     val pathHeader = if (!block.filePath.isNullOrBlank()) " filepath=\"${block.filePath}\"" else ""
                     "```$lang$pathHeader\n${block.code}\n```"
+                }
+                is StreamDemultiplexer.DemuxBlock.TerminalFrame -> {
+                    val safeCmd = StreamDemultiplexer.escapeXml(block.command)
+                    val safeOut = StreamDemultiplexer.escapeXml(block.output)
+                    """<terminal_frame command="$safeCmd" exit_code="${block.exitCode}">$safeOut</terminal_frame>"""
                 }
                 is StreamDemultiplexer.DemuxBlock.ToolCall -> null
             }
@@ -711,7 +720,8 @@ The file execution engine automatically parses this block and writes the file di
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
+            return """CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
+You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
 Format for calling tools:
@@ -720,7 +730,7 @@ Format for calling tools:
 <parameter name="param_name">value</parameter>
 </invoke>
 </function_calls>
-Available tools: run_shell(command), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+Available tools: run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
@@ -741,16 +751,17 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         // 3. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
+CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
 - Deliver code strictly inside ```lang code fences only when programming or requested to write code.
-- To write files to device storage (/sdcard/Medlam-Ai/...), place `file: <path>` immediately above the code fence.
+- To write files to device storage (/sdcard/Medlam-Ai/...), use write_file(path, content) or place `file: <path>` immediately above the code fence.
 - Conclude with a high-level summary confirmation without echoing raw code.
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
-- Available tools: run_shell(command), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+- Available tools: run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
@@ -1571,8 +1582,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         return exitCode to outputSb.toString()
     }
 
-    suspend fun runShellInternal(cmd: String, timeoutMs: Long = 15_000L): String = withContext(Dispatchers.IO) {
-        if (cmd.isBlank()) return@withContext "Error: Shell command is blank"
+    suspend fun runShellWithExitCode(cmd: String, timeoutMs: Long = 15_000L): Pair<Int, String> = withContext(Dispatchers.IO) {
+        if (cmd.isBlank()) return@withContext -1 to "Error: Shell command is blank"
 
         val tryRoot = _uiState.value.isRootAvailable
         try {
@@ -1580,7 +1591,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 try {
                     val (exitCode, output) = runProcessWithWatchdog(cmd, "su", timeoutMs)
                     if (exitCode == 0 || (!output.contains("su: not found", ignoreCase = true) && !output.contains("permission denied", ignoreCase = true))) {
-                        return@withContext output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
+                        return@withContext exitCode to output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
                     }
                     Log.w(TAG, "su command returned exit code $exitCode or permission error, falling back to sh")
                 } catch (e: Exception) {
@@ -1589,9 +1600,61 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             }
 
             val (exitCode, output) = runProcessWithWatchdog(cmd, "sh", timeoutMs)
-            output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
+            exitCode to output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
         } catch (e: Exception) {
-            "Error executing command: ${e.message ?: e.javaClass.simpleName}"
+            -1 to "Error executing command: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    suspend fun runShellInternal(cmd: String, timeoutMs: Long = 15_000L): String {
+        return runShellWithExitCode(cmd, timeoutMs).second
+    }
+
+    private fun interceptHeredocFileWrite(cmd: String): Triple<String, Int, String>? {
+        val trimmed = cmd.trim()
+        val headerRegex = Regex("""^cat\s+<<-?\s*['"]?([a-zA-Z0-9_\-]+)['"]?\s*(>>|>)\s*([^\r\n]+)""", RegexOption.IGNORE_CASE)
+        val headerMatch = headerRegex.find(trimmed) ?: return null
+
+        val delimiter = headerMatch.groupValues[1]
+        val isAppend = headerMatch.groupValues[2] == ">>"
+        val rawPath = headerMatch.groupValues[3].trim().removeSurrounding("\"").removeSurrounding("'")
+
+        val lines = trimmed.lines()
+        if (lines.size < 2) return null
+
+        val contentLines = mutableListOf<String>()
+
+        for (i in 1 until lines.size) {
+            val line = lines[i]
+            if (line.trim() == delimiter) {
+                break
+            }
+            contentLines.add(line)
+        }
+
+        val content = contentLines.joinToString("\n")
+        return try {
+            val resolved = ToolExecutor.resolvePath(rawPath, ToolExecutor.BASE_DIR)
+            val file = File(resolved)
+            file.parentFile?.let { if (!it.exists()) it.mkdirs() }
+            if (isAppend) {
+                file.appendText(content, java.nio.charset.StandardCharsets.UTF_8)
+            } else {
+                file.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
+            }
+            val op = if (isAppend) "Appended to" else "Wrote"
+            val displayCmd = if (isAppend) "cat >> $rawPath (${file.length()} bytes)" else "cat > $rawPath (${file.length()} bytes)"
+            Triple(
+                displayCmd,
+                0,
+                "[Native I/O Intercept]: $op ${content.length} chars directly to $resolved via Java NIO stream (bypassed shell heredoc)."
+            )
+        } catch (e: Exception) {
+            Triple(
+                "cat > $rawPath",
+                1,
+                "Error in native file write: ${e.message}"
+            )
         }
     }
 
@@ -1639,11 +1702,32 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
                 when (action) {
                     "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
-                        val cmd = params["command"] ?: params["cmd"] ?: innerBody.removeSurrounding("\"").trim()
-                        if (cmd.isNotBlank()) {
+                        val rawCmd = params["command"] ?: params["cmd"] ?: innerBody.removeSurrounding("\"").trim()
+                        if (rawCmd.isNotBlank()) {
                             actionToolUsed = true
-                            val res = runShellInternal(cmd)
-                            summaries.add("Shell output (`$cmd`):\n```bash\n${res.trim()}\n```")
+                            val heredoc = interceptHeredocFileWrite(rawCmd)
+                            val (finalCmd, exitCode, output) = if (heredoc != null) {
+                                heredoc
+                            } else {
+                                val (code, out) = runShellWithExitCode(rawCmd)
+                                Triple(rawCmd, code, out)
+                            }
+                            val safeCmd = StreamDemultiplexer.escapeXml(finalCmd)
+                            val safeOut = StreamDemultiplexer.escapeXml(output.trim())
+                            summaries.add("""<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>""")
+                        }
+                    }
+                    "write_file", "write_to_file", "create_file", "edit_file" -> {
+                        val path = params["path"] ?: params["file_path"] ?: params["target_file"] ?: params["filepath"] ?: ""
+                        val content = params["content"] ?: params["code"] ?: params["text"] ?: ""
+                        if (path.isNotBlank()) {
+                            actionToolUsed = true
+                            val resolved = ToolExecutor.resolvePath(path, ToolExecutor.BASE_DIR)
+                            val f = File(resolved)
+                            f.parentFile?.let { if (!it.exists()) it.mkdirs() }
+                            f.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
+                            addSystemLog("File written natively: ${f.absolutePath} (${f.length()} bytes)")
+                            summaries.add("[Native I/O File Succeeded]: Saved ${f.length()} bytes to ${f.absolutePath}")
                         }
                     }
                     "web_search", "search", "google_search" -> {
