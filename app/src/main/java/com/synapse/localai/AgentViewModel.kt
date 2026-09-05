@@ -199,39 +199,30 @@ class AgentViewModel : ViewModel() {
 
     private fun cleanVisibleText(raw: String): String {
         var text = raw
-            .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("<function_calls>[\\s\\S]*?</function_calls>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("<invoke[\\s\\S]*?</invoke>", RegexOption.DOT_MATCHES_ALL), "")
-        if (text.contains("<think>")) {
-            text = text.substringBefore("<think>")
-        }
-        if (text.contains("<|think|>")) {
-            text = text.substringBefore("<|think|>")
-        }
-        if (text.contains("<thought>")) {
-            text = text.substringBefore("<thought>")
-        }
-        if (text.contains("<reasoning>")) {
-            text = text.substringBefore("<reasoning>")
-        }
-        if (text.contains("<function_calls>")) {
-            text = text.substringBefore("<function_calls>")
-        }
-        if (text.contains("<invoke")) {
-            text = text.substringBefore("<invoke")
-        }
-        text = text.replace(Regex("^💭[\\s\\S]*?\n\n", RegexOption.DOT_MATCHES_ALL), "")
-        return text.trimStart()
+        // 1. Remove fenced thought blocks
+        text = text.replace(Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE), "")
+        // 2. Remove all closed thinking tags
+        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+        // 3. Remove unclosed thinking tags at end
+        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        // 4. Remove tool calls
+        text = text.replace(Regex("""<function_calls>[\s\S]*?</function_calls>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<function_calls>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        // 5. Remove any orphan or stray tags
+        text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL), "")
+        return text.trim()
     }
 
     private fun stripThinkingForHistory(raw: String): String {
-        return raw
-            .replace(Regex("<\\|?think\\|?>[\\s\\S]*?<\\|?/(?:think|thought)\\|?>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("<reasoning>[\\s\\S]*?</reasoning>", RegexOption.DOT_MATCHES_ALL), "")
-            .trim()
+        var text = raw
+        text = text.replace(Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+        return text.trim()
     }
 
     private fun compactHistoryForQuota(content: String): String {
@@ -256,50 +247,29 @@ class AgentViewModel : ViewModel() {
     )
 
     fun parseThoughtAndContent(raw: String): ParsedThought {
-        var s = raw
-            .replace("<|think|>", "<think>")
-            .replace("<|thought|>", "</think>")
-            .replace("<thought>", "<think>")
-            .replace("</thought>", "</think>")
-            .replace("<reasoning>", "<think>")
-            .replace("</reasoning>", "</think>")
-
-        // Demux ```thought or ```thinking or ```reasoning if model mistakenly used code fences
-        s = s.replace(Regex("""```(?:thought|thinking|reasoning)\n([\s\S]*?)```""", RegexOption.IGNORE_CASE)) {
-            "<think>${it.groupValues[1]}</think>"
+        val demuxed = StreamDemultiplexer.demux(raw)
+        val contentParts = demuxed.blocks.mapNotNull { block ->
+            when (block) {
+                is StreamDemultiplexer.DemuxBlock.Prose -> block.text
+                is StreamDemultiplexer.DemuxBlock.Code -> {
+                    val lang = block.language
+                    val pathHeader = if (!block.filePath.isNullOrBlank()) " filepath=\"${block.filePath}\"" else ""
+                    "```$lang$pathHeader\n${block.code}\n```"
+                }
+                is StreamDemultiplexer.DemuxBlock.ToolCall -> null
+            }
         }
-        if (s.contains(Regex("""```(?:thought|thinking|reasoning)\n""", RegexOption.IGNORE_CASE))) {
-            s = s.replace(Regex("""```(?:thought|thinking|reasoning)\n""", RegexOption.IGNORE_CASE), "<think>")
-        }
-
-        val thinkStart = s.indexOf("<think>")
-        if (thinkStart == -1) {
-            val clean = cleanVisibleText(s)
-            return ParsedThought(thought = "", isThinking = false, content = clean)
-        }
-
-        val prefix = s.substring(0, thinkStart).trim()
-        val afterStart = s.substring(thinkStart + 7)
-        val thinkEnd = afterStart.indexOf("</think>")
-
-        return if (thinkEnd == -1) {
-            val rawThought = afterStart.trimStart()
-            val cleanThought = rawThought.replace(Regex("""</?[a-zA-Z0-9_|]*$"""), "")
-            ParsedThought(
-                thought = cleanThought,
-                isThinking = true,
-                content = prefix
-            )
+        val content = if (contentParts.isNotEmpty()) {
+            contentParts.joinToString("\n\n").trim()
         } else {
-            val thought = afterStart.substring(0, thinkEnd).trim()
-            val suffix = cleanVisibleText(afterStart.substring(thinkEnd + 8)).trimStart()
-            val main = if (prefix.isNotBlank()) "$prefix\n$suffix" else suffix
-            ParsedThought(
-                thought = thought,
-                isThinking = false,
-                content = main
-            )
+            cleanVisibleText(raw)
         }
+
+        return ParsedThought(
+            thought = demuxed.thinkingText,
+            isThinking = demuxed.isThinking,
+            content = content
+        )
     }
 
     fun scanSpecializedAgents() {
@@ -1273,12 +1243,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         // Strip internal thinking tags before adding to conversation history to save tokens
                         val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                         synchronized(conversationHistory) {
-                            conversationHistory.add("assistant" to if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply)
+                            conversationHistory.add("assistant" to if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else "[Execution in progress]")
                             while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
                         }
 
                         if (streamInterrupted) {
-                            val displayText = assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
+                            val displayText = if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
                             _uiState.update { state ->
                                 val updated = state.logs.map { log ->
                                     if (log.id == liveLogId) log.copy(text = displayText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
@@ -1302,13 +1272,15 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             keepGoing = false
                         } else {
                             val (usedTools, summary) = executeToolLoop(fullResponse)
+                            val cleanSummary = summary ?: ""
                             if (usedTools) {
                                 toolsUsedThisTurn = true
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL, activeStatusDetail = "Synthesizing tool results...") }
-                                val toolResultText = if (!summary.isNullOrBlank()) {
-                                    if (assistantReply.isNotBlank() && !assistantReply.contains(summary)) "$assistantReply\n\n$summary" else summary
-                                } else {
-                                    assistantReply
+                                val toolResultText = when {
+                                    cleanHistoryReply.isNotBlank() && cleanSummary.isNotBlank() && !cleanHistoryReply.contains(cleanSummary) -> "$cleanHistoryReply\n\n$cleanSummary"
+                                    cleanHistoryReply.isNotBlank() -> cleanHistoryReply
+                                    cleanSummary.isNotBlank() -> cleanSummary
+                                    else -> ""
                                 }
                                 _uiState.update { state ->
                                     val updated = state.logs.map { log ->
@@ -1339,10 +1311,11 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 keepGoing = true
                             } else {
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
-                                val finalText = if (!summary.isNullOrBlank()) {
-                                    if (assistantReply.isNotBlank() && !assistantReply.contains(summary)) "$assistantReply\n\n$summary" else summary
-                                } else {
-                                    assistantReply
+                                val finalText = when {
+                                    cleanHistoryReply.isNotBlank() && cleanSummary.isNotBlank() && !cleanHistoryReply.contains(cleanSummary) -> "$cleanHistoryReply\n\n$cleanSummary"
+                                    cleanHistoryReply.isNotBlank() -> cleanHistoryReply
+                                    cleanSummary.isNotBlank() -> cleanSummary
+                                    else -> ""
                                 }
                                 _uiState.update { state ->
                                     val updated = state.logs.map { log ->
@@ -1861,10 +1834,15 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 .filter { !it.text.startsWith("⚡ Execution Complete") && !it.text.startsWith("⚡ Generation Chunk") }
             val restoredLogs = messages.map { msg ->
                 val parsed = parseThoughtAndContent(msg.text)
+                val logText = if (msg.sender == "AGENT") {
+                    if (parsed.content.isNotBlank()) parsed.content else if (parsed.thought.isNotBlank()) "" else msg.text
+                } else {
+                    msg.text
+                }
                 LogEntry(
                     id = msg.id,
                     sender = msg.sender,
-                    text = if (parsed.thought.isNotBlank()) parsed.content else msg.text,
+                    text = logText,
                     isError = msg.isError,
                     timestamp = msg.timestamp,
                     thinkingText = parsed.thought,
@@ -1879,7 +1857,11 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 conversationHistory.clear()
                 restoredLogs.takeLast(MAX_HISTORY_MESSAGES).forEach { l ->
                     val role = if (l.sender == "USER") "user" else "assistant"
-                    val cleanText = if (role == "assistant") stripThinkingForHistory(l.text) else l.text
+                    val cleanText = if (role == "assistant") {
+                        stripThinkingForHistory(l.text).ifBlank { "[Acknowledged]" }
+                    } else {
+                        l.text
+                    }
                     conversationHistory.add(role to cleanText)
                 }
             }

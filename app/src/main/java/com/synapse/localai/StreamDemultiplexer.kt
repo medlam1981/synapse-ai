@@ -71,45 +71,93 @@ object StreamDemultiplexer {
 
         // 1. Thinking Phase Extraction
         var workingText = rawText
-        var extractedThought = ""
+        val thoughts = mutableListOf<String>()
         var currentlyThinking = false
 
-        // Check for fenced thought blocks: ```thought\n...```
-        val fencedThoughtMatch = Regex("""```(?:thought|thinking|reasoning)\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
-            .find(workingText)
-        if (fencedThoughtMatch != null) {
-            extractedThought = fencedThoughtMatch.groupValues[1].trimStart()
-            currentlyThinking = !fencedThoughtMatch.value.endsWith("```")
-            workingText = workingText.removeRange(fencedThoughtMatch.range).trim()
-        }
+        // Continuously extract all thinking blocks (fenced or XML tags)
+        var continueScanning = true
+        while (continueScanning && workingText.isNotEmpty()) {
+            val fencedRegex = Regex("""```(?:thought|thinking|reasoning)\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
+            val fencedMatch = fencedRegex.find(workingText)
 
-        if (extractedThought.isEmpty()) {
+            var earliestTagDef: ThinkTagDef? = null
+            var earliestTagIdx = -1
             for (tagDef in THINK_TAGS) {
-                val openIdx = workingText.indexOf(tagDef.open)
-                if (openIdx != -1) {
-                    val afterOpen = workingText.substring(openIdx + tagDef.open.length)
-                    val closeIdx = afterOpen.indexOf(tagDef.close)
-                    if (closeIdx == -1) {
-                        val rawThought = afterOpen.trimStart()
-                        extractedThought = rawThought.replace(Regex("""</?[a-zA-Z0-9_|]*$"""), "")
-                        currentlyThinking = true
-                        workingText = workingText.substring(0, openIdx).trim()
-                    } else {
-                        extractedThought = afterOpen.substring(0, closeIdx).trim()
-                        currentlyThinking = false
-                        val before = workingText.substring(0, openIdx).trim()
-                        val after = afterOpen.substring(closeIdx + tagDef.close.length).trim()
-                        workingText = if (before.isNotEmpty() && after.isNotEmpty()) "$before\n\n$after" else before + after
+                val idx = workingText.indexOf(tagDef.open, ignoreCase = true)
+                if (idx != -1 && (earliestTagIdx == -1 || idx < earliestTagIdx)) {
+                    earliestTagIdx = idx
+                    earliestTagDef = tagDef
+                }
+            }
+
+            val fencedIdx = fencedMatch?.range?.first ?: -1
+
+            if (fencedIdx == -1 && earliestTagIdx == -1) {
+                continueScanning = false
+                break
+            }
+
+            if (fencedIdx != -1 && (earliestTagIdx == -1 || fencedIdx < earliestTagIdx)) {
+                val match = fencedMatch!!
+                val content = match.groupValues[1].trim()
+                if (content.isNotEmpty()) {
+                    thoughts.add(content)
+                }
+                val isClosed = match.value.endsWith("```")
+                currentlyThinking = !isClosed
+                workingText = workingText.removeRange(match.range).trim()
+                if (!isClosed) {
+                    continueScanning = false
+                }
+            } else if (earliestTagDef != null && earliestTagIdx != -1) {
+                val tagDef = earliestTagDef
+                val afterOpen = workingText.substring(earliestTagIdx + tagDef.open.length)
+                val closeIdx = afterOpen.indexOf(tagDef.close, ignoreCase = true)
+                if (closeIdx == -1) {
+                    val rawThought = afterOpen.trimStart()
+                    val cleanThought = rawThought.replace(Regex("""</?[a-zA-Z0-9_|]*$"""), "").trim()
+                    if (cleanThought.isNotEmpty()) {
+                        thoughts.add(cleanThought)
                     }
-                    break
+                    currentlyThinking = true
+                    workingText = workingText.substring(0, earliestTagIdx).trim()
+                    continueScanning = false
+                } else {
+                    val thought = afterOpen.substring(0, closeIdx).trim()
+                    if (thought.isNotEmpty()) {
+                        thoughts.add(thought)
+                    }
+                    currentlyThinking = false
+                    val before = workingText.substring(0, earliestTagIdx).trim()
+                    val after = afterOpen.substring(closeIdx + tagDef.close.length).trim()
+                    workingText = if (before.isNotEmpty() && after.isNotEmpty()) "$before\n\n$after" else before + after
                 }
             }
         }
 
-        val finalThinkingText = if (extractedThought.isNotEmpty()) {
-            extractedThought
-        } else {
-            externalThinkingText
+        // Post-extraction sanitation: strip any stray or orphaned thinking tags from workingText
+        for (tagDef in THINK_TAGS) {
+            workingText = workingText.replace(tagDef.open, "", ignoreCase = true).replace(tagDef.close, "", ignoreCase = true)
+        }
+        workingText = workingText
+            .replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+            .trim()
+
+        // Strip incomplete trailing opening tags in active stream
+        val trailingOpenTagRegex = Regex("""<\|?(?:th(?:i(?:n(?:k\|?)?)?)?|th(?:o(?:u(?:g(?:h(?:t\|?)?)?)?)?)?|re(?:a(?:s(?:o(?:n(?:i(?:n(?:g\|?)?)?)?)?)?)?)?)$""", RegexOption.IGNORE_CASE)
+        if (trailingOpenTagRegex.containsMatchIn(workingText)) {
+            workingText = workingText.replace(trailingOpenTagRegex, "").trimEnd()
+            currentlyThinking = true
+        }
+
+        val extractedThought = thoughts.filter { it.isNotBlank() }.joinToString("\n\n").trim()
+        val finalThinkingText = when {
+            extractedThought.isNotEmpty() && externalThinkingText.isNotEmpty() &&
+                    !externalThinkingText.contains(extractedThought) && !extractedThought.contains(externalThinkingText) -> {
+                "$externalThinkingText\n\n$extractedThought"
+            }
+            extractedThought.isNotEmpty() -> extractedThought
+            else -> externalThinkingText
         }
 
         val finalIsThinking = currentlyThinking || (externalIsThinking && finalThinkingText.isNotBlank())
@@ -410,18 +458,31 @@ object StreamDemultiplexer {
             }
 
             // Filter out any XML invoke / function_calls / tool_calls tags
-            if (trimmed.startsWith("<invoke") || trimmed.startsWith("</invoke>") ||
-                trimmed.startsWith("<function_calls>") || trimmed.startsWith("</function_calls>") ||
-                trimmed.startsWith("<tool_calls>") || trimmed.startsWith("</tool_calls>") ||
-                trimmed.startsWith("<parameters>") || trimmed.startsWith("</parameters>") ||
-                trimmed.startsWith("<parameter") || trimmed.startsWith("</parameter>")) {
+            if (trimmed.startsWith("<invoke", ignoreCase = true) || trimmed.startsWith("</invoke>", ignoreCase = true) ||
+                trimmed.startsWith("<function_calls>", ignoreCase = true) || trimmed.startsWith("</function_calls>", ignoreCase = true) ||
+                trimmed.startsWith("<tool_calls>", ignoreCase = true) || trimmed.startsWith("</tool_calls>", ignoreCase = true) ||
+                trimmed.startsWith("<parameters>", ignoreCase = true) || trimmed.startsWith("</parameters>", ignoreCase = true) ||
+                trimmed.startsWith("<parameter", ignoreCase = true) || trimmed.startsWith("</parameter>", ignoreCase = true)) {
+                continue
+            }
+
+            // Filter out thinking tags
+            if (trimmed.startsWith("<think", ignoreCase = true) || trimmed.startsWith("</think", ignoreCase = true) ||
+                trimmed.startsWith("<thought", ignoreCase = true) || trimmed.startsWith("</thought", ignoreCase = true) ||
+                trimmed.startsWith("<reasoning", ignoreCase = true) || trimmed.startsWith("</reasoning", ignoreCase = true) ||
+                trimmed.startsWith("<|think", ignoreCase = true) || trimmed.startsWith("<|/think", ignoreCase = true) ||
+                trimmed.startsWith("<|thought", ignoreCase = true) || trimmed.startsWith("<|/thought", ignoreCase = true) ||
+                trimmed.startsWith("<|reasoning", ignoreCase = true) || trimmed.startsWith("<|/reasoning", ignoreCase = true)) {
                 continue
             }
 
             // Filter raw backtick artifacts
             if (trimmed.startsWith("```")) continue
 
-            sanitizedLines.add(line)
+            val cleanLine = line.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+            if (cleanLine.isNotBlank()) {
+                sanitizedLines.add(cleanLine)
+            }
         }
 
         return sanitizedLines.joinToString("\n").trim()
