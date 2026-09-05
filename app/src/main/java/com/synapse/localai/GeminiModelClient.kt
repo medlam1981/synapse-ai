@@ -268,7 +268,25 @@ class GeminiModelClient(
                     }
                     channel.close()
                 } catch (t: Throwable) {
-                    channel.close(t)
+                    val errorStr = t.message ?: t.toString()
+                    val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
+                                      errorStr.contains("MAX_TOKENS", ignoreCase = true)
+                    if (isMaxTokens) {
+                        lastFinishReason = "MAX_TOKENS"
+                        if (lastTokenCount == 0) lastTokenCount = maxTokens
+                        fileLog("Response stopped cleanly with MAX_TOKENS at stream level")
+                        try {
+                            if (t is com.google.ai.client.generativeai.type.ResponseStoppedException) {
+                                val remainingText = t.response?.text
+                                if (!remainingText.isNullOrEmpty()) {
+                                    channel.send(remainingText)
+                                }
+                            }
+                        } catch (_: Exception) {}
+                        channel.close()
+                    } else {
+                        channel.close(t)
+                    }
                 }
             }
 
@@ -306,7 +324,7 @@ class GeminiModelClient(
                 }
 
                 success = true
-                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys")
+                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys (FinishReason: $lastFinishReason)")
 
             } catch (t: Throwable) {
                 streamJob.cancel()
@@ -315,6 +333,17 @@ class GeminiModelClient(
                 }
 
                 val errorMsg = t.message ?: t.toString()
+                val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
+                                  errorMsg.contains("MAX_TOKENS", ignoreCase = true)
+                if (isMaxTokens) {
+                    lastFinishReason = "MAX_TOKENS"
+                    if (lastTokenCount == 0) lastTokenCount = maxTokens
+                    markKeySuccess(keyIdx)
+                    success = true
+                    fileLog("Inference reached MAX_TOKENS ceiling with Key #${keyIdx + 1}/$totalKeys (Graceful continuation trigger)")
+                    break
+                }
+
                 lastErrorDetail = errorMsg
                 val lowerError = errorMsg.lowercase()
 
@@ -448,7 +477,25 @@ class GeminiModelClient(
                     }
                     channel.close()
                 } catch (t: Throwable) {
-                    channel.close(t)
+                    val errorStr = t.message ?: t.toString()
+                    val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
+                                      errorStr.contains("MAX_TOKENS", ignoreCase = true)
+                    if (isMaxTokens) {
+                        lastFinishReason = "MAX_TOKENS"
+                        if (lastTokenCount == 0) lastTokenCount = maxTokens
+                        fileLog("Response stopped cleanly with MAX_TOKENS at stream level")
+                        try {
+                            if (t is com.google.ai.client.generativeai.type.ResponseStoppedException) {
+                                val remainingText = t.response?.text
+                                if (!remainingText.isNullOrEmpty()) {
+                                    channel.send(remainingText)
+                                }
+                            }
+                        } catch (_: Exception) {}
+                        channel.close()
+                    } else {
+                        channel.close(t)
+                    }
                 }
             }
 
@@ -486,7 +533,7 @@ class GeminiModelClient(
                 }
 
                 success = true
-                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys")
+                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys (FinishReason: $lastFinishReason)")
 
             } catch (t: Throwable) {
                 streamJob.cancel()
@@ -495,6 +542,17 @@ class GeminiModelClient(
                 }
 
                 val errorMsg = t.message ?: t.toString()
+                val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
+                                  errorMsg.contains("MAX_TOKENS", ignoreCase = true)
+                if (isMaxTokens) {
+                    lastFinishReason = "MAX_TOKENS"
+                    if (lastTokenCount == 0) lastTokenCount = maxTokens
+                    markKeySuccess(keyIdx)
+                    success = true
+                    fileLog("Inference reached MAX_TOKENS ceiling with Key #${keyIdx + 1}/$totalKeys (Graceful continuation trigger)")
+                    break
+                }
+
                 lastErrorDetail = errorMsg
                 val lowerError = errorMsg.lowercase()
 

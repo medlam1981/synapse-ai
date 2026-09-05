@@ -251,17 +251,21 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
             appendCli("  ├─ [Audit Notice] Verifier detected ${auditResult.errors.size} defect(s). Initiating remediation pass ($retryCount/$maxSelfHealingRetries)...")
 
             for (error in auditResult.errors) {
-                val currentFile = stagedFiles[error.fileName] ?: continue
-                val currentContent = currentFile.readText()
-                val remediationPrompt = VerifierGatekeeper.generateRemediationPrompt(error, currentContent)
+                try {
+                    val currentFile = stagedFiles[error.fileName] ?: continue
+                    val currentContent = currentFile.readText()
+                    val remediationPrompt = VerifierGatekeeper.generateRemediationPrompt(error, currentContent)
 
-                val healedCode = runLlmPass(
-                    systemPrompt = "You are an automated code remediation agent. Output pure corrected code.",
-                    userPrompt = remediationPrompt
-                )
+                    val healedCode = runLlmPass(
+                        systemPrompt = "You are an automated code remediation agent. Output pure corrected code.",
+                        userPrompt = remediationPrompt
+                    )
 
-                val cleanHealed = sanitizeGeneratedCode(healedCode, error.fileName)
-                stagingManager.stageWorkerOutputs(error.workerId, mapOf(error.fileName to cleanHealed))
+                    val cleanHealed = sanitizeGeneratedCode(healedCode, error.fileName)
+                    stagingManager.stageWorkerOutputs(error.workerId, mapOf(error.fileName to cleanHealed))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Remediation pass failed for ${error.fileName}: ${e.message}")
+                }
             }
 
             stagedFiles = stagingManager.getAllStagedFiles()
@@ -329,29 +333,40 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
             }
         }
 
-        val rawOutput = runLlmPass(
-            systemPrompt = "You are ${task.workerId} (${task.role.displayName}). Output ONLY pure file code without XML tool tags.",
-            userPrompt = task.prompt
-        )
+        try {
+            val rawOutput = runLlmPass(
+                systemPrompt = "You are ${task.workerId} (${task.role.displayName}). Output ONLY pure file code without XML tool tags.",
+                userPrompt = task.prompt
+            )
 
-        if (rawOutput.isBlank()) {
+            if (rawOutput.isBlank()) {
+                return WorkerExecutionResult(
+                    workerId = task.workerId,
+                    role = task.role,
+                    success = false,
+                    generatedFiles = emptyMap(),
+                    errorMessage = "Empty output generated"
+                )
+            }
+
+            val parsedFiles = parseWorkerFiles(rawOutput, task.targetFileNames)
+            return WorkerExecutionResult(
+                workerId = task.workerId,
+                role = task.role,
+                success = parsedFiles.isNotEmpty(),
+                generatedFiles = parsedFiles,
+                errorMessage = if (parsedFiles.isEmpty()) "Failed parsing target files" else null
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Worker ${task.workerId} execution failed: ${e.message}", e)
             return WorkerExecutionResult(
                 workerId = task.workerId,
                 role = task.role,
                 success = false,
                 generatedFiles = emptyMap(),
-                errorMessage = "Empty output generated"
+                errorMessage = e.message ?: "Unknown worker failure"
             )
         }
-
-        val parsedFiles = parseWorkerFiles(rawOutput, task.targetFileNames)
-        return WorkerExecutionResult(
-            workerId = task.workerId,
-            role = task.role,
-            success = parsedFiles.isNotEmpty(),
-            generatedFiles = parsedFiles,
-            errorMessage = if (parsedFiles.isEmpty()) "Failed parsing target files" else null
-        )
     }
 
     /**

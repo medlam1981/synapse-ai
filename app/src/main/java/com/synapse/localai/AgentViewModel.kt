@@ -1489,28 +1489,39 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 break
             }
 
-            when (modelType) {
-                ModelType.GEMINI -> {
-                    val json = org.json.JSONArray().apply {
-                        put(org.json.JSONObject().put("role", "user").put("content", userPrompt))
-                        if (cycle > 1) {
-                            put(org.json.JSONObject().put("role", "model").put("content", sb.toString()))
-                            put(org.json.JSONObject().put("role", "user").put("content", continuationPromptPayload))
+            var encounteredMaxTokens = false
+            try {
+                when (modelType) {
+                    ModelType.GEMINI -> {
+                        val json = org.json.JSONArray().apply {
+                            put(org.json.JSONObject().put("role", "user").put("content", userPrompt))
+                            if (cycle > 1) {
+                                put(org.json.JSONObject().put("role", "model").put("content", sb.toString()))
+                                put(org.json.JSONObject().put("role", "user").put("content", continuationPromptPayload))
+                            }
+                        }
+                        geminiClient?.generateStreamWithOllamaMessages(json, systemPrompt)?.collect { chunk ->
+                            sb.append(chunk)
                         }
                     }
-                    geminiClient?.generateStreamWithOllamaMessages(json, systemPrompt)?.collect { chunk ->
-                        sb.append(chunk)
+                    ModelType.GGUF -> {
+                        val history = if (cycle == 1) {
+                            listOf("user" to userPrompt)
+                        } else {
+                            listOf("user" to userPrompt, "assistant" to sb.toString(), "user" to continuationPromptPayload)
+                        }
+                        ggufClient?.generateStreamWithHistory(history, systemPrompt)?.collect { chunk ->
+                            sb.append(chunk)
+                        }
                     }
                 }
-                ModelType.GGUF -> {
-                    val history = if (cycle == 1) {
-                        listOf("user" to userPrompt)
-                    } else {
-                        listOf("user" to userPrompt, "assistant" to sb.toString(), "user" to continuationPromptPayload)
-                    }
-                    ggufClient?.generateStreamWithHistory(history, systemPrompt)?.collect { chunk ->
-                        sb.append(chunk)
-                    }
+            } catch (e: Exception) {
+                val errStr = (e.message ?: "").lowercase()
+                if (errStr.contains("max_tokens") || errStr.contains("token limit")) {
+                    encounteredMaxTokens = true
+                    Log.i(TAG, "executeSingleModelCall caught MAX_TOKENS token ceiling: auto-continuing")
+                } else {
+                    throw e
                 }
             }
 
@@ -1519,7 +1530,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 ModelType.GGUF -> ggufClient?.lastFinishReason ?: "STOP"
             }
 
-            if (finishReason == "MAX_TOKENS") {
+            if (finishReason == "MAX_TOKENS" || encounteredMaxTokens) {
                 cycle++
                 continueRecursion = true
             } else {
