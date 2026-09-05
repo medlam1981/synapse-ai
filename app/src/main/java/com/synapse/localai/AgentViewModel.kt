@@ -30,6 +30,7 @@ import java.util.*
 import com.synapse.localai.tools.YouTubeTool
 import com.synapse.localai.tools.DocumentTool
 import com.synapse.localai.tools.WebSearchTool
+import com.synapse.localai.orchestration.MultiWorkerOrchestrator
 
 enum class ModelType { GGUF, GEMINI }
 
@@ -908,6 +909,81 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     conversationHistory.add("user" to finalCommand)
                 }
 
+                // ── Multi-Worker MCP Orchestration Pipeline ─────────────────
+                if (MultiWorkerOrchestrator.isOrchestrationCandidate(finalCommand)) {
+                    val isCloud = modelType == ModelType.GEMINI
+                    val liveLogId = UUID.randomUUID().toString()
+                    val initialLiveLog = LogEntry(
+                        id = liveLogId,
+                        sender = "AGENT",
+                        text = "> $finalCommand\n\n⚡ Orchestrator: Initializing Multi-Worker MCP Pipeline...",
+                        isThinking = false
+                    )
+                    _uiState.update { 
+                        it.copy(
+                            logs = it.logs + initialLiveLog,
+                            currentPhase = AgentActionPhase.EXECUTING_TOOL,
+                            activeStatusDetail = "Orchestrating Multi-Worker Pipeline..."
+                        ) 
+                    }
+
+                    val orchestrator = MultiWorkerOrchestrator(
+                        sessionId = sid,
+                        isCloudMode = isCloud,
+                        modelInvoker = { sysPrompt, usrPrompt ->
+                            executeSingleModelCall(modelType, sysPrompt, usrPrompt)
+                        },
+                        onTelemetryUpdate = { activeCount ->
+                            _uiState.update { it.copy(taskQueueSize = activeCount) }
+                        },
+                        onTerminalLogUpdate = { cliText ->
+                            _uiState.update { state ->
+                                val updatedLogs = state.logs.toMutableList()
+                                val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                if (idx >= 0) {
+                                    updatedLogs[idx] = updatedLogs[idx].copy(text = cliText)
+                                }
+                                state.copy(logs = updatedLogs, streamVersion = state.streamVersion + 1)
+                            }
+                        },
+                        shellExecutor = { cmd -> runShellInternal(cmd) }
+                    )
+
+                    val finalCliLog = orchestrator.execute(finalCommand)
+
+                    _uiState.update { state ->
+                        val updatedLogs = state.logs.toMutableList()
+                        val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                        if (idx >= 0) {
+                            updatedLogs[idx] = updatedLogs[idx].copy(text = finalCliLog)
+                        }
+                        state.copy(
+                            logs = updatedLogs,
+                            isProcessing = false,
+                            currentPhase = AgentActionPhase.COMPLETING,
+                            activeStatusDetail = "Ready / Operational",
+                            taskQueueSize = 0
+                        )
+                    }
+
+                    synchronized(conversationHistory) {
+                        conversationHistory.add("assistant" to finalCliLog)
+                        while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
+                    }
+
+                    chatDb?.insertMessage(
+                        ChatMessageEntity(
+                            id = liveLogId,
+                            sessionId = sid,
+                            sender = "AGENT",
+                            text = finalCliLog,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                    refreshSessions()
+                    return@launch
+                }
+
                 val systemPrompt = buildSystemPrompt(actualContext, forLocalModel = modelType == ModelType.GGUF)
                 var keepGoing = true
                 var iterationCount = 0
@@ -1243,6 +1319,31 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
     fun handleBackgroundEvent(eventText: String) {
         if (!_uiState.value.config.enableNeuralReflexes) return
         viewModelScope.launch { sendCommand("BACKGROUND_EVENT: $eventText") }
+    }
+
+    suspend fun executeSingleModelCall(
+        modelType: ModelType,
+        systemPrompt: String,
+        userPrompt: String
+    ): String = withContext(Dispatchers.IO) {
+        val sb = StringBuilder()
+        when (modelType) {
+            ModelType.GEMINI -> {
+                val json = org.json.JSONArray().apply {
+                    put(org.json.JSONObject().put("role", "user").put("content", userPrompt))
+                }
+                geminiClient?.generateStreamWithOllamaMessages(json, systemPrompt)?.collect { chunk ->
+                    sb.append(chunk)
+                }
+            }
+            ModelType.GGUF -> {
+                val history = listOf("user" to userPrompt)
+                ggufClient?.generateStreamWithHistory(history, systemPrompt)?.collect { chunk ->
+                    sb.append(chunk)
+                }
+            }
+        }
+        sb.toString()
     }
 
     suspend fun runShellInternal(cmd: String): String = withContext(Dispatchers.IO) {

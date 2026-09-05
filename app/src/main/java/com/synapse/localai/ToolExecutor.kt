@@ -558,4 +558,25 @@ object ToolExecutor {
             File(dir, "tool_executor.log").appendText("[${java.util.Date()}] $msg\n")
         } catch (_: Exception) {}
     }
+
+    /**
+     * Headless shell command execution utility.
+     */
+    fun executeShellCommand(cmd: String): String {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            process.waitFor()
+            output
+        } catch (e: Exception) {
+            try {
+                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                process.waitFor()
+                output
+            } catch (e2: Exception) {
+                "Error: ${e2.message}"
+            }
+        }
+    }
 }
