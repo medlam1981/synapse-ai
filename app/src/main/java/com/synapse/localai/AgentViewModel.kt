@@ -18,7 +18,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
@@ -1540,16 +1542,85 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         sb.toString()
     }
 
-    suspend fun runShellInternal(cmd: String): String = withContext(Dispatchers.IO) {
+    private fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): Pair<Int, String> {
+        val pb = ProcessBuilder(shell, "-c", cmd)
+        pb.redirectErrorStream(true) // Pipe deadlock prevention: merge stderr into stdout
+        val env = pb.environment()
+        val currentPath = env["PATH"] ?: "/system/bin:/system/xbin"
+        env["PATH"] = "$currentPath:/system/bin:/system/xbin:/data/local/tmp"
+
+        val process = pb.start()
+
+        // Close stdin immediately: prevents interactive commands or subshells from waiting for user input
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            process.waitFor()
-            output
-        } catch (e: Exception) { "Error: ${e.message}" }
+            process.outputStream.close()
+        } catch (_: Exception) {}
+
+        val outputSb = StringBuilder()
+        val readerThread = Thread {
+            try {
+                process.inputStream.bufferedReader().use { reader ->
+                    val buffer = CharArray(2048)
+                    var charsRead: Int
+                    while (reader.read(buffer).also { charsRead = it } != -1) {
+                        outputSb.append(buffer, 0, charsRead)
+                        if (outputSb.length > 512 * 1024) {
+                            outputSb.append("\n[Output truncated: exceeded 512KB]")
+                            break
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        readerThread.isDaemon = true
+        readerThread.start()
+
+        val exitedInTime = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!exitedInTime) {
+            Log.w(TAG, "Shell process timed out after ${timeoutMs}ms, destroying forcibly: $cmd")
+            try {
+                process.destroyForcibly()
+            } catch (_: Exception) {}
+            try {
+                readerThread.join(500)
+            } catch (_: Exception) {}
+            val partial = outputSb.toString().trim()
+            val timeoutMsg = "[Process Timed Out after ${timeoutMs / 1000}s - Process Terminated]"
+            return -1 to (if (partial.isNotBlank()) "$timeoutMsg\nPartial output:\n$partial" else timeoutMsg)
+        }
+
+        try {
+            readerThread.join(1000)
+        } catch (_: Exception) {}
+        val exitCode = try { process.exitValue() } catch (_: Exception) { 0 }
+        return exitCode to outputSb.toString()
     }
 
-    private suspend fun executeToolLoop(response: String): Pair<Boolean, String?> {
+    suspend fun runShellInternal(cmd: String, timeoutMs: Long = 15_000L): String = withContext(Dispatchers.IO) {
+        if (cmd.isBlank()) return@withContext "Error: Shell command is blank"
+
+        val tryRoot = _uiState.value.isRootAvailable
+        try {
+            if (tryRoot) {
+                try {
+                    val (exitCode, output) = runProcessWithWatchdog(cmd, "su", timeoutMs)
+                    if (exitCode == 0 || (!output.contains("su: not found", ignoreCase = true) && !output.contains("permission denied", ignoreCase = true))) {
+                        return@withContext output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
+                    }
+                    Log.w(TAG, "su command returned exit code $exitCode or permission error, falling back to sh")
+                } catch (e: Exception) {
+                    Log.w(TAG, "su execution failed ($e), falling back to sh")
+                }
+            }
+
+            val (exitCode, output) = runProcessWithWatchdog(cmd, "sh", timeoutMs)
+            output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
+        } catch (e: Exception) {
+            "Error executing command: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    private suspend fun executeToolLoop(response: String): Pair<Boolean, String?> = withTimeoutOrNull(25_000L) {
         try {
             val writtenFiles = withContext(Dispatchers.IO) {
                 ToolExecutor.extractAndWriteFiles(response)
@@ -1569,7 +1640,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         val hasFunctionCalls = clean.contains("<function_calls>")
         val hasInvoke = clean.contains("<invoke")
 
-        if (!hasInvoke) return false to null
+        if (!hasInvoke) return@withTimeoutOrNull false to null
 
         val block = if (hasFunctionCalls) {
             val start = clean.indexOf("<function_calls>")
@@ -1580,33 +1651,33 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             clean
         }
 
-        var toolsInvoked = false
-        var finalSummary: String? = null
+        val summaries = mutableListOf<String>()
         try {
             val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)</invoke>", RegexOption.DOT_MATCHES_ALL)
             val pRegex = Regex("<parameter name=[\"'](.*?)[\"']>(.*?)</parameter>", RegexOption.DOT_MATCHES_ALL)
-            
-            iRegex.findAll(block).forEach { m ->
-                toolsInvoked = true
+
+            for (m in iRegex.findAll(block)) {
                 val action = m.groupValues[1].trim()
                 _uiState.update { it.copy(activeStatusDetail = "Executing Tool / Task ($action)...") }
                 val params = mutableMapOf<String, String>()
-                pRegex.findAll(m.groupValues[2]).forEach { p -> 
-                    params[p.groupValues[1].trim()] = p.groupValues[2].trim() 
+                pRegex.findAll(m.groupValues[2]).forEach { p ->
+                    params[p.groupValues[1].trim()] = p.groupValues[2].trim()
                 }
-                
+
                 when (action) {
                     "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
                         val cmd = params["command"] ?: params["cmd"] ?: ""
-                        val res = runShellInternal(cmd)
-                        finalSummary = "Shell output (`$cmd`):\n```bash\n${res.trim()}\n```"
-                        return false to finalSummary
+                        if (cmd.isNotBlank()) {
+                            val res = runShellInternal(cmd)
+                            summaries.add("Shell output (`$cmd`):\n```bash\n${res.trim()}\n```")
+                        }
                     }
                     "web_search", "search", "google_search" -> {
                         val q = params["query"] ?: params["q"] ?: ""
-                        val searchRes = WebSearchTool.search(q)
-                        finalSummary = searchRes
-                        return false to finalSummary
+                        if (q.isNotBlank()) {
+                            val searchRes = WebSearchTool.search(q)
+                            summaries.add(searchRes)
+                        }
                     }
                     "schedule_task" -> {
                         val desc = params["description"] ?: "Scheduled Task"
@@ -1614,28 +1685,32 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         val delay = params["delay_minutes"]?.toIntOrNull() ?: 5
                         val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                         updateTaskState()
-                        finalSummary = "Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)"
-                        return false to finalSummary
+                        summaries.add("Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)")
                     }
                     "queue_background_task", "queue_task" -> {
                         val cmd = params["command"] ?: params["cmd"] ?: ""
                         val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                         updateTaskState()
-                        finalSummary = "Queued background task [tsk #$tid]: $cmd"
-                        return false to finalSummary
+                        summaries.add("Queued background task [tsk #$tid]: $cmd")
                     }
-                    "complete" -> { 
-                        finalSummary = params["summary"]
-                        return false to finalSummary 
+                    "complete" -> {
+                        val s = params["summary"]
+                        if (!s.isNullOrBlank()) {
+                            summaries.add(s)
+                        }
                     }
                 }
-                delay(600)
+                delay(200)
             }
-            return toolsInvoked to finalSummary
-        } catch (e: Exception) { 
+            val finalSummary = if (summaries.isNotEmpty()) summaries.joinToString("\n\n") else null
+            false to finalSummary
+        } catch (e: Exception) {
             Log.e(TAG, "Tool loop error: ${e.message}")
-            return false to null
+            false to null
         }
+    } ?: run {
+        Log.w(TAG, "executeToolLoop timed out after 25s")
+        false to "[Tool execution timed out after 25s]"
     }
 
     fun setRootAvailable(available: Boolean) {

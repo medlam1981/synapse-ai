@@ -7,6 +7,7 @@ import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * Data structure representing a parsed code block along with its latched target file path.
@@ -595,23 +596,51 @@ object ToolExecutor {
     }
 
     /**
-     * Headless shell command execution utility.
+     * Headless shell command execution utility with strict timeout watchdog.
      */
-    fun executeShellCommand(cmd: String): String {
+    fun executeShellCommand(cmd: String, timeoutMs: Long = 15_000L): String {
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            process.waitFor()
-            output
-        } catch (e: Exception) {
+            runProcessWithWatchdog(cmd, "su", timeoutMs)
+        } catch (_: Exception) {
             try {
-                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                process.waitFor()
-                output
+                runProcessWithWatchdog(cmd, "sh", timeoutMs)
             } catch (e2: Exception) {
                 "Error: ${e2.message}"
             }
         }
+    }
+
+    private fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): String {
+        val pb = ProcessBuilder(shell, "-c", cmd)
+        pb.redirectErrorStream(true)
+        val process = pb.start()
+        try { process.outputStream.close() } catch (_: Exception) {}
+
+        val outputSb = StringBuilder()
+        val thread = Thread {
+            try {
+                process.inputStream.bufferedReader().use { reader ->
+                    val buf = CharArray(2048)
+                    var n: Int
+                    while (reader.read(buf).also { n = it } != -1) {
+                        outputSb.append(buf, 0, n)
+                        if (outputSb.length > 512 * 1024) break
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        thread.isDaemon = true
+        thread.start()
+
+        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!finished) {
+            try { process.destroyForcibly() } catch (_: Exception) {}
+            try { thread.join(500) } catch (_: Exception) {}
+            val partial = outputSb.toString().trim()
+            return "[Shell Command Timed Out (${timeoutMs / 1000}s) - Terminated]\n$partial".trim()
+        }
+
+        try { thread.join(1000) } catch (_: Exception) {}
+        return outputSb.toString()
     }
 }

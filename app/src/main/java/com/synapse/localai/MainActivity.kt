@@ -315,9 +315,31 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun checkAndRequestRootAccess() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val exitCode = process.waitFor()
+            val pb = ProcessBuilder("su", "-c", "id")
+            pb.redirectErrorStream(true)
+            val process = pb.start()
+            try { process.outputStream.close() } catch (_: Exception) {}
+            val outputSb = StringBuilder()
+            val reader = Thread {
+                try {
+                    outputSb.append(process.inputStream.bufferedReader().use { it.readText() })
+                } catch (_: Exception) {}
+            }
+            reader.isDaemon = true
+            reader.start()
+
+            val finished = process.waitFor(3000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!finished) {
+                try { process.destroyForcibly() } catch (_: Exception) {}
+                try { reader.join(300) } catch (_: Exception) {}
+                Log.w("MainActivity", "Root check timed out after 3s")
+                viewModel.setRootAvailable(false)
+                return@withContext
+            }
+
+            try { reader.join(500) } catch (_: Exception) {}
+            val exitCode = try { process.exitValue() } catch (_: Exception) { -1 }
+            val output = outputSb.toString()
             val isRoot = exitCode == 0 && output.contains("uid=0")
             viewModel.setRootAvailable(isRoot)
             if (isRoot) {
