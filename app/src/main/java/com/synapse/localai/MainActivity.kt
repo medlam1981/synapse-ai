@@ -2432,94 +2432,180 @@ fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
     return builder.toAnnotatedString()
 }
 
+data class QuickActionCardItem(
+    val title: String,
+    val subtitle: String,
+    val prompt: String,
+    val icon: ImageVector
+)
+
 @Composable
 fun CliWelcomeScreen(
     onSelectPrompt: (String) -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
-    val headerAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
-    val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val borderAccent = if (isDark) Color(0xFF1E293B) else Color(0xFFCBD5E1)
-    val promptChevron = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val electricCyan = Color(0xFF00D2FF)
+
+    val quickActions = remember {
+        listOf(
+            QuickActionCardItem(
+                title = "Web Dashboard",
+                subtitle = "Build modern glassmorphic dashboard in webapp/",
+                prompt = "Build a modern responsive glassmorphic dashboard in /sdcard/Medlam-Ai/webapp/ with self-contained styles and live charts.",
+                icon = Icons.Filled.Dashboard
+            ),
+            QuickActionCardItem(
+                title = "System Watchdog",
+                subtitle = "Inspect hardware, memory cache & thermals",
+                prompt = "Inspect system hardware, memory cache, thermals, and optimize memory performance.",
+                icon = Icons.Filled.MonitorHeart
+            ),
+            QuickActionCardItem(
+                title = "Drop Caches",
+                subtitle = "Flush pagecache, dentries & inodes",
+                prompt = "sync && echo 3 > /proc/sys/vm/drop_caches",
+                icon = Icons.Filled.CleaningServices
+            ),
+            QuickActionCardItem(
+                title = "Network Check",
+                subtitle = "Test telephony, ping gateway & data status",
+                prompt = "dumpsys telephony.registry | grep -E 'mState|mServiceState|mSignalStrength'",
+                icon = Icons.Filled.NetworkCheck
+            ),
+            QuickActionCardItem(
+                title = "Python Daemon",
+                subtitle = "Scaffold & execute headless background script",
+                prompt = "Write and run a headless Python script to log device uptime and RAM usage to /sdcard/Medlam-Ai/system_log.json",
+                icon = Icons.Filled.Terminal
+            ),
+            QuickActionCardItem(
+                title = "Clean Storage",
+                subtitle = "Scan downloads & report large files",
+                prompt = "du -ah /sdcard/Download | sort -rh | head -n 10",
+                icon = Icons.Filled.Storage
+            ),
+            QuickActionCardItem(
+                title = "Cycle API Keys",
+                subtitle = "Test failover & advance to next key",
+                prompt = "Test active Gemini API key quota and verify failover rotation.",
+                icon = Icons.Filled.VpnKey
+            ),
+            QuickActionCardItem(
+                title = "Device Telemetry",
+                subtitle = "Inspect battery capacity, voltage & SoC",
+                prompt = "dumpsys battery",
+                icon = Icons.Filled.BatteryChargingFull
+            )
+        )
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Terminal ASCII Banner Header
+        // Centered Brand Hero
         Text(
-            text = "┌────────────────────────────────────────────────────────┐",
-            color = borderAccent,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 14.sp
-        )
-        Text(
-            text = "│  SYNAPSE // MEDLAM-AI AGENT v2.0                       │",
-            color = headerAccent,
-            fontSize = 11.sp,
+            text = "MEDLAM-AI AGENT",
+            color = electricCyan,
+            fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
-            lineHeight = 14.sp
-        )
-        Text(
-            text = "│  Autonomous On-Device Execution & CLI Terminal         │",
-            color = textDim,
-            fontSize = 10.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 14.sp
-        )
-        Text(
-            text = "└────────────────────────────────────────────────────────┘",
-            color = borderAccent,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 14.sp
+            letterSpacing = 0.1.em,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 14.dp)
         )
 
-        Spacer(modifier = Modifier.height(18.dp))
+        // 2-Column Responsive Quick-Actions Grid
+        val chunkedActions = remember(quickActions) { quickActions.chunked(2) }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            chunkedActions.forEach { rowItems ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowItems.forEach { item ->
+                        QuickActionCard(
+                            item = item,
+                            isDark = isDark,
+                            onClick = { onSelectPrompt(item.prompt) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (rowItems.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
 
-        Text(
-            text = "Quick Command Presets:",
-            color = textDim,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
+@Composable
+private fun QuickActionCard(
+    item: QuickActionCardItem,
+    isDark: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer
+    val cardBorder = if (isDark) Color(0x0FFFFFFF) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
+    val titleColor = if (isDark) Color(0xFFF1F5F9) else Color(0xFF0F172A)
+    val subtitleColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val iconColor = Color(0xFF00D2FF)
 
-        listOf(
-            "Create a responsive modern web dashboard in /sdcard/Medlam-Ai/webapp",
-            "Write a python automation script to organize downloads folder",
-            "Inspect system hardware, memory cache, and optimize performance"
-        ).forEach { prompt ->
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark, elevation = 2.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = cardBg,
+        border = BorderStroke(1.dp, cardBorder)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onSelectPrompt(prompt) }
-                    .padding(vertical = 5.dp),
-                verticalAlignment = Alignment.Top,
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "❯",
-                    color = promptChevron,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
+                Icon(
+                    imageVector = item.icon,
+                    contentDescription = item.title,
+                    tint = iconColor,
+                    modifier = Modifier.size(15.dp)
                 )
                 Text(
-                    text = prompt,
-                    color = textBright,
+                    text = item.title,
+                    color = titleColor,
                     fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
-                    lineHeight = 16.sp,
-                    modifier = Modifier.weight(1f)
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+            Text(
+                text = item.subtitle,
+                color = subtitleColor,
+                fontSize = 9.5.sp,
+                lineHeight = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

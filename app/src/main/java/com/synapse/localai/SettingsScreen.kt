@@ -259,7 +259,7 @@ fun SettingsScreenContent(
                                         .padding(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // Header / Summary Row
+                                    // Header / Summary Row (Clean Horizontal Bar with nowrap typography)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -268,8 +268,12 @@ fun SettingsScreenContent(
                                         Text(
                                             text = "⚡ Gemini API Key Pool",
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
                                         )
 
                                         Row(
@@ -282,12 +286,12 @@ fun SettingsScreenContent(
                                                 color = if (keyCount > 0) primaryContainer else MaterialTheme.colorScheme.errorContainer
                                             ) {
                                                 Text(
-                                                    text = if (keyCount > 0) {
-                                                        if (geminiKeyPoolExpanded) "$keyCount Keys Detected" else "$keyCount Keys Active"
-                                                    } else "No Keys Active",
+                                                    text = if (keyCount > 0) "$keyCount Keys" else "0 Keys",
                                                     color = if (keyCount > 0) onPrimaryContainer else MaterialTheme.colorScheme.onErrorContainer,
                                                     fontSize = 10.sp,
                                                     fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    softWrap = false,
                                                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                                                 )
                                             }
@@ -308,14 +312,16 @@ fun SettingsScreenContent(
 
                                                 // Collapse Toggle Button [▲ Done]
                                                 Surface(
-                                                    shape = RoundedCornerShape(6.dp),
+                                                    shape = RoundedCornerShape(8.dp),
                                                     color = primary,
-                                                    modifier = Modifier.clickable { geminiKeyPoolExpanded = false }
+                                                    modifier = Modifier
+                                                        .wrapContentWidth()
+                                                        .clickable { geminiKeyPoolExpanded = false }
                                                 ) {
                                                     Row(
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                                         verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Default.KeyboardArrowUp,
@@ -327,19 +333,23 @@ fun SettingsScreenContent(
                                                             text = "Done",
                                                             color = onPrimary,
                                                             fontSize = 11.sp,
-                                                            fontWeight = FontWeight.Bold
+                                                            fontWeight = FontWeight.Bold,
+                                                            maxLines = 1,
+                                                            softWrap = false
                                                         )
                                                     }
                                                 }
                                             } else {
                                                 // Expand / Edit Button [Edit ▼]
                                                 Surface(
-                                                    shape = RoundedCornerShape(6.dp),
+                                                    shape = RoundedCornerShape(8.dp),
                                                     color = primaryContainer,
-                                                    modifier = Modifier.clickable { geminiKeyPoolExpanded = true }
+                                                    modifier = Modifier
+                                                        .wrapContentWidth()
+                                                        .clickable { geminiKeyPoolExpanded = true }
                                                 ) {
                                                     Row(
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                                         verticalAlignment = Alignment.CenterVertically,
                                                         horizontalArrangement = Arrangement.spacedBy(3.dp)
                                                     ) {
@@ -347,7 +357,9 @@ fun SettingsScreenContent(
                                                             text = "Edit",
                                                             color = onPrimaryContainer,
                                                             fontSize = 11.sp,
-                                                            fontWeight = FontWeight.Bold
+                                                            fontWeight = FontWeight.Bold,
+                                                            maxLines = 1,
+                                                            softWrap = false
                                                         )
                                                         Icon(
                                                             imageVector = Icons.Default.KeyboardArrowDown,
@@ -473,6 +485,39 @@ fun SettingsScreenContent(
                                 }
                             )
 
+                            // Quick Selector Chips for Gemini Cloud Models
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf("gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro").forEach { modelOption ->
+                                    val isSelected = geminiModelText.trim() == modelOption
+                                    Surface(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                geminiModelText = modelOption
+                                                val newConfig = config.copy(geminiModelName = modelOption)
+                                                viewModel.saveConfig(context, newConfig)
+                                            },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSelected) primaryContainer else surfaceContainer
+                                    ) {
+                                        Text(
+                                            text = modelOption.removePrefix("gemini-"),
+                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 10.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 2.dp),
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            }
+
                             // Inline Key & Model Status (Confirms active model ID currently queued for cloud queries)
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
@@ -540,208 +585,9 @@ fun SettingsScreenContent(
             }
 
             // ==========================================
-            // CARD: OPERATIONAL PERSONAS (.MD MULTI-PROFILE)
+            // LOCAL GGUF ENGINE EXCLUSIVE SETTINGS
             // ==========================================
-            SettingsCard(
-                title = "OPERATIONAL PERSONAS (.MD)",
-                titleColor = primary,
-                statusText = "${uiState.activePersonas.size} ACTIVE"
-            ) {
-                val activePersonas = uiState.activePersonas
-                val currentPersonas = personas.ifEmpty { listOf("coding.md", "chat.md", "android_controller.md") }
-
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // External Storage Path Badge with Inline Manual Re-Scan Button
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = surfaceContainer
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = primary, modifier = Modifier.size(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "/sdcard/Medlam-Ai/personas/",
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                Text(
-                                    text = "Public shared storage • Plain .md profiles • Multi-select composition",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 9.sp
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    isScanningPersonas = true
-                                    coroutineScope.launch {
-                                        val refreshed = withContext(Dispatchers.IO) {
-                                            viewModel.rescanPersonas(context)
-                                        }
-                                        personas = refreshed
-                                        isScanningPersonas = false
-                                        Toast.makeText(context, "Discovered ${refreshed.size} personas in storage", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                if (isScanningPersonas) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp,
-                                        color = primary
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = "Re-index Personas",
-                                        tint = primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Active Stacking Overview Banner
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = primaryContainer
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "ACTIVE ROLE COMPOSITION (${activePersonas.size} COMBINED):",
-                                    color = onPrimaryContainer,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                activePersonas.forEach { pName ->
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = primary.copy(alpha = 0.2f)
-                                    ) {
-                                        Text(
-                                            text = "✓ $pName",
-                                            color = onPrimaryContainer,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Multi-Select Checklist Matrix
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "AVAILABLE PERSONAS (TOGGLE TO COMPOSE ROLES):",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-
-                        currentPersonas.forEach { pName ->
-                            val isChecked = activePersonas.contains(pName)
-
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        viewModel.togglePersona(pName, context)
-                                    },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isChecked) primaryContainer.copy(alpha = 0.5f) else surfaceContainer
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Checkbox(
-                                        checked = isChecked,
-                                        onCheckedChange = { viewModel.togglePersona(pName, context) },
-                                        colors = CheckboxDefaults.colors(
-                                            checkedColor = primary,
-                                            checkmarkColor = onPrimary
-                                        )
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Text(
-                                                text = pName,
-                                                color = if (isChecked) primary else MaterialTheme.colorScheme.onSurface,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                            if (isChecked) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(3.dp),
-                                                    color = primary.copy(alpha = 0.15f)
-                                                ) {
-                                                    Text(
-                                                        text = "ACTIVE",
-                                                        color = primary,
-                                                        fontSize = 8.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        Text(
-                                            text = PersonaManager.getPersonaDescription(pName),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 9.5.sp,
-                                            lineHeight = 13.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            if (config.preferredModelType == ModelType.GGUF) {
 
             // ==========================================
             // CARD 2: LOCAL NEURAL CORE (GGUF + MTP)
@@ -1111,6 +957,211 @@ fun SettingsScreenContent(
                             valueRange = 0f..1.5f,
                             colors = SliderDefaults.colors(thumbColor = primary, activeTrackColor = primary)
                         )
+                    }
+                }
+            }
+            }
+
+            // ==========================================
+            // CARD: OPERATIONAL PERSONAS (.MD MULTI-PROFILE)
+            // ==========================================
+            SettingsCard(
+                title = "OPERATIONAL PERSONAS (.MD)",
+                titleColor = primary,
+                statusText = "${uiState.activePersonas.size} ACTIVE"
+            ) {
+                val activePersonas = uiState.activePersonas
+                val currentPersonas = personas.ifEmpty { listOf("coding.md", "chat.md", "android_controller.md") }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // External Storage Path Badge with Inline Manual Re-Scan Button
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = surfaceContainer
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = primary, modifier = Modifier.size(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "/sdcard/Medlam-Ai/personas/",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Public shared storage • Plain .md profiles • Multi-select composition",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 9.sp
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    isScanningPersonas = true
+                                    coroutineScope.launch {
+                                        val refreshed = withContext(Dispatchers.IO) {
+                                            viewModel.rescanPersonas(context)
+                                        }
+                                        personas = refreshed
+                                        isScanningPersonas = false
+                                        Toast.makeText(context, "Discovered ${refreshed.size} personas in storage", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                if (isScanningPersonas) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = primary
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "Re-index Personas",
+                                        tint = primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Active Stacking Overview Banner
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = primaryContainer
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "ACTIVE ROLE COMPOSITION (${activePersonas.size} COMBINED):",
+                                    color = onPrimaryContainer,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                activePersonas.forEach { pName ->
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = primary.copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            text = "✓ $pName",
+                                            color = onPrimaryContainer,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Multi-Select Checklist Matrix
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "AVAILABLE PERSONAS (TOGGLE TO COMPOSE ROLES):",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+
+                        currentPersonas.forEach { pName ->
+                            val isChecked = activePersonas.contains(pName)
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        viewModel.togglePersona(pName, context)
+                                    },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isChecked) primaryContainer.copy(alpha = 0.5f) else surfaceContainer
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = isChecked,
+                                        onCheckedChange = { viewModel.togglePersona(pName, context) },
+                                        colors = CheckboxDefaults.colors(
+                                            checkedColor = primary,
+                                            checkmarkColor = onPrimary
+                                        )
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = pName,
+                                                color = if (isChecked) primary else MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            if (isChecked) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(3.dp),
+                                                    color = primary.copy(alpha = 0.15f)
+                                                ) {
+                                                    Text(
+                                                        text = "ACTIVE",
+                                                        color = primary,
+                                                        fontSize = 8.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Text(
+                                            text = PersonaManager.getPersonaDescription(pName),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 9.5.sp,
+                                            lineHeight = 13.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
