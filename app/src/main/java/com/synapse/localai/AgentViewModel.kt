@@ -119,7 +119,6 @@ data class AgentUiState(
     val lastExecutionResult: String = "",
     val currentKeyIndex: Int = 0,
     val totalKeys: Int = 0,
-    val isNotificationActive: Boolean = false,
     val isRootAvailable: Boolean = false,
     val streamInterruptMsg: String? = null,
     val tokensPerSecond: Float = 0f,
@@ -563,25 +562,10 @@ class AgentViewModel : ViewModel() {
             } else if (config.preferredModelType == ModelType.GEMINI && activeGeminiKeyCount > 0) {
                 loadGeminiModel(config.geminiApiKeys, config.geminiModelName, context)
             }
-
-            updateServiceStatus(context)
         } catch (e: Exception) {
             Log.e(TAG, "initialize failed", e)
             addLog(LogEntry(sender = "SYSTEM", text = "Boot Error: ${e.message}", isError = true))
         }
-    }
-
-    fun updateServiceStatus(context: Context) {
-        val isNotificationActive = try {
-            val enabledListeners = android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: ""
-            enabledListeners.contains(context.packageName)
-        } catch (e: Exception) {
-            false
-        }
-
-        _uiState.update { it.copy(
-            isNotificationActive = isNotificationActive
-        ) }
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {

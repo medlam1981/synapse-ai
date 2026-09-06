@@ -15,9 +15,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
@@ -97,6 +105,7 @@ fun SettingsScreenContent(
     
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
+    var geminiKeyPoolExpanded by remember { mutableStateOf(false) }
     var geminiModelText by remember(config.geminiModelName) { mutableStateOf(config.geminiModelName) }
     var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
@@ -230,23 +239,196 @@ fun SettingsScreenContent(
                     // Cloud Credentials Section (Auto-Saving)
                     if (config.preferredModelType == ModelType.GEMINI) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedTextField(
-                                value = config.geminiApiKeys,
-                                onValueChange = {
-                                    val newConfig = config.copy(geminiApiKeys = it)
-                                    viewModel.saveConfig(context, newConfig)
-                                },
-                                label = { Text("Gemini API Keys (comma-separated)") },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = settingsFieldColors(),
-                                textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
-                                visualTransformation = if (geminiKeysVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                trailingIcon = {
-                                    IconButton(onClick = { geminiKeysVisible = !geminiKeysVisible }) {
-                                        Icon(if (geminiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null, tint = primary)
+                            // Collapsible API Key Pool Drawer (Accordion Pattern)
+                            val activeKeysList = remember(config.geminiApiKeys) {
+                                config.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                            }
+                            val keyCount = activeKeysList.size
+                            val activeKeyNum = if (keyCount > 0) (uiState.currentKeyIndex + 1).coerceIn(1, keyCount) else 0
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .tactileGlassGlow(cornerRadius = 10.dp, isDark = isDark, borderWidth = 1.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = surfaceContainer
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Header / Summary Row
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "⚡ Gemini API Key Pool",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            // Key Count Badge
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = if (keyCount > 0) primaryContainer else MaterialTheme.colorScheme.errorContainer
+                                            ) {
+                                                Text(
+                                                    text = if (keyCount > 0) {
+                                                        if (geminiKeyPoolExpanded) "$keyCount Keys Detected" else "$keyCount Keys Active"
+                                                    } else "No Keys Active",
+                                                    color = if (keyCount > 0) onPrimaryContainer else MaterialTheme.colorScheme.onErrorContainer,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                                )
+                                            }
+
+                                            if (geminiKeyPoolExpanded) {
+                                                // Mask / Unmask Toggle (Eye glyph)
+                                                IconButton(
+                                                    onClick = { geminiKeysVisible = !geminiKeysVisible },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (geminiKeysVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                                        contentDescription = if (geminiKeysVisible) "Mask keys" else "Unmask keys",
+                                                        tint = primary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+
+                                                // Collapse Toggle Button [▲ Done]
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = primary,
+                                                    modifier = Modifier.clickable { geminiKeyPoolExpanded = false }
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.KeyboardArrowUp,
+                                                            contentDescription = "Collapse",
+                                                            tint = onPrimary,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                        Text(
+                                                            text = "Done",
+                                                            color = onPrimary,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                }
+                                            } else {
+                                                // Expand / Edit Button [Edit ▼]
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = primaryContainer,
+                                                    modifier = Modifier.clickable { geminiKeyPoolExpanded = true }
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "Edit",
+                                                            color = onPrimaryContainer,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                        Icon(
+                                                            imageVector = Icons.Default.KeyboardArrowDown,
+                                                            contentDescription = "Expand",
+                                                            tint = onPrimaryContainer,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (!geminiKeyPoolExpanded) {
+                                        // Default Collapsed State Subtitle
+                                        Text(
+                                            text = if (keyCount > 0) {
+                                                "Current Active: Key #$activeKeyNum/$keyCount (Auto-failover enabled)"
+                                            } else {
+                                                "No API keys configured. Tap [Edit] to configure API keys."
+                                            },
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    // Expanded State (Bounded Height & Internal Scroll)
+                                    AnimatedVisibility(
+                                        visible = geminiKeyPoolExpanded,
+                                        enter = expandVertically() + fadeIn(),
+                                        exit = shrinkVertically() + fadeOut()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "Current Active: Key #$activeKeyNum/$keyCount (Auto-failover enabled)",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+
+                                            // Bounded container with strict maximum height limit & internal vertical scroll
+                                            val keyScrollState = rememberScrollState()
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 70.dp, max = 150.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(if (isDark) MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface)
+                                                    .verticalScroll(keyScrollState)
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = config.geminiApiKeys,
+                                                    onValueChange = {
+                                                        val newConfig = config.copy(geminiApiKeys = it)
+                                                        viewModel.saveConfig(context, newConfig)
+                                                    },
+                                                    placeholder = {
+                                                        Text(
+                                                            "AIzaSy..., AIzaSy...",
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                                            fontSize = 11.5.sp,
+                                                            fontFamily = FontFamily.Monospace
+                                                        )
+                                                    },
+                                                    label = { Text("Gemini API Keys (comma-separated)", fontSize = 11.sp) },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    colors = settingsFieldColors(),
+                                                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                                                    visualTransformation = if (geminiKeysVisible) VisualTransformation.None else PasswordVisualTransformation()
+                                                )
+                                            }
+                                        }
                                     }
                                 }
-                            )
+                            }
 
                             // Freeform Manual Model Input Field (Dynamic Custom Model Entry & Zero Client-Side Restrictions)
                             OutlinedTextField(
@@ -932,81 +1114,8 @@ fun SettingsScreenContent(
                     }
                 }
             }
-
-            // ==========================================
-            // CARD 4: SYSTEM INTERFACE & PERMISSIONS
-            // ==========================================
-            SettingsCard(
-                title = "4. SYSTEM INTERFACE",
-                titleColor = primary
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    ServiceToggle(
-                        title = "Real-time Perceptor",
-                        description = "Monitor notifications.",
-                        isActive = uiState.isNotificationActive,
-                        onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Button(
-                        onClick = { viewModel.updateServiceStatus(context) },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = primaryContainer,
-                            contentColor = onPrimaryContainer
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Default.Sync, null, modifier = Modifier.size(16.dp), tint = onPrimaryContainer)
-                        Spacer(Modifier.width(8.dp))
-                        Text("REFRESH STATUS", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
             Spacer(modifier = Modifier.height(40.dp))
         }
-    }
-}
-
-@Composable
-private fun ServiceToggle(
-    title: String,
-    description: String,
-    isActive: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.5.sp, lineHeight = 14.sp)
-        }
-        StatusBadge(isActive)
-    }
-}
-
-@Composable
-private fun StatusBadge(isActive: Boolean) {
-    Surface(
-        color = if (isActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(4.dp)
-    ) {
-        Text(
-            text = if (isActive) "ACTIVE" else "OFF",
-            color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onErrorContainer,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-        )
     }
 }
 
