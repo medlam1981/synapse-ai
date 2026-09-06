@@ -249,15 +249,18 @@ object StreamDemultiplexer {
 
             val targetPath = pendingFilePathFromProse
 
+            val isHtml = lang == "html" || targetPath?.endsWith(".html", ignoreCase = true) == true
+
             // Search for closing delimiter: match ``` preceded by \n or whitespace, or start of line
             val closingIdx = findClosingFence(textWithoutTools, codeStartIdx)
             if (closingIdx == -1) {
                 // Code block is actively streaming: lock tokens inside this code container
                 val activeCode = textWithoutTools.substring(codeStartIdx)
+                val finalActiveCode = if (isHtml) HtmlSanitizer.sanitizeHtmlStream(activeCode) else activeCode
                 blocks.add(
                     DemuxBlock.Code(
                         language = lang,
-                        code = activeCode,
+                        code = finalActiveCode,
                         filePath = targetPath,
                         isClosed = false
                     )
@@ -266,10 +269,11 @@ object StreamDemultiplexer {
             } else {
                 // Code block closed cleanly: seal the active container and lock the internal code buffer
                 val closedCode = textWithoutTools.substring(codeStartIdx, closingIdx)
+                val finalClosedCode = if (isHtml) HtmlSanitizer.sanitizeHtmlStream(closedCode) else closedCode
                 blocks.add(
                     DemuxBlock.Code(
                         language = lang,
-                        code = closedCode,
+                        code = finalClosedCode,
                         filePath = targetPath,
                         isClosed = true
                     )

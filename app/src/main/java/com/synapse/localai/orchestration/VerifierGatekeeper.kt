@@ -85,7 +85,41 @@ object VerifierGatekeeper {
                 }
             }
 
-            // 3. HTML / XML Tag Validation
+            // 3. HTML Validation: Byte-0 Assertion & Zero-ASCII Navigation Rules
+            if (ext in setOf("html", "htm")) {
+                val trimmedStart = content.trimStart()
+                val startsWithValidHtml = trimmedStart.startsWith("<!DOCTYPE html>", ignoreCase = true) ||
+                        trimmedStart.startsWith("<html", ignoreCase = true)
+
+                if (!startsWithValidHtml) {
+                    errors.add(
+                        VerificationError(
+                            workerId = determineWorkerId(fileName),
+                            fileName = fileName,
+                            errorType = "Byte-0 Violation",
+                            description = "HTML document does not start with <!DOCTYPE html> or <html at Byte 0. Leading artifacts or rogue tokens detected.",
+                            suggestedFix = "Strictly begin the file at Byte 0 with <!DOCTYPE html>. Discard all leading characters, comments, markdown fences, and worker tags."
+                        )
+                    )
+                }
+
+                // Check for raw ASCII navigation artifacts
+                val forbiddenAsciiPatterns = listOf("<[[", "<<[", "[<]")
+                val foundForbidden = forbiddenAsciiPatterns.filter { content.contains(it) }
+                if (foundForbidden.isNotEmpty()) {
+                    errors.add(
+                        VerificationError(
+                            workerId = determineWorkerId(fileName),
+                            fileName = fileName,
+                            errorType = "Forbidden ASCII Glyph / Stray Prefix",
+                            description = "Detected forbidden ASCII navigation / stray glyph tokens: ${foundForbidden.joinToString(", ")}",
+                            suggestedFix = "Zero-ASCII Navigation Rule: Strictly replace ASCII brackets/arrows (<[[, <<[, [<]) with inline SVG vectors. Use semantic <button> elements with Lucide/Heroicons SVG paths."
+                        )
+                    )
+                }
+            }
+
+            // 4. HTML / XML Tag Validation
             if (ext in setOf("html", "htm", "xml")) {
                 val htmlErrors = checkHtmlTags(content)
                 if (htmlErrors > 0) {
@@ -390,6 +424,7 @@ Instructions:
 1. Regenerate ONLY the completely corrected content for '${error.fileName}'.
 2. Ensure 100% valid syntax with perfectly balanced closures.
 3. Strictly output raw code only. Never include markdown code fences (```) or XML tool tags.
+4. For HTML files: Ensure Byte 0 strictly begins with <!DOCTYPE html>. Adhere strictly to the Zero-ASCII Navigation Rule: all buttons, arrows, and icons MUST use pure inline SVG vectors, never ASCII characters (e.g. <[[, <<[, [<]).
 
 Current Broken Source:
 $originalCode

@@ -604,13 +604,16 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .then(if (isBusy) Modifier.alpha(pulseAlpha) else Modifier)
-                                .clip(CircleShape)
-                                .background(dotColor)
-                        )
+                        if (isBusy) {
+                            NeonDottedSpinner(modifier = Modifier.size(14.dp))
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(dotColor)
+                            )
+                        }
                         Text(
                             text = statusText,
                             color = textColor,
@@ -1661,15 +1664,31 @@ fun CliTerminalToolLine(
     val isManageTask = rawLine.contains("ManageTask", ignoreCase = true)
     val isBash = rawLine.contains("Bash", ignoreCase = true) || rawLine.startsWith("$ ")
     val isFileWrite = rawLine.contains("File written", ignoreCase = true) || rawLine.contains("Writing to", ignoreCase = true) || rawLine.contains("FileWrite", ignoreCase = true)
-    val isSuccess = rawLine.contains("done", ignoreCase = true) || rawLine.contains("success", ignoreCase = true) || rawLine.contains("exit 0", ignoreCase = true)
+    val isSuccess = rawLine.contains("done", ignoreCase = true) || rawLine.contains("success", ignoreCase = true) ||
+                    rawLine.contains("exit 0", ignoreCase = true) || rawLine.contains("Ready / Operational", ignoreCase = true) ||
+                    rawLine.contains("Atomically promoted", ignoreCase = true) || rawLine.contains("Storage Synced", ignoreCase = true) ||
+                    rawLine.contains("SAVED", ignoreCase = true) || rawLine.contains("LAUNCHED", ignoreCase = true) ||
+                    rawLine.contains("VERIFIED", ignoreCase = true)
+    val isFailed = rawLine.contains("failed", ignoreCase = true) || rawLine.contains("aborted", ignoreCase = true) ||
+                   rawLine.contains("FAILED", ignoreCase = true) || rawLine.contains("error", ignoreCase = true) ||
+                   rawLine.contains("Exhausted", ignoreCase = true)
 
-    val isTelemetry = rawLine.contains("⚡") || rawLine.contains("Storage Synced", ignoreCase = true) ||
+    val isRunningOrchestrator = rawLine.contains("Orchestrator: Initializing", ignoreCase = true) ||
+                                rawLine.contains("Orchestrator: Decomposed", ignoreCase = true) ||
+                                rawLine.contains("Verifier: Auditing", ignoreCase = true) ||
+                                rawLine.contains("Running...", ignoreCase = true) ||
+                                rawLine.contains("Auto-extending token stream", ignoreCase = true) ||
+                                rawLine.contains("Initiating remediation pass", ignoreCase = true)
+
+    val isTelemetry = rawLine.contains("Storage Synced", ignoreCase = true) ||
                       rawLine.contains("Generation Chunk", ignoreCase = true) || rawLine.contains("Auto-extending", ignoreCase = true) ||
-                      rawLine.contains("Execution Complete", ignoreCase = true) || rawLine.contains("Storage Sentinel", ignoreCase = true)
+                      rawLine.contains("Execution Complete", ignoreCase = true) || rawLine.contains("Storage Sentinel", ignoreCase = true) ||
+                      rawLine.contains("Orchestrator:", ignoreCase = true) || rawLine.contains("Verifier:", ignoreCase = true) ||
+                      rawLine.contains("Production Sync:", ignoreCase = true) || rawLine.contains("Status:", ignoreCase = true)
 
     val bulletColor = when {
-        rawLine.contains("Storage Sentinel", ignoreCase = true) -> if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626) // Red warning
-        isTelemetry -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7) // Cyan telemetry
+        rawLine.contains("Storage Sentinel", ignoreCase = true) || isFailed -> if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626) // Red warning
+        isRunningOrchestrator || isTelemetry -> if (isDark) Color(0xFF00D2FF) else Color(0xFF0284C7) // Neon Cyan
         isManageTask -> if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309) // Amber/Orange
         isBash -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)       // Electric Cyan / Cobalt
         isSuccess || isFileWrite -> if (isDark) Color(0xFF10B981) else Color(0xFF059669) // Emerald / Green
@@ -1680,7 +1699,7 @@ fun CliTerminalToolLine(
     val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
     val gutterColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)
 
-    val displayText = rawLine.trim().replace(Regex("^[●*•\\s]+"), "")
+    val displayText = rawLine.trim().replace(Regex("^[●*•⚡\\s]+"), "")
     val hasExpandableOutput = !isTelemetry && (displayText.contains(" -> ") || displayText.contains("\n"))
 
     Column(
@@ -1693,12 +1712,30 @@ fun CliTerminalToolLine(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(
-                text = "●",
-                color = bulletColor,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
-            )
+            if (isRunningOrchestrator) {
+                NeonDottedSpinner(modifier = Modifier.size(14.dp))
+            } else if (isSuccess) {
+                Text(
+                    text = "✔",
+                    color = if (isDark) Color(0xFF10B981) else Color(0xFF059669),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            } else if (isFailed) {
+                Text(
+                    text = "✖",
+                    color = if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Text(
+                    text = "●",
+                    color = bulletColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Text(
                 text = if (isTelemetry) displayText else displayText.substringBefore(" -> "),
                 color = cmdColor,
@@ -2004,13 +2041,17 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = ">_",
-                            color = accentColor,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
-                        )
+                        if (block.isRunning) {
+                            NeonDottedSpinner(modifier = Modifier.size(14.dp))
+                        } else {
+                            Text(
+                                text = if (block.exitCode == 0) "✔" else "✖",
+                                color = accentColor,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                         Text(
                             text = if (block.isRunning) "TERMINAL • bash [running...]" else "TERMINAL • bash [exit: ${block.exitCode}]",
                             color = accentColor,
@@ -2172,19 +2213,17 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
 @Composable
 fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boolean) {
     val paramStr = block.params.entries.joinToString(", ") { "${it.key}: \"${it.value}\"" }
+    val isRunning = !block.isClosed
+    val statusSuffix = if (isRunning) " -> Dispatched" else " -> Completed"
     val displayText = buildString {
-        append("⚡ Tool(")
+        append("Tool(")
         append(block.toolName)
         if (paramStr.isNotBlank()) {
             append(": ")
             append(paramStr)
         }
         append(")")
-        if (!block.isClosed) {
-            append(" -> Running...")
-        } else {
-            append(" -> Dispatched")
-        }
+        append(statusSuffix)
     }
 
     Surface(
@@ -2197,11 +2236,22 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            if (isRunning) {
+                NeonDottedSpinner(modifier = Modifier.size(14.dp))
+            } else {
+                Text(
+                    text = "✔",
+                    color = if (isDark) Color(0xFF10B981) else Color(0xFF059669),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Text(
                 text = displayText,
-                color = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7),
+                color = if (isRunning) (if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)) else (if (isDark) Color(0xFF10B981) else Color(0xFF059669)),
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
@@ -2239,7 +2289,11 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
             val isToolLine = trimmed.startsWith("● ManageTask") || trimmed.startsWith("ManageTask(") ||
                              trimmed.startsWith("● Bash") || trimmed.startsWith("Bash(") ||
                              trimmed.startsWith("● FileWrite") || trimmed.startsWith("File written:") ||
-                             trimmed.startsWith("Background task done:") || trimmed.startsWith("$ ")
+                             trimmed.startsWith("Background task done:") || trimmed.startsWith("$ ") ||
+                             trimmed.startsWith("Tool(") || trimmed.startsWith("✔ Tool(") || trimmed.startsWith("✖ Tool(") ||
+                             trimmed.startsWith("Orchestrator:") || trimmed.startsWith("Verifier:") ||
+                             trimmed.startsWith("Production Sync:") || trimmed.startsWith("Status:") ||
+                             trimmed.startsWith("  ├─")
 
             if (isToolLine) {
                 CliTerminalToolLine(trimmed, isDark)

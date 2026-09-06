@@ -1,6 +1,7 @@
 package com.synapse.localai.orchestration
 
 import android.util.Log
+import com.synapse.localai.HtmlSanitizer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -91,13 +92,18 @@ class StagingManager(
             files.forEach { (fileName, content) ->
                 // Clean fileName of any path traversal artifacts
                 val cleanName = File(fileName).name
+                val finalContent = if (cleanName.endsWith(".html", ignoreCase = true) || cleanName.equals("index.html", ignoreCase = true)) {
+                    HtmlSanitizer.sanitizeHtmlStream(content)
+                } else {
+                    content
+                }
                 val targetFile = File(workerSubdir, cleanName)
                 FileOutputStream(targetFile).use { fos ->
-                    fos.write(content.toByteArray(StandardCharsets.UTF_8))
+                    fos.write(finalContent.toByteArray(StandardCharsets.UTF_8))
                     fos.flush()
                 }
                 workerFileMap[cleanName] = targetFile
-                Log.i(TAG, "Staged [$workerId] -> ${targetFile.absolutePath} (${content.length} chars)")
+                Log.i(TAG, "Staged [$workerId] -> ${targetFile.absolutePath} (${finalContent.length} chars)")
             }
             updateManifestWorkerStatus(workerId, "COMPLETED", null)
             return true
@@ -190,8 +196,14 @@ class StagingManager(
             val tempFile = File(destDir, "$fileName.tmp_${System.currentTimeMillis()}")
 
             try {
-                // 1. Copy staged file to temporary file in production directory
-                stagedFile.copyTo(tempFile, overwrite = true)
+                // 1. Copy or sanitize staged file to temporary file in production directory
+                if (fileName.endsWith(".html", ignoreCase = true) || fileName.equals("index.html", ignoreCase = true)) {
+                    val rawText = stagedFile.readText(StandardCharsets.UTF_8)
+                    val sanitized = HtmlSanitizer.sanitizeHtmlStream(rawText)
+                    tempFile.writeText(sanitized, StandardCharsets.UTF_8)
+                } else {
+                    stagedFile.copyTo(tempFile, overwrite = true)
+                }
                 // 2. Atomically rename temporary file to destination file
                 if (targetFile.exists()) {
                     targetFile.delete()

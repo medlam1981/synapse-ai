@@ -160,7 +160,7 @@ object ToolExecutor {
                                 writtenFiles.add(targetFile.absolutePath)
                             }
 
-                            Log.i(TAG, "⚡ LiveDiskStreamer: Explicit file provisioned (append=true): ${targetFile.absolutePath}")
+                            Log.i(TAG, "LiveDiskStreamer: Explicit file provisioned (append=true): ${targetFile.absolutePath}")
                             onStatusUpdate?.invoke("Writing to ${targetFile.absolutePath}...")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed provisioning $resolved: ${e.message}")
@@ -182,13 +182,22 @@ object ToolExecutor {
                     // Closing ``` found: write final code characters up to the closing fence if active file handle exists
                     if (currentWriter != null && currentFile != null) {
                         val finalChunk = fullAccumulatedText.substring(lastWrittenOffset, closingBackticks)
+                        val targetFileToSanitize = currentFile
                         try {
                             currentWriter?.write(finalChunk)
                             currentWriter?.flush()
                             try { currentFos?.fd?.sync() } catch (_: Exception) {}
                             currentWriter?.close()
                             currentFos?.close()
-                            Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & saved (${currentFile?.length()} bytes): ${currentFile?.absolutePath}")
+                            Log.i(TAG, "LiveDiskStreamer: Auto-flush & saved (${targetFileToSanitize?.length()} bytes): ${targetFileToSanitize?.absolutePath}")
+                            if (targetFileToSanitize != null && (targetFileToSanitize.name.endsWith(".html", ignoreCase = true) || targetFileToSanitize.name.equals("index.html", ignoreCase = true))) {
+                                val savedContent = targetFileToSanitize.readText(StandardCharsets.UTF_8)
+                                val clean = HtmlSanitizer.sanitizeHtmlStream(savedContent)
+                                if (clean != savedContent) {
+                                    targetFileToSanitize.writeText(clean, StandardCharsets.UTF_8)
+                                    Log.i(TAG, "LiveDiskStreamer: Start-of-File Strict Anchor applied to ${targetFileToSanitize.absolutePath}")
+                                }
+                            }
                         } catch (e: Exception) {
                             Log.e(TAG, "Error closing stream: ${e.message}")
                         }
@@ -236,9 +245,18 @@ object ToolExecutor {
             try {
                 currentWriter?.flush()
                 try { currentFos?.fd?.sync() } catch (_: Exception) {}
+                val targetFileToSanitize = currentFile
                 currentWriter?.close()
                 currentFos?.close()
-                Log.i(TAG, "⚡ LiveDiskStreamer: Stream gracefully sealed on disk: ${currentFile?.absolutePath}")
+                Log.i(TAG, "LiveDiskStreamer: Stream gracefully sealed on disk: ${targetFileToSanitize?.absolutePath}")
+                if (targetFileToSanitize != null && (targetFileToSanitize.name.endsWith(".html", ignoreCase = true) || targetFileToSanitize.name.equals("index.html", ignoreCase = true))) {
+                    val savedContent = targetFileToSanitize.readText(StandardCharsets.UTF_8)
+                    val clean = HtmlSanitizer.sanitizeHtmlStream(savedContent)
+                    if (clean != savedContent) {
+                        targetFileToSanitize.writeText(clean, StandardCharsets.UTF_8)
+                        Log.i(TAG, "LiveDiskStreamer: Start-of-File Strict Anchor applied to ${targetFileToSanitize.absolutePath}")
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error sealing stream: ${e.message}")
             } finally {
@@ -269,7 +287,7 @@ object ToolExecutor {
                     try { currentFos?.fd?.sync() } catch (_: Exception) {}
                     currentWriter?.close()
                     currentFos?.close()
-                    Log.i(TAG, "⚡ LiveDiskStreamer: Auto-flush & closed remaining on closeAll: ${currentFile?.absolutePath}")
+                    Log.i(TAG, "LiveDiskStreamer: Auto-flush & closed remaining on closeAll: ${currentFile?.absolutePath}")
                 } else {
                     currentWriter?.flush()
                     try { currentFos?.fd?.sync() } catch (_: Exception) {}
@@ -294,18 +312,42 @@ object ToolExecutor {
                         if (block is StreamDemultiplexer.DemuxBlock.Code && block.code.isNotBlank() && !block.filePath.isNullOrBlank()) {
                             val resolved = resolvePath(block.filePath, baseDir)
                             val f = File(resolved)
-                            if (!f.exists() || f.length() < block.code.length.toLong() / 2) {
+                            val finalCode = if (resolved.endsWith(".html", ignoreCase = true) || resolved.endsWith("index.html", ignoreCase = true)) {
+                                HtmlSanitizer.sanitizeHtmlStream(block.code)
+                            } else {
+                                block.code
+                            }
+                            if (!f.exists() || f.length() < finalCode.length.toLong() / 2) {
                                 f.parentFile?.let { if (!it.exists()) it.mkdirs() }
-                                f.writeText(block.code, StandardCharsets.UTF_8)
+                                f.writeText(finalCode, StandardCharsets.UTF_8)
                                 if (!writtenFiles.contains(f.absolutePath)) {
                                     writtenFiles.add(f.absolutePath)
                                 }
-                                Log.i(TAG, "⚡ LiveDiskStreamer: Explicit file safety verified & saved: ${f.absolutePath} (${f.length()} bytes)")
+                                Log.i(TAG, "LiveDiskStreamer: Explicit file safety verified & saved: ${f.absolutePath} (${f.length()} bytes)")
                             }
                         }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in multi-file safety write: ${e.message}")
+                }
+            }
+
+            // Post-stream HTML Byte-0 Strict Anchor Pass across all written files
+            for (filePath in writtenFiles) {
+                if (filePath.endsWith(".html", ignoreCase = true) || filePath.endsWith("index.html", ignoreCase = true)) {
+                    try {
+                        val f = File(filePath)
+                        if (f.exists()) {
+                            val content = f.readText(StandardCharsets.UTF_8)
+                            val sanitized = HtmlSanitizer.sanitizeHtmlStream(content)
+                            if (sanitized != content) {
+                                f.writeText(sanitized, StandardCharsets.UTF_8)
+                                Log.i(TAG, "LiveDiskStreamer: Post-sanitized HTML at Byte 0: $filePath")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not post-sanitize HTML $filePath: ${e.message}")
+                    }
                 }
             }
 
@@ -546,8 +588,14 @@ object ToolExecutor {
                 }
             }
 
-            file.writeText(content)
-            Log.i(TAG, "✅ File written: ${file.absolutePath} (${content.length} chars)")
+            val finalContent = if (resolvedPath.endsWith(".html", ignoreCase = true) || resolvedPath.endsWith("index.html", ignoreCase = true)) {
+                HtmlSanitizer.sanitizeHtmlStream(content)
+            } else {
+                content
+            }
+
+            file.writeText(finalContent)
+            Log.i(TAG, "✅ File written: ${file.absolutePath} (${finalContent.length} chars)")
             fileLog("Written: ${file.absolutePath}")
             file.absolutePath
         } catch (e: Exception) {

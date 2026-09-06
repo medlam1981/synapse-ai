@@ -1011,7 +1011,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     val initialLiveLog = LogEntry(
                         id = liveLogId,
                         sender = "AGENT",
-                        text = "> $finalCommand\n\n⚡ Orchestrator: Initializing Multi-Worker MCP Pipeline...",
+                        text = "> $finalCommand\n\nOrchestrator: Initializing Multi-Worker MCP Pipeline...",
                         isThinking = false
                     )
                     _uiState.update { 
@@ -1193,7 +1193,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 if (StorageSentinel.isStorageCritical()) {
                                     hitStorageLimit = true
                                     liveDiskStreamer.flushAndSeal()
-                                    val sentinelMsg = "⚡ Storage Sentinel: Disk limit reached (< 500MB remaining). Stream gracefully sealed."
+                                    val sentinelMsg = "Storage Sentinel: Disk limit reached (< 500MB remaining). Stream gracefully sealed."
                                     Log.w(TAG, sentinelMsg)
                                     val sentinelLog = LogEntry(
                                         id = UUID.randomUUID().toString(),
@@ -1205,7 +1205,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         state.copy(
                                             logs = state.logs + sentinelLog,
                                             isProcessing = false,
-                                            activeStatusDetail = "⚡ Idle / Ready",
+                                            activeStatusDetail = "Idle / Ready",
                                             currentPhase = AgentActionPhase.IDLE
                                         )
                                     }
@@ -1297,13 +1297,13 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 liveDiskStreamer.flush()
 
                                 val formattedChunkTokens = NumberFormat.getNumberInstance(Locale.US).format(chunkTokensEmitted)
-                                val chunkFinalizedMsg = "⚡ Generation Chunk $continuationCycle finalized ($formattedChunkTokens tokens) -> Storage Synced"
-                                val nextCycleMsg = "⚡ Auto-extending token stream [Cycle ${continuationCycle + 1}]..."
+                                val chunkFinalizedMsg = "Generation Chunk $continuationCycle finalized ($formattedChunkTokens tokens) -> Storage Synced"
+                                val nextCycleMsg = "Auto-extending token stream [Cycle ${continuationCycle + 1}]..."
                                 Log.i(TAG, "$chunkFinalizedMsg\n$nextCycleMsg")
 
                                 _uiState.update { state ->
                                     state.copy(
-                                        activeStatusDetail = "⚡ Auto-extending token stream [Cycle ${continuationCycle + 1}]...",
+                                        activeStatusDetail = "Auto-extending token stream [Cycle ${continuationCycle + 1}]...",
                                         currentPhase = AgentActionPhase.GENERATING_CODE,
                                         isProcessing = true
                                     )
@@ -1315,12 +1315,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 // Clean termination with STOP or natural stream completion
                                 continueRecursion = false
                                 val formattedTotalTokens = NumberFormat.getNumberInstance(Locale.US).format(totalAccumulatedTokens)
-                                val completeMsg = "⚡ Execution Complete [Total Tokens: $formattedTotalTokens]"
+                                val completeMsg = "Execution Complete [Total Tokens: $formattedTotalTokens]"
                                 Log.i(TAG, completeMsg)
 
                                 _uiState.update { state ->
                                     state.copy(
-                                        activeStatusDetail = "⚡ Ready [${formattedTotalTokens} tokens]"
+                                        activeStatusDetail = "Ready [${formattedTotalTokens} tokens]"
                                     )
                                 }
                             }
@@ -1349,7 +1349,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         _uiState.update { state ->
                             state.copy(
                                 isProcessing = false,
-                                activeStatusDetail = "⚡ Idle / Ready",
+                                activeStatusDetail = "Idle / Ready",
                                 currentPhase = AgentActionPhase.IDLE
                             )
                         }
@@ -1842,7 +1842,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         "open_app", "launch_app", "start_app" -> "$preview brought to front."
                         else -> "Identical operation already executed in active turn."
                     }
-                    summaries.add("⚡ Tool($action: $preview) ─── [DUPLICATE SUPPRESSED]\n✔ Status: $statusMsg")
+                    summaries.add("✔ Tool($action: $preview) ─── [DUPLICATE SUPPRESSED]\n✔ Status: $statusMsg")
                     continue
                 }
 
@@ -1856,10 +1856,10 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 val (success, appNameOrErr) = launchApplication(target, actualContext)
                                 val resolvedPkg = resolvePackageName(target, actualContext?.packageManager)
                                 if (success) {
-                                    summaries.add("⚡ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appNameOrErr brought to front.")
+                                    summaries.add("✔ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appNameOrErr brought to front.")
                                     addSystemLog("Native app launch: $appNameOrErr ($resolvedPkg)")
                                 } else {
-                                    summaries.add("⚡ Tool(open_app: $target) ─── [FAILED]\n✖ Status: $appNameOrErr")
+                                    summaries.add("✖ Tool(open_app: $target) ─── [FAILED]\n✖ Status: $appNameOrErr")
                                     addSystemLog("Launch failed: $target ($appNameOrErr)")
                                 }
                             }
@@ -1879,7 +1879,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         if (executedCallsThisTurn.contains(openAppHash) || inFlightCalls.contains(openAppHash)) {
                                             Log.d(TAG, "Idempotency Lock: Intercepted duplicate am start as open_app [$extractedTarget]")
                                             val resolvedPkg = resolvePackageName(extractedTarget, actualContext?.packageManager)
-                                            summaries.add("⚡ Tool(open_app: $resolvedPkg) ─── [DUPLICATE SUPPRESSED]\n✔ Status: $resolvedPkg already brought to front in active turn.")
+                                            summaries.add("✔ Tool(open_app: $resolvedPkg) ─── [DUPLICATE SUPPRESSED]\n✔ Status: $resolvedPkg already brought to front in active turn.")
                                         } else {
                                             inFlightCalls.add(openAppHash)
                                             try {
@@ -1887,7 +1887,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                                 if (success) {
                                                     val resolvedPkg = resolvePackageName(extractedTarget, actualContext?.packageManager)
                                                     executedCallsThisTurn.add(openAppHash)
-                                                    summaries.add("⚡ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appLabel brought to front.")
+                                                    summaries.add("✔ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appLabel brought to front.")
                                                     addSystemLog("Native fast-path launch (intercepted am start): $appLabel ($resolvedPkg)")
                                                 } else {
                                                     // Fallback to real shell execution if native intent fails
@@ -1926,7 +1926,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 f.parentFile?.let { if (!it.exists()) it.mkdirs() }
                                 f.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
                                 addSystemLog("File written natively: ${f.absolutePath} (${f.length()} bytes)")
-                                summaries.add("⚡ Tool(write_file: ${f.name}) ─── [SAVED]\n✔ Status: Wrote ${f.length()} bytes to ${f.absolutePath}")
+                                summaries.add("✔ Tool(write_file: ${f.name}) ─── [SAVED]\n✔ Status: Wrote ${f.length()} bytes to ${f.absolutePath}")
                             }
                         }
                         "web_search", "search", "google_search" -> {
@@ -2118,7 +2118,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         viewModelScope.launch(Dispatchers.IO) {
             val session = chatDb?.getSession(sessionId) ?: return@launch
             val messages = (chatDb?.getMessagesForSession(sessionId) ?: emptyList())
-                .filter { !it.text.startsWith("⚡ Execution Complete") && !it.text.startsWith("⚡ Generation Chunk") }
+                .filter { !it.text.contains("Execution Complete") && !it.text.contains("Generation Chunk") }
             val restoredLogs = messages.map { msg ->
                 val parsed = parseThoughtAndContent(msg.text)
                 val logText = if (msg.sender == "AGENT") {

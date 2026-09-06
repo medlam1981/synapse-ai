@@ -1,4 +1,4 @@
-# MEDLAM-AI AGENT 🧠⚡
+# MEDLAM-AI AGENT 🧠
 > **Autonomous On-Device Neural Core & Hybrid Cognitive Workspace for Android**
 
 [![Platform](https://img.shields.io/badge/Platform-Android%20ARM64-3DDC84.svg?style=flat&logo=android)](https://github.com/medlam1981/synapse-ai)

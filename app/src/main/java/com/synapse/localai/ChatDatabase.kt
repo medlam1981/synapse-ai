@@ -195,7 +195,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         val db = writableDatabase
         try {
             // Purge any legacy telemetry messages erroneously saved as chat messages
-            db.delete(TABLE_MESSAGES, "$COL_MSG_TEXT LIKE '⚡ Execution Complete%' OR $COL_MSG_TEXT LIKE '⚡ Generation Chunk%'", null)
+            db.delete(TABLE_MESSAGES, "$COL_MSG_TEXT LIKE '%Execution Complete%' OR $COL_MSG_TEXT LIKE '%Generation Chunk%'", null)
 
             val whereClause = if (exceptSessionId.isNullOrBlank()) {
                 "$COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES)"
@@ -231,7 +231,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
 
             while (cursor.moveToNext()) {
                 val text = cursor.getString(textIdx)
-                if (text.startsWith("⚡ Execution Complete") || text.startsWith("⚡ Generation Chunk")) {
+                if (text.contains("Execution Complete") || text.contains("Generation Chunk")) {
                     continue
                 }
                 list.add(

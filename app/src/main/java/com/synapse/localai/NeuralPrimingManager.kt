@@ -58,7 +58,7 @@ object NeuralPrimingManager {
                     return@launch
                 }
 
-                Log.d(TAG, "⚡ Background Neural Priming initiated for model: $localPath")
+                Log.d(TAG, "Background Neural Priming initiated for model: $localPath")
 
                 val client = GGUFModelClient().apply {
                     serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0"

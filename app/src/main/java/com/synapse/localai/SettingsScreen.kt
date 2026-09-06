@@ -266,7 +266,7 @@ fun SettingsScreenContent(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "⚡ Gemini API Key Pool",
+                                            text = "🔑 Gemini API Key Pool",
                                             color = MaterialTheme.colorScheme.onSurface,
                                             fontSize = 12.5.sp,
                                             fontWeight = FontWeight.Bold,

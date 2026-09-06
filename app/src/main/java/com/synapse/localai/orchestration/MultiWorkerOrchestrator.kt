@@ -1,6 +1,7 @@
 package com.synapse.localai.orchestration
 
 import android.util.Log
+import com.synapse.localai.HtmlSanitizer
 import com.synapse.localai.ToolExecutor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -108,7 +109,10 @@ Format:
 <html>...</html>
 ===FILE: styles.css===
 /* styles */
-CRITICAL: Ensure all HTML tags are closed, all CSS braces are balanced. Output ONLY the file blocks. Zero XML tags.
+CRITICAL RULES:
+1. Clean Document Tree Requirement: Every HTML output MUST start at Byte 0 with <!DOCTYPE html>. Zero leading brackets, fences, or worker tags.
+2. Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters (<, >, <<, >>, [<], <[[, <-). All icons (menu, back, dark-mode toggle, status indicators) must strictly use inline, high-resolution SVG vectors (e.g., Lucide / Heroicons SVG paths) with appropriate viewBox, stroke, and fill properties.
+3. Ensure all HTML tags are closed, all CSS braces are balanced. Output ONLY the file blocks. Zero XML tags.
 """.trimIndent()
                 )
             )
@@ -169,7 +173,10 @@ Format your output EXACTLY as:
 /* Clean modern responsive styles */
 ...
 
-CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markdown fences outside the blocks, zero XML tags.
+CRITICAL RULES:
+1. Clean Document Tree Requirement: Every HTML output MUST start at Byte 0 with <!DOCTYPE html>. Zero leading brackets, fences, or worker tags. For Arabic/RTL interfaces, configure <html lang="ar" dir="rtl"> properly. The top navigation bar must use clean CSS Grid or Flex layout with semantic <button> elements enclosing pure SVG vectors.
+2. Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters (<, >, <<, >>, [<], <[[, <-). All icons (menu, back, dark-mode toggle, status indicators) must strictly use inline, high-resolution SVG vectors (e.g., Lucide / Heroicons SVG paths) with appropriate viewBox, stroke, and fill properties.
+3. Verify all tags are closed and all CSS braces are balanced. Zero markdown fences outside the blocks, zero XML tags.
 """.trimIndent()
                 )
             )
@@ -208,7 +215,7 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
         onTelemetryUpdate(initialTaskCount)
 
         appendCli("> $userPrompt\n")
-        appendCli("⚡ Orchestrator: Decomposed intent into $initialTaskCount parallel tasks [TSK $initialTaskCount]")
+        appendCli("Orchestrator: Decomposed intent into $initialTaskCount parallel tasks [TSK $initialTaskCount]")
 
         // 2. Concurrency & Worker Dispatch
         val workerResults = mutableMapOf<String, WorkerExecutionResult>()
@@ -236,7 +243,7 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
         }
 
         // 3. Verifier Gatekeeper Audit Pass
-        appendCli("⚡ Verifier: Auditing staging artifacts in $runFolderRelative/")
+        appendCli("Verifier: Auditing staging artifacts in $runFolderRelative/")
         stagingManager.updateVerifierStatus("AUDITING")
 
         var stagedFiles = stagingManager.getAllStagedFiles()
@@ -285,7 +292,7 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
         // 5. Atomic Production Promotion
         if (gatekeeperStatus == "VERIFIED") {
             stagingManager.updateVerifierStatus("VERIFIED")
-            appendCli("⚡ Production Sync: Atomically promoted files to $destinationDir/")
+            appendCli("Production Sync: Atomically promoted files to $destinationDir/")
 
             val promotedFiles = stagingManager.promoteToProduction()
             for (file in promotedFiles) {
@@ -295,12 +302,12 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
 
             // Transient Purge
             stagingManager.cleanupStaging()
-            appendCli("⚡ Status: Ready / Operational")
+            appendCli("Status: Ready / Operational")
         } else {
             stagingManager.updateVerifierStatus("FAILED", auditResult.errors.map { "${it.fileName}: ${it.description}" })
             stagingManager.cleanupStaging()
-            appendCli("⚡ Production Sync: Aborted — Verifier gated promotion to protect production storage.")
-            appendCli("⚡ Status: Remediation Exhausted")
+            appendCli("Production Sync: Aborted — Verifier gated promotion to protect production storage.")
+            appendCli("Status: Remediation Exhausted")
         }
 
         onTelemetryUpdate(0)
@@ -457,6 +464,10 @@ CRITICAL: Verify all tags are closed and all CSS braces are balanced. Zero markd
             .replace(Regex("""<parameter\b[^>]*>"""), "")
             .replace("</parameter>", "")
             .trim()
+
+        if (fileName.endsWith(".html", ignoreCase = true) || fileName.equals("index.html", ignoreCase = true)) {
+            clean = HtmlSanitizer.sanitizeHtmlStream(clean)
+        }
 
         return clean
     }

@@ -43,7 +43,9 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 - Real-Time Disk Streaming: Output `file: <path>` immediately preceding code fences.
 - Anti-Echo Hygiene: Never echo or quote code in the conversational summary. Conclude with high-level operational confirmation only.
 - Strict Containment: Enclose all code deliverables strictly in code fences (```lang). Never leak raw code into prose.
-- Zero Fluff: Skip generic intros/outros; provide concise architectural reasoning and execution."""
+- Zero Fluff: Skip generic intros/outros; provide concise architectural reasoning and execution.
+- Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters (<, >, <<, >>, [<], <[[, <-). All icons (menu, back, dark-mode toggle, status indicators) must strictly use inline, high-resolution SVG vectors (e.g., Lucide / Heroicons SVG paths) with appropriate viewBox, stroke, and fill properties.
+- Clean Document Tree Requirement: Every HTML output must start at Byte 0 with <!DOCTYPE html>. For Arabic/RTL interfaces, configure <html lang="ar" dir="rtl"> properly. The top navigation bar must use clean CSS Grid or Flex layout with semantic <button> elements enclosing pure SVG vectors."""
 
     const val DEFAULT_CHAT_PERSONA = """# MEDLAM-AI [CHAT CORE]
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
@@ -77,7 +79,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             if (!dir.exists()) dir.mkdirs()
 
             val codingFile = File(dir, "coding.md")
-            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("do not generate HTML files")) {
+            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("Zero-ASCII Navigation Rule")) {
                 codingFile.writeText(DEFAULT_CODING_PERSONA)
             }
 

@@ -359,7 +359,7 @@ class GGUFModelClient {
 
             if (isStandaloneDraft) {
                 activeDraftModelPath = activeDraftPath
-                fileLog("⚡ Speculative Decoding linked: ${File(activeDraftPath!!).name}")
+                fileLog("Speculative Decoding linked: ${File(activeDraftPath!!).name}")
                 trialArgs.add("--model-draft")
                 trialArgs.add(activeDraftPath)
                 trialArgs.add("--draft")
