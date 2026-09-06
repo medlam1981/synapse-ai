@@ -32,7 +32,7 @@ object NeuralPrimingManager {
         scope.launch {
             try {
                 val appContext = context.applicationContext
-                val prefs = appContext.getSharedPreferences("agent_config", Context.MODE_PRIVATE)
+                val prefs = appContext.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
                 val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
                 val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
 

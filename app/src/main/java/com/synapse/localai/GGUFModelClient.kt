@@ -236,7 +236,12 @@ class GGUFModelClient {
             try { LlamaServerJNI.stop() } catch (_: Throwable) {}
             if (globalLoadedPath != null) {
                 onStatus("Stopping previous instance...")
-                delay(600)
+                delay(400)
+                var waitCount = 0
+                while (isServerAlive() && waitCount < 10) {
+                    delay(200)
+                    waitCount++
+                }
                 globalServerThread?.interrupt()
                 globalServerThread = null
                 globalLoadedPath = null
@@ -271,7 +276,14 @@ class GGUFModelClient {
             val isQwen = baseName.contains("qwen")
 
             // Fast Attention & KV Cache selection
-            val kvCacheType = if (hw != null && hw.totalRamMb >= 6000L && !isLargeModel) "f16" else "q8_0"
+            // For Qwen (hybrid SSM architecture with linear attention layers) or devices with ample RAM,
+            // enforce standard f16 KV cache to prevent graph tensor quantization assertion failures.
+            val kvCacheType = if (isQwen || (hw != null && hw.totalRamMb >= 6000L && !isLargeModel)) "f16" else "q8_0"
+
+            // Flash Attention: Qwen 3.5 architecture incorporates linear recurrent attention (SSM).
+            // Forcing flash-attn causes FA graph check assertion crashes on non-MHA layers.
+            // Disable flash-attn for Qwen, while keeping it enabled for standard transformer architectures.
+            val flashAttnArg = if (isQwen) "off" else "on"
 
             // Balanced generation horizon: 4096 context for fast CPU prefill and ample reasoning headroom
             val resolvedCtx = if (contextLength in 2048..4096) contextLength else 4096
@@ -292,7 +304,7 @@ class GGUFModelClient {
                 "-t", optimalThreads.toString(),
                 "-tb", optimalBatchThreads.toString(), // Multi-core burst prefill on all available cores
                 "-ngl", "0",
-                "--flash-attn", "on",
+                "--flash-attn", flashAttnArg,
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,
                 "--alias", "local",
