@@ -23,6 +23,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -39,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -442,6 +444,8 @@ fun SettingsScreenContent(
                                 }
                             }
 
+                            val clipboardManager = LocalClipboardManager.current
+
                             // Freeform Manual Model Input Field (Dynamic Custom Model Entry & Zero Client-Side Restrictions)
                             OutlinedTextField(
                                 value = geminiModelText,
@@ -451,7 +455,7 @@ fun SettingsScreenContent(
                                     viewModel.saveConfig(context, newConfig)
                                 },
                                 label = { Text("GEMINI CLOUD MODEL IDENTIFIER", color = primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
-                                placeholder = { Text("e.g. gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                                placeholder = { Text("e.g. gemini-3.5-flash-lite, gemini-2.5-pro...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 colors = settingsFieldColors(),
@@ -472,51 +476,21 @@ fun SettingsScreenContent(
                                         }
                                         IconButton(
                                             onClick = {
-                                                val defaultModel = "gemini-2.0-flash"
-                                                geminiModelText = defaultModel
-                                                val newConfig = config.copy(geminiModelName = defaultModel)
-                                                viewModel.saveConfig(context, newConfig)
+                                                clipboardManager.getText()?.text?.let { pasteText ->
+                                                    if (pasteText.isNotBlank()) {
+                                                        geminiModelText = pasteText.trim()
+                                                        val newConfig = config.copy(geminiModelName = geminiModelText)
+                                                        viewModel.saveConfig(context, newConfig)
+                                                    }
+                                                }
                                             },
                                             modifier = Modifier.size(28.dp)
                                         ) {
-                                            Icon(Icons.Filled.Refresh, "Reset to default", tint = primary, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Filled.ContentPaste, "Paste model ID", tint = primary, modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 }
                             )
-
-                            // Quick Selector Chips for Gemini Cloud Models
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf("gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro").forEach { modelOption ->
-                                    val isSelected = geminiModelText.trim() == modelOption
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable {
-                                                geminiModelText = modelOption
-                                                val newConfig = config.copy(geminiModelName = modelOption)
-                                                viewModel.saveConfig(context, newConfig)
-                                            },
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (isSelected) primaryContainer else surfaceContainer
-                                    ) {
-                                        Text(
-                                            text = modelOption.removePrefix("gemini-"),
-                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                            fontSize = 10.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 2.dp),
-                                            textAlign = TextAlign.Center,
-                                            maxLines = 1,
-                                            softWrap = false
-                                        )
-                                    }
-                                }
-                            }
 
                             // Inline Key & Model Status (Confirms active model ID currently queued for cloud queries)
                             Surface(

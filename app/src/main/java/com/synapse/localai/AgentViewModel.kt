@@ -127,7 +127,8 @@ data class AgentUiState(
     val activeWorkspacePath: String? = null,
     val activePersona: String = PersonaManager.DEFAULT_PERSONA,
     val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET,
-    val availablePersonas: List<String> = emptyList()
+    val availablePersonas: List<String> = emptyList(),
+    val isLiveCanvasOpen: Boolean = false
 )
 
 class AgentViewModel : ViewModel() {
@@ -884,6 +885,95 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
     fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
         if (command.isBlank() && fileUri == null) return
         
+        val actualContext = context ?: MainActivity.instance
+        val trimmed = command.trim()
+
+        // MODULE 4: Direct Shell REPL ($ Prefix Token Bypass)
+        if (trimmed.startsWith("$")) {
+            val shellCmd = trimmed.removePrefix("$").trim()
+            autoTitleSessionIfNew(command)
+            val userLog = LogEntry(sender = "USER", text = command)
+            addLog(userLog)
+            val sid = currentSessionId.value
+            viewModelScope.launch(Dispatchers.IO) {
+                chatDb?.insertMessage(
+                    ChatMessageEntity(
+                        id = userLog.id,
+                        sessionId = sid,
+                        sender = "USER",
+                        text = userLog.text,
+                        timestamp = userLog.timestamp
+                    )
+                )
+                val (exitCode, output) = runShellWithExitCode(shellCmd)
+                val safeCmd = StreamDemultiplexer.escapeXml(shellCmd)
+                val safeOut = StreamDemultiplexer.escapeXml(output.trim())
+                val terminalFrameText = """<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>"""
+                val agentLog = LogEntry(sender = "AGENT", text = terminalFrameText)
+                addLog(agentLog)
+                chatDb?.insertMessage(
+                    ChatMessageEntity(
+                        id = agentLog.id,
+                        sessionId = sid,
+                        sender = "AGENT",
+                        text = terminalFrameText,
+                        timestamp = agentLog.timestamp
+                    )
+                )
+                refreshSessions()
+            }
+            return
+        }
+
+        // MODULE 2: Slash Command Autocomplete Engine Routing (/ Trigger)
+        if (trimmed.startsWith("/")) {
+            val slashCmd = trimmed.substringBefore(" ").lowercase()
+            autoTitleSessionIfNew(command)
+            val userLog = LogEntry(sender = "USER", text = command)
+            addLog(userLog)
+            val sid = currentSessionId.value
+            viewModelScope.launch(Dispatchers.IO) {
+                chatDb?.insertMessage(
+                    ChatMessageEntity(
+                        id = userLog.id,
+                        sessionId = sid,
+                        sender = "USER",
+                        text = userLog.text,
+                        timestamp = userLog.timestamp
+                    )
+                )
+                refreshSessions()
+            }
+
+            when (slashCmd) {
+                "/code" -> {
+                    actualContext?.let { switchPersonaQuick("coding.md", it) }
+                    addLog(LogEntry(sender = "SYSTEM", text = "Active persona switched to coding.md (Pure Headless Synthesis)"))
+                }
+                "/sys" -> {
+                    actualContext?.let { switchPersonaQuick("android_controller.md", it) }
+                    addLog(LogEntry(sender = "SYSTEM", text = "Active persona switched to android_controller.md (Root & Shell Controller)"))
+                }
+                "/chat" -> {
+                    actualContext?.let { switchPersonaQuick("chat.md", it) }
+                    addLog(LogEntry(sender = "SYSTEM", text = "Active persona switched to chat.md (Conversational & Natural Reasoning)"))
+                }
+                "/rollback" -> {
+                    executeRollback(actualContext)
+                }
+                "/preview" -> {
+                    openLiveCanvas()
+                }
+                "/clear" -> {
+                    actualContext?.let { clearConversation(it) }
+                }
+                else -> {
+                    addLog(LogEntry(sender = "SYSTEM", text = "Unknown command: $slashCmd. Available: /code, /sys, /chat, /rollback, /preview, /clear"))
+                }
+            }
+            return
+        }
+
         if (_uiState.value.isProcessing) {
             synchronized(pendingCommands) {
                 pendingCommands.add(command)
@@ -891,8 +981,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             addLog(LogEntry(sender = "SYSTEM", text = "Command queued (${pendingCommands.size} in queue)"))
             return
         }
-        
-        val actualContext = context ?: MainActivity.instance
         autoTitleSessionIfNew(command)
         val userLog = LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]")
         addLog(userLog)
@@ -2026,6 +2114,47 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
     fun setActivePersona(personaName: String, context: Context) {
         togglePersona(personaName, context)
+    }
+
+    fun openLiveCanvas() {
+        _uiState.update { it.copy(isLiveCanvasOpen = true) }
+    }
+
+    fun closeLiveCanvas() {
+        _uiState.update { it.copy(isLiveCanvasOpen = false) }
+    }
+
+    fun toggleLiveCanvas() {
+        _uiState.update { it.copy(isLiveCanvasOpen = !it.isLiveCanvasOpen) }
+    }
+
+    fun switchPersonaQuick(personaName: String, context: Context) {
+        setActivePersonas(setOf(personaName), context)
+    }
+
+    fun executeRollback(context: Context? = null): String {
+        val targetDir = File("/sdcard/Medlam-Ai/webapp")
+        val (success, message) = SnapshotManager.rollbackLatest(targetDir)
+        val exitCode = if (success) 0 else 1
+        val safeCmd = "rollback"
+        val safeOut = StreamDemultiplexer.escapeXml(message)
+        val terminalFrameText = """<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>"""
+        val agentLog = LogEntry(sender = "AGENT", text = terminalFrameText)
+        addLog(agentLog)
+        val sid = currentSessionId.value
+        viewModelScope.launch(Dispatchers.IO) {
+            chatDb?.insertMessage(
+                ChatMessageEntity(
+                    id = agentLog.id,
+                    sessionId = sid,
+                    sender = "AGENT",
+                    text = terminalFrameText,
+                    timestamp = agentLog.timestamp
+                )
+            )
+            refreshSessions()
+        }
+        return message
     }
 
     fun rescanPersonas(context: Context): List<String> {

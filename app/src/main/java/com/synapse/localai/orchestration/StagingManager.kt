@@ -2,6 +2,7 @@ package com.synapse.localai.orchestration
 
 import android.util.Log
 import com.synapse.localai.HtmlSanitizer
+import com.synapse.localai.SnapshotManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -186,6 +187,9 @@ class StagingManager(
     @Synchronized
     fun promoteToProduction(): List<File> {
         val destDir = File(destinationDir)
+        if (destDir.exists()) {
+            SnapshotManager.createSnapshot(destDir)
+        }
         if (!destDir.exists()) destDir.mkdirs()
 
         val promoted = mutableListOf<File>()

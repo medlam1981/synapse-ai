@@ -187,15 +187,74 @@ fun getSystemStats(context: Context): SystemStats {
     )
 }
 
-fun isArabic(text: String): Boolean {
-    if (text.isBlank()) return false
-    return text.any { ch ->
-        ch in '\u0600'..'\u06FF' || // Arabic & Moroccan Darija script
-        ch in '\u0750'..'\u077F' || // Arabic Supplement
-        ch in '\u08A0'..'\u08FF' || // Arabic Extended-A
-        ch in '\uFB50'..'\uFDFF' || // Arabic Presentation Forms-A
-        ch in '\uFE70'..'\uFEFF'    // Arabic Presentation Forms-B
+/**
+ * MODULE 1: First Strong Directional Character Detection
+ * Dynamically determines if text flow should be RTL based on the first strong letter.
+ */
+fun isRtlText(text: String): Boolean {
+    val arabicRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]")
+    val firstChar = text.trim().firstOrNull { it.isLetter() } ?: return false
+    return arabicRegex.matches(firstChar.toString())
+}
+
+fun isArabic(text: String): Boolean = isRtlText(text)
+
+/**
+ * MODULE 2.2: BiDi Isolation for Mixed Content (English/Latin inside Arabic)
+ * Wraps embedded Latin technical terms and parenthesized text in Unicode Bidi isolation
+ * markers (\u2068...\u2069) and ensures colons anchor correctly to Arabic phrases.
+ */
+fun applyBidiIsolation(text: String): String {
+    if (text.isBlank()) return text
+
+    // 1. Anchor colons immediately following Arabic phrases (\u200F RLM right after colon)
+    val arabicColonRegex = Regex("([\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF])(:|：)(\\s*)")
+    var processed = arabicColonRegex.replace(text) { m ->
+        "${m.groupValues[1]}${m.groupValues[2]}\u200F${m.groupValues[3]}"
     }
+
+    // 2. Wrap parenthesized Latin/ASCII terms: e.g. (Shell & Terminal), (File I/O)
+    val parenLatinRegex = Regex("(\\([A-Za-z0-9_\\-&/.,\\s+]+\\))")
+    processed = parenLatinRegex.replace(processed) { m ->
+        "\u2068${m.value}\u2069"
+    }
+
+    // 3. Wrap bracketed Latin terms: e.g. [Shell & Terminal]
+    val bracketLatinRegex = Regex("(\\[[A-Za-z0-9_\\-&/.,\\s+]+\\])")
+    processed = bracketLatinRegex.replace(processed) { m ->
+        "\u2068${m.value}\u2069"
+    }
+
+    // 4. Wrap standalone Latin words/phrases not already inside an isolate (\u2068...\u2069)
+    val sb = StringBuilder()
+    var inIsolate = false
+    var i = 0
+    while (i < processed.length) {
+        val ch = processed[i]
+        if (ch == '\u2068' || ch == '\u2066') {
+            inIsolate = true
+            sb.append(ch)
+            i++
+        } else if (ch == '\u2069') {
+            inIsolate = false
+            sb.append(ch)
+            i++
+        } else if (!inIsolate) {
+            val nextIsolate = processed.indexOfAny(charArrayOf('\u2068', '\u2066'), i)
+            val chunkEnd = if (nextIsolate != -1) nextIsolate else processed.length
+            val chunk = processed.substring(i, chunkEnd)
+            val isolatedChunk = chunk.replace(Regex("(?<![/`])\\b([A-Za-z][A-Za-z0-9_\\-&./]*(?:\\s+[A-Za-z][A-Za-z0-9_\\-&./]*)*)\\b(?!`)")) { m ->
+                val v = m.value
+                if (v.isBlank() || v.startsWith("http") || v.startsWith("/")) v else "\u2068$v\u2069"
+            }
+            sb.append(isolatedChunk)
+            i = chunkEnd
+        } else {
+            sb.append(ch)
+            i++
+        }
+    }
+    return sb.toString()
 }
 
 class MainActivity : ComponentActivity() {
@@ -364,6 +423,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private data class SlashCommandItem(
+    val command: String,
+    val name: String,
+    val description: String,
+    val action: () -> Unit
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CliWorkspaceScreen(viewModel: AgentViewModel) {
@@ -374,8 +440,49 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     var showSettings by remember { mutableStateOf(false) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var isRecording by remember { mutableStateOf(false) }
-    val focusManager = LocalFocusManager.current
     var textInput by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+
+    val slashCommands = remember(context) {
+        listOf(
+            SlashCommandItem(
+                command = "/code",
+                name = "Coding Persona",
+                description = "Switch active persona to coding.md (pure headless synthesis, multi-worker staging)",
+                action = { viewModel.switchPersonaQuick("coding.md", context) }
+            ),
+            SlashCommandItem(
+                command = "/sys",
+                name = "System Controller",
+                description = "Switch active persona to android_controller.md (root/shell execution, hardware tools)",
+                action = { viewModel.switchPersonaQuick("android_controller.md", context) }
+            ),
+            SlashCommandItem(
+                command = "/chat",
+                name = "Conversational",
+                description = "Switch active persona to chat.md (natural reasoning, dialect mirroring)",
+                action = { viewModel.switchPersonaQuick("chat.md", context) }
+            ),
+            SlashCommandItem(
+                command = "/rollback",
+                name = "Instant Revert",
+                description = "Atomically swap production files with the latest local snapshot",
+                action = { viewModel.executeRollback(context) }
+            ),
+            SlashCommandItem(
+                command = "/preview",
+                name = "Live Canvas",
+                description = "Launch the responsive in-app WebView drawer",
+                action = { viewModel.openLiveCanvas() }
+            ),
+            SlashCommandItem(
+                command = "/clear",
+                name = "Workspace Flush",
+                description = "Clear the central terminal frame list and reset turn state",
+                action = { viewModel.clearConversation(context) }
+            )
+        )
+    }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
     val borderColor = MaterialTheme.colorScheme.outlineVariant
@@ -625,6 +732,184 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         )
                     }
 
+                    // MODULE 2: Slash Command Autocomplete Drop-Up Card (/ Trigger)
+                    if (textInput.startsWith("/")) {
+                        val query = textInput.lowercase().trim()
+                        val matchingCommands = slashCommands.filter { 
+                            it.command.startsWith(query) || it.name.lowercase().contains(query.removePrefix("/"))
+                        }
+                        if (matchingCommands.isNotEmpty()) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 5.dp, end = 5.dp, bottom = 8.dp)
+                                    .heightIn(max = 200.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color(0xFF111827),
+                                border = BorderStroke(1.dp, Color(0xFF00D2FF).copy(alpha = 0.3f)),
+                                shadowElevation = 8.dp
+                            ) {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    items(matchingCommands, key = { it.command }) { item ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    val action = item.action
+                                                    textInput = ""
+                                                    action()
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = item.command,
+                                                        color = Color(0xFF00D2FF),
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontFamily = FontFamily.Monospace
+                                                    )
+                                                    Text(
+                                                        text = "— ${item.name}",
+                                                        color = Color(0xFFE2E8F0),
+                                                        fontSize = 11.5.sp,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                                Text(
+                                                    text = item.description,
+                                                    color = Color(0xFF94A3B8),
+                                                    fontSize = 10.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // MODULE 6: Persona & Action Quick-Chips Bar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 5.dp, end = 5.dp, bottom = 4.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val isCodeActive = uiState.activePersonas.contains("coding.md")
+                        val isSysActive = uiState.activePersonas.contains("android_controller.md")
+                        val isChatActive = uiState.activePersonas.contains("chat.md")
+
+                        // [/code]
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.switchPersonaQuick("coding.md", context) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isCodeActive) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isCodeActive) Color(0xFF00D2FF) else Color(0xFF30363D))
+                        ) {
+                            Text(
+                                text = "/code",
+                                color = if (isCodeActive) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (isCodeActive) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        // [/sys]
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.switchPersonaQuick("android_controller.md", context) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSysActive) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isSysActive) Color(0xFF00D2FF) else Color(0xFF30363D))
+                        ) {
+                            Text(
+                                text = "/sys",
+                                color = if (isSysActive) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (isSysActive) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        // [/chat]
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.switchPersonaQuick("chat.md", context) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isChatActive) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isChatActive) Color(0xFF00D2FF) else Color(0xFF30363D))
+                        ) {
+                            Text(
+                                text = "/chat",
+                                color = if (isChatActive) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (isChatActive) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        // [/rollback]
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.executeRollback(context) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF161B22),
+                            border = BorderStroke(1.dp, Color(0xFF30363D))
+                        ) {
+                            Text(
+                                text = "/rollback",
+                                color = Color(0xFFF59E0B),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        // [/preview]
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.toggleLiveCanvas() },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (uiState.isLiveCanvasOpen) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (uiState.isLiveCanvasOpen) Color(0xFF10B981) else Color(0xFF30363D))
+                        ) {
+                            Text(
+                                text = "/preview",
+                                color = if (uiState.isLiveCanvasOpen) Color(0xFF10B981) else Color(0xFF94A3B8),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (uiState.isLiveCanvasOpen) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
                     // Unified Slim Input Capsule (Internalized Inline Actions)
                     val inputIsArabic = isArabic(textInput)
                     val canSend = textInput.isNotBlank() || selectedFileUri != null
@@ -653,7 +938,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .padding(vertical = 6.dp),
-                                    contentAlignment = if (inputIsArabic) Alignment.CenterEnd else Alignment.CenterStart
+                                    contentAlignment = Alignment.CenterStart
                                 ) {
                                     BasicTextField(
                                         value = textInput,
@@ -662,7 +947,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                             color = textBright,
                                             fontSize = 12.5.sp,
                                             fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
-                                            textAlign = if (inputIsArabic) TextAlign.End else TextAlign.Start
+                                            textAlign = TextAlign.Start
                                         ),
                                         cursorBrush = SolidColor(cyanAccent),
                                         maxLines = 4,
@@ -675,7 +960,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                                         color = textDim,
                                                         fontSize = 12.sp,
                                                         fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
-                                                        textAlign = if (inputIsArabic) TextAlign.End else TextAlign.Start
+                                                        textAlign = TextAlign.Start
                                                     ),
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
@@ -777,8 +1062,13 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
     if (showSettings) {
         BackHandler { showSettings = false }
-                        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
+        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
     }
+
+    LiveCanvasDrawer(
+        isOpen = uiState.isLiveCanvasOpen,
+        onDismiss = { viewModel.closeLiveCanvas() }
+    )
 }
 
 /**
@@ -1365,45 +1655,52 @@ fun CliThoughtContainer(
 
         // Expanded Reasoning Body with vertical gutter line
         AnimatedVisibility(visible = isExpanded) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 4.dp, top = 3.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            val isThoughtRtl = isRtlText(thinkingText)
+            CompositionLocalProvider(
+                LocalLayoutDirection provides if (isThoughtRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
             ) {
-                Box(
+                Row(
                     modifier = Modifier
-                        .width(1.5.dp)
-                        .fillMaxHeight()
-                        .padding(top = 2.dp)
-                        .background(gutterColor)
-                )
+                        .fillMaxWidth()
+                        .padding(start = 4.dp, top = 3.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(1.5.dp)
+                            .fillMaxHeight()
+                            .padding(top = 2.dp)
+                            .background(gutterColor)
+                    )
 
-                Text(
-                    text = androidx.compose.ui.text.buildAnnotatedString {
-                        if (thinkingText.isNotBlank()) {
-                            append(thinkingText)
-                            if (isThinking) {
-                                pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
-                                append(" ▌")
-                                pop()
+                    Text(
+                        text = androidx.compose.ui.text.buildAnnotatedString {
+                            if (thinkingText.isNotBlank()) {
+                                val content = if (isThoughtRtl) applyBidiIsolation(thinkingText) else thinkingText
+                                append(content)
+                                if (isThinking) {
+                                    pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
+                                    append(" ▌")
+                                    pop()
+                                }
+                            } else {
+                                append("Formulating architecture & execution strategy...")
+                                if (isThinking) {
+                                    pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
+                                    append(" ▌")
+                                    pop()
+                                }
                             }
-                        } else {
-                            append("Formulating architecture & execution strategy...")
-                            if (isThinking) {
-                                pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
-                                append(" ▌")
-                                pop()
-                            }
-                        }
-                    },
-                    color = traceColor,
-                    fontSize = 10.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontStyle = FontStyle.Italic,
-                    lineHeight = 15.5.sp,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                        },
+                        color = traceColor,
+                        fontSize = 10.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontStyle = FontStyle.Italic,
+                        lineHeight = if (isThoughtRtl) 17.sp else 15.5.sp,
+                        textAlign = TextAlign.Start,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }
@@ -1810,31 +2107,31 @@ fun CliLogMessageView(
                     .fillMaxWidth()
                     .padding(vertical = 3.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                 ) {
-                    Text(
-                        text = "❯",
-                        color = primaryAccent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(top = 1.dp)
-                    )
-
-                    CompositionLocalProvider(
-                        LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = log.text,
+                            text = if (isLogArabic) "❮" else "❯",
+                            color = primaryAccent,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+
+                        Text(
+                            text = if (isLogArabic) applyBidiIsolation(log.text) else log.text,
                             color = textBright,
                             fontSize = 13.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Normal,
                             lineHeight = if (isLogArabic) 18.5.sp else 17.sp,
-                            textAlign = if (isLogArabic) TextAlign.End else TextAlign.Start,
+                            textAlign = TextAlign.Start,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -2342,12 +2639,12 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                     }
                     isHeader -> {
                         Text(
-                            text = clean,
+                            text = if (isLineArabic) applyBidiIsolation(clean) else clean,
                             color = headingColor,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
-                            textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
+                            textAlign = TextAlign.Start,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 4.dp, bottom = 2.dp)
@@ -2363,47 +2660,36 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 4.dp),
-                            verticalAlignment = Alignment.Top,
-                            horizontalArrangement = if (isLineArabic) Arrangement.End else Arrangement.Start
+                                .padding(start = 8.dp),
+                            verticalAlignment = Alignment.Top
                         ) {
-                            if (!isLineArabic) {
-                                Text(
-                                    text = bulletMarker,
-                                    color = headingColor,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
                             Text(
-                                text = buildOrganizedMarkdownString(bulletContent, isDark),
+                                text = bulletMarker,
+                                color = headingColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(end = 4.dp)
+                            )
+                            Text(
+                                text = buildOrganizedMarkdownString(bulletContent, isDark, isRtl = isLineArabic),
                                 color = textBright,
                                 fontSize = 11.5.sp,
                                 fontFamily = FontFamily.Monospace,
-                                lineHeight = if (isLineArabic) 18.sp else 16.sp,
-                                textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
-                                modifier = Modifier.weight(1f, fill = false)
+                                lineHeight = if (isLineArabic) 19.sp else 16.sp,
+                                textAlign = TextAlign.Start,
+                                modifier = Modifier.weight(1f)
                             )
-                            if (isLineArabic) {
-                                Text(
-                                    text = " •",
-                                    color = headingColor,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
                         }
                     }
                     else -> {
                         Text(
-                            text = buildOrganizedMarkdownString(clean, isDark),
+                            text = buildOrganizedMarkdownString(clean, isDark, isRtl = isLineArabic),
                             color = textBright,
                             fontSize = 11.5.sp,
                             fontFamily = FontFamily.Monospace,
-                            lineHeight = if (isLineArabic) 18.sp else 16.sp,
-                            textAlign = if (isLineArabic) TextAlign.End else TextAlign.Start,
+                            lineHeight = if (isLineArabic) 19.sp else 16.sp,
+                            textAlign = TextAlign.Start,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -2414,7 +2700,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
     }
 }
 
-fun buildOrganizedMarkdownString(text: String, isDark: Boolean): AnnotatedString {
+fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean = false): AnnotatedString {
     val pathRegex = "(/sdcard/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*|/(?:data|storage|system|etc|proc|sys)/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)"
     val inlineCodeRegex = "(`[^`]+`)"
     val boldRegex = "(\\*\\*[^*]+\\*\\*)"
@@ -2430,41 +2716,43 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean): AnnotatedString
 
     combinedRegex.findAll(text).forEach { match ->
         if (match.range.first > lastIndex) {
-            builder.append(text.substring(lastIndex, match.range.first))
+            val part = text.substring(lastIndex, match.range.first)
+            builder.append(if (isRtl) applyBidiIsolation(part) else part)
         }
 
         val v = match.value
         when {
             v.startsWith("/sdcard/") || v.startsWith("/data/") || v.startsWith("/storage/") -> {
                 builder.pushStyle(SpanStyle(color = amberAccent, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
-                builder.append("\u2066$v\u2069")
+                builder.append("\u2068$v\u2069")
                 builder.pop()
             }
             v.startsWith("`") && v.endsWith("`") && v.length >= 2 -> {
                 val codeContent = v.substring(1, v.length - 1)
                 builder.pushStyle(SpanStyle(color = codeColor, background = codeBg, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold))
-                builder.append(" $codeContent ")
+                builder.append(if (isRtl) "\u2068 $codeContent \u2069" else " $codeContent ")
                 builder.pop()
             }
             v.startsWith("**") && v.endsWith("**") && v.length >= 4 -> {
                 val boldContent = v.substring(2, v.length - 2)
                 builder.pushStyle(SpanStyle(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
-                builder.append(boldContent)
+                builder.append(if (isRtl) applyBidiIsolation(boldContent) else boldContent)
                 builder.pop()
             }
             else -> {
-                builder.append(v)
+                builder.append(if (isRtl) applyBidiIsolation(v) else v)
             }
         }
         lastIndex = match.range.last + 1
     }
     if (lastIndex < text.length) {
-        builder.append(text.substring(lastIndex))
+        val part = text.substring(lastIndex)
+        builder.append(if (isRtl) applyBidiIsolation(part) else part)
     }
     return builder.toAnnotatedString()
 }
 
-fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
+fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = false): AnnotatedString {
     val pathRegex = Regex("(/sdcard/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*|/(?:data|storage|system|etc|proc|sys)/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)")
     val amberAccent = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
     val pathBg = if (isDark) Color(0xFF1B2332) else Color(0xFFE2E8F0)
@@ -2473,15 +2761,17 @@ fun buildPathHighlightedString(text: String, isDark: Boolean): AnnotatedString {
 
     pathRegex.findAll(text).forEach { match ->
         if (match.range.first > lastIndex) {
-            builder.append(text.substring(lastIndex, match.range.first))
+            val part = text.substring(lastIndex, match.range.first)
+            builder.append(if (isRtl) applyBidiIsolation(part) else part)
         }
         builder.pushStyle(SpanStyle(color = amberAccent, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
-        builder.append("\u2066${match.value}\u2069")
+        builder.append("\u2068${match.value}\u2069")
         builder.pop()
         lastIndex = match.range.last + 1
     }
     if (lastIndex < text.length) {
-        builder.append(text.substring(lastIndex))
+        val part = text.substring(lastIndex)
+        builder.append(if (isRtl) applyBidiIsolation(part) else part)
     }
     return builder.toAnnotatedString()
 }
