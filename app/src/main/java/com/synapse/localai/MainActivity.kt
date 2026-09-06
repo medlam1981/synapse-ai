@@ -1942,9 +1942,15 @@ fun CliLogMessageView(
 fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark: Boolean) {
     val clipboard = LocalClipboardManager.current
 
+    // Clean output to filter out redundant completion status strings
+    val rawOutput = block.output.trim()
+    val cleanOutput = rawOutput
+        .replace(Regex("""\[(?:Command|Process) completed with exit code \d+(?: \(no output\))?\]""", RegexOption.IGNORE_CASE), "")
+        .trim()
+
     // Auto-collapse if command + output exceeds 8 lines
     val cmdLines = block.command.lines()
-    val outLines = if (block.output.isNotBlank()) block.output.lines() else emptyList()
+    val outLines = if (cleanOutput.isNotBlank()) cleanOutput.lines() else emptyList()
     val totalLines = cmdLines.size + outLines.size
     val isLongOutput = totalLines > 8
 
@@ -2029,8 +2035,8 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                                 .clickable {
                                     val copyText = buildString {
                                         append("$ ").append(block.command).append("\n")
-                                        if (block.output.isNotBlank()) {
-                                            append(block.output).append("\n")
+                                        if (cleanOutput.isNotBlank()) {
+                                            append(cleanOutput).append("\n")
                                         }
                                         if (!block.isRunning) {
                                             append("[Process completed with exit code ").append(block.exitCode).append("]")
@@ -2084,10 +2090,10 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         }
 
                         // Output content
-                        if (block.output.isNotBlank()) {
+                        if (cleanOutput.isNotBlank()) {
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = block.output,
+                                text = cleanOutput,
                                 color = Color(0xFFCBD5E1),
                                 fontSize = 12.sp,
                                 fontFamily = FontFamily.Monospace,

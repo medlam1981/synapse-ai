@@ -601,6 +601,7 @@ object StreamDemultiplexer {
             // Filter out terminal frames and legacy shell output tags
             if (trimmed.startsWith("<terminal_frame", ignoreCase = true) || trimmed.startsWith("</terminal_frame>", ignoreCase = true) ||
                 trimmed.startsWith("Shell output (", ignoreCase = true) || trimmed.startsWith("[Process completed with exit code", ignoreCase = true) ||
+                trimmed.startsWith("[Command completed with exit code", ignoreCase = true) ||
                 trimmed.startsWith("[System Tool Execution Output]", ignoreCase = true) || trimmed.startsWith("cat <<", ignoreCase = true) ||
                 trimmed.startsWith("cat <<-", ignoreCase = true)) {
                 continue

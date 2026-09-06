@@ -1730,7 +1730,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 try {
                     val (exitCode, output) = runProcessWithWatchdog(cmd, "su", timeoutMs)
                     if (exitCode == 0 || (!output.contains("su: not found", ignoreCase = true) && !output.contains("permission denied", ignoreCase = true))) {
-                        return@withContext exitCode to output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
+                        return@withContext exitCode to output.trim()
                     }
                     Log.w(TAG, "su command returned exit code $exitCode or permission error, falling back to sh")
                 } catch (e: Exception) {
@@ -1739,7 +1739,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             }
 
             val (exitCode, output) = runProcessWithWatchdog(cmd, "sh", timeoutMs)
-            exitCode to output.ifBlank { "[Command completed with exit code $exitCode (no output)]" }
+            exitCode to output.trim()
         } catch (e: Exception) {
             -1 to "Error executing command: ${e.message ?: e.javaClass.simpleName}"
         }
