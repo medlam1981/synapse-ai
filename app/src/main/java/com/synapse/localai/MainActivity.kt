@@ -425,20 +425,20 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
             SlashCommandItem(
                 command = "/code",
                 name = "Coding Persona",
-                description = "Switch active persona to coding.md (pure headless synthesis, multi-worker staging)",
-                action = { viewModel.switchPersonaQuick("coding.md", context) }
+                description = "Toggle active persona coding.md (pure headless synthesis, multi-worker staging)",
+                action = { viewModel.togglePersonaQuick("coding.md", context) }
             ),
             SlashCommandItem(
                 command = "/sys",
                 name = "System Controller",
-                description = "Switch active persona to android_controller.md (root/shell execution, hardware tools)",
-                action = { viewModel.switchPersonaQuick("android_controller.md", context) }
+                description = "Toggle active persona android_controller.md (root/shell execution, hardware tools)",
+                action = { viewModel.togglePersonaQuick("android_controller.md", context) }
             ),
             SlashCommandItem(
                 command = "/chat",
                 name = "Conversational",
-                description = "Switch active persona to chat.md (natural reasoning, dialect mirroring)",
-                action = { viewModel.switchPersonaQuick("chat.md", context) }
+                description = "Toggle active persona chat.md (natural reasoning, dialect mirroring)",
+                action = { viewModel.togglePersonaQuick("chat.md", context) }
             ),
             SlashCommandItem(
                 command = "/rollback",
@@ -790,22 +790,23 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val isCodeActive = uiState.activePersonas.contains("coding.md")
-                        val isSysActive = uiState.activePersonas.contains("android_controller.md")
-                        val isChatActive = uiState.activePersonas.contains("chat.md")
+                        val activePersonasSet by viewModel.activePersonas.collectAsState()
+                        val isCodeActive = activePersonasSet.contains("coding.md")
+                        val isSysActive = activePersonasSet.contains("android_controller.md")
+                        val isChatActive = activePersonasSet.contains("chat.md")
 
                         // [/code]
                         Surface(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.switchPersonaQuick("coding.md", context) },
+                                .clickable { viewModel.togglePersonaQuick("coding.md", context) },
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isCodeActive) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isCodeActive) Color(0xFF00D2FF) else Color(0xFF30363D))
+                            color = if (isCodeActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isCodeActive) Color(0xFF00E5FF) else Color(0xFF30363D))
                         ) {
                             Text(
                                 text = "/code",
-                                color = if (isCodeActive) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                color = if (isCodeActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = if (isCodeActive) FontWeight.Bold else FontWeight.Medium,
@@ -817,14 +818,14 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         Surface(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.switchPersonaQuick("android_controller.md", context) },
+                                .clickable { viewModel.togglePersonaQuick("android_controller.md", context) },
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isSysActive) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isSysActive) Color(0xFF00D2FF) else Color(0xFF30363D))
+                            color = if (isSysActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isSysActive) Color(0xFF00E5FF) else Color(0xFF30363D))
                         ) {
                             Text(
                                 text = "/sys",
-                                color = if (isSysActive) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                color = if (isSysActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = if (isSysActive) FontWeight.Bold else FontWeight.Medium,
@@ -836,14 +837,14 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         Surface(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.switchPersonaQuick("chat.md", context) },
+                                .clickable { viewModel.togglePersonaQuick("chat.md", context) },
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isChatActive) Color(0xFF00D2FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isChatActive) Color(0xFF00D2FF) else Color(0xFF30363D))
+                            color = if (isChatActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isChatActive) Color(0xFF00E5FF) else Color(0xFF30363D))
                         ) {
                             Text(
                                 text = "/chat",
-                                color = if (isChatActive) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                color = if (isChatActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = if (isChatActive) FontWeight.Bold else FontWeight.Medium,
@@ -1061,6 +1062,7 @@ private fun TelemetryMicroChip(
     text: String,
     accentColor: Color,
     contentDescription: String,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -1087,7 +1089,7 @@ private fun TelemetryMicroChip(
             )
             Text(
                 text = text,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = textColor,
                 fontSize = 8.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
@@ -1354,8 +1356,14 @@ fun ConsolidatedMasterHeader(
             } else {
                 uiState.config.draftModelPath.ifBlank { null }
             }
-            val hasMtp = !effectiveDraftPath.isNullOrBlank() && File(effectiveDraftPath).exists()
-            val draftName = if (hasMtp) File(effectiveDraftPath!!).nameWithoutExtension else null
+            val hasMtp = !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE" && File(effectiveDraftPath).exists()
+            val draftFile = if (hasMtp) File(effectiveDraftPath!!) else null
+            val draftName = draftFile?.nameWithoutExtension
+            val draftTag = if (hasMtp && draftName != null) {
+                val quantRegex = Regex("""(?i)(Q\d+_[A-Z0-9_]+|BF16|FP16|F16|F32)""")
+                val match = quantRegex.find(draftName)
+                match?.value?.uppercase() ?: draftName.removePrefix("mtp-").removePrefix("gemma-4-").removePrefix("it-")
+            } else null
             val rawBaseName = uiState.activeModelName.ifBlank {
                 if (uiState.config.localModelPath.isNotBlank()) File(uiState.config.localModelPath).nameWithoutExtension else "GEMMA-4-E2B"
             }
@@ -1367,7 +1375,6 @@ fun ConsolidatedMasterHeader(
                 .replace("-Q4_K_XL", " Q4")
                 .replace("-BF16", "")
 
-            val modeLabel = if (draftName != null) "MTP: $draftName" else "STANDALONE"
             val tpsSuffix = if (uiState.tokensPerSecond > 0f) {
                 val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond)
                 " • $formattedTps T/s"
@@ -1375,8 +1382,10 @@ fun ConsolidatedMasterHeader(
 
             val specChipText = if (isCloudMode) {
                 "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
+            } else if (hasMtp && draftTag != null) {
+                "${cleanBaseName.uppercase()} • MTP: $draftTag$tpsSuffix"
             } else {
-                "${cleanBaseName.uppercase()} • $modeLabel$tpsSuffix"
+                "STANDALONE$tpsSuffix"
             }
 
             val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
@@ -1445,7 +1454,8 @@ fun ConsolidatedMasterHeader(
             } else {
                 if (uiState.localModelLoaded) Color(0xFFA855F7) else textDim.copy(alpha = 0.6f)
             }
-            val mtpColor = if (hasMtp) Color(0xFFFBBF24) else textDim.copy(alpha = 0.6f) // Electric gold / dim
+            val mtpColor = if (hasMtp) Color(0xFF00E5FF) else textDim.copy(alpha = 0.6f) // Active cyan / dim
+            val mtpText = if (hasMtp) "MTP ON" else "OFF"
             val taskColor = Color(0xFF818CF8) // Vibrant indigo
 
             Row(
@@ -1495,11 +1505,12 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Active API Key / Pool"
                 )
 
-                // 6. Hardware Accelerator: Lightning bolt indicating MTP status (MTP or OFF)
+                // 6. Hardware Accelerator: Lightning bolt indicating MTP status (MTP ON or OFF)
                 TelemetryMicroChip(
                     icon = Icons.Filled.Bolt,
-                    text = if (hasMtp) "MTP" else "OFF",
+                    text = mtpText,
                     accentColor = mtpColor,
+                    textColor = mtpColor,
                     contentDescription = "Hardware Accelerator"
                 )
 

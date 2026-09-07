@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -167,6 +170,9 @@ class AgentViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
+    val activePersonas: StateFlow<Set<String>> = _uiState
+        .map { it.activePersonas }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.activePersonas)
 
     // Lightweight hot signal for auto-scroll — avoids carrying scroll intent inside uiState
     // (which would trigger full recomposition on every token). Replaces streamVersion entirely.
@@ -393,12 +399,13 @@ class AgentViewModel : ViewModel() {
                 }
             }
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
+            val isExplicitStandalone = rawDraft == "STANDALONE"
             val rawLower = rawDraft.lowercase()
-            val draftIsInvalid = rawLower.contains("assistant") ||
+            val draftIsInvalid = !isExplicitStandalone && (rawLower.contains("assistant") ||
                 (rawLower.contains("bf16") && rawLower.contains("mtp-gemma-4") && !rawLower.contains("e2b")) ||
-                (rawDraft.isNotBlank() && !File(rawDraft).exists())
-            var draftPath = if (draftIsInvalid) "" else rawDraft
-            if (localPath.isNotBlank() && draftPath.isNotBlank()) {
+                (rawDraft.isNotBlank() && !File(rawDraft).exists()))
+            var draftPath = if (isExplicitStandalone) "STANDALONE" else if (draftIsInvalid) "" else rawDraft
+            if (!isExplicitStandalone && localPath.isNotBlank() && draftPath.isNotBlank()) {
                 val baseName = File(localPath).nameWithoutExtension.lowercase()
                 val draftName = File(draftPath).nameWithoutExtension.lowercase()
                 val isFamilyMatch = when {
@@ -411,7 +418,7 @@ class AgentViewModel : ViewModel() {
                     draftPath = ""
                 }
             }
-            if (draftPath.isBlank() && localPath.isNotBlank()) {
+            if (!isExplicitStandalone && draftPath.isBlank() && localPath.isNotBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(localPath, context)
                 if (matched != null) {
                     draftPath = matched.absolutePath
@@ -765,10 +772,8 @@ The file execution engine automatically parses this block and writes the file di
 
     fun isChatPersonaActive(): Boolean {
         val state = _uiState.value
-        val primary = state.activePersona.lowercase(Locale.ROOT)
-        val configPrimary = state.config.activePersona.lowercase(Locale.ROOT)
         val set = state.activePersonas.map { it.lowercase(Locale.ROOT) }
-        return primary.contains("chat") || configPrimary.contains("chat") || set.any { it.contains("chat") }
+        return set.isNotEmpty() && set.all { it.contains("chat") }
     }
 
     fun isSimpleGreeting(text: String): Boolean {
@@ -793,19 +798,30 @@ The file execution engine automatically parses this block and writes the file di
         // Pure conversational prompt for /chat mode — completely eliminates architectural reasoning loops
         if (isChatPersonaActive()) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """You are a direct, natural, and helpful conversational AI assistant in Chat Mode.
+            return """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
+
+You are a direct, natural, and helpful conversational AI assistant in Chat Mode.
 Respond naturally and conversationally.
 For simple greetings (such as "hello", "hi", "hey", "bonjour", "مرحبا", "سلام") and general conversation, provide an instant, friendly conversational reply with zero architectural planning loops, zero <think> tags, and zero tool invocations.
 Match user language natively (Moroccan Darija, Standard Arabic, English, French).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
+        val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
+        val activePersonasMarkdown = actualContext?.let { PersonaManager.getActivePersonasContent(it) }
+            ?: PersonaManager.DEFAULT_CODING_PERSONA
+
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
+            return """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
+
+CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved. For launching apps, call open_app(package_or_app_name); aliases, localized names, shell fallback, and web deep-links are resolved automatically.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
+
+$activePersonasMarkdown
+
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
 Format for calling tools:
@@ -818,7 +834,6 @@ Available tools: open_app(package_name), run_shell(command), write_file(path, co
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
         }
 
-        val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
         val currentKey = "${activePersonas.sorted().joinToString(",")}|$customPrompt"
 
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) {
@@ -828,12 +843,11 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         // 1. Distilled Epistemic Mind (hardware, memory snapshot, user preferences)
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
 
-        // 2. Runtime Context Concatenation of Active Personas (.md loaded strictly from /sdcard/Medlam-Ai/personas/)
-        val activePersonasMarkdown = actualContext?.let { PersonaManager.getActivePersonasContent(it) }
-            ?: PersonaManager.DEFAULT_CODING_PERSONA
-
-        // 3. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
+        // 2. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
+## Critical Behavioral Policy:
+${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
+
 ## Host Toolchains & Execution Guidelines:
 CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved.
@@ -923,16 +937,16 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
             when (slashCmd) {
                 "/code" -> {
-                    actualContext?.let { switchPersonaQuick("coding.md", it) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Active persona switched to coding.md (Pure Headless Synthesis)"))
+                    actualContext?.let { togglePersonaQuick("coding.md", it) }
+                    addLog(LogEntry(sender = "SYSTEM", text = "Toggled coding.md persona"))
                 }
                 "/sys" -> {
-                    actualContext?.let { switchPersonaQuick("android_controller.md", it) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Active persona switched to android_controller.md (Root & Shell Controller)"))
+                    actualContext?.let { togglePersonaQuick("android_controller.md", it) }
+                    addLog(LogEntry(sender = "SYSTEM", text = "Toggled android_controller.md persona"))
                 }
                 "/chat" -> {
-                    actualContext?.let { switchPersonaQuick("chat.md", it) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Active persona switched to chat.md (Conversational & Natural Reasoning)"))
+                    actualContext?.let { togglePersonaQuick("chat.md", it) }
+                    addLog(LogEntry(sender = "SYSTEM", text = "Toggled chat.md persona"))
                 }
                 "/rollback" -> {
                     executeRollback(actualContext)
@@ -2152,8 +2166,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         _uiState.update { it.copy(isLiveCanvasOpen = !it.isLiveCanvasOpen) }
     }
 
+    fun togglePersonaQuick(personaName: String, context: Context) {
+        togglePersona(personaName, context)
+    }
+
     fun switchPersonaQuick(personaName: String, context: Context) {
-        setActivePersonas(setOf(personaName), context)
+        togglePersona(personaName, context)
     }
 
     fun executeRollback(context: Context? = null): String {

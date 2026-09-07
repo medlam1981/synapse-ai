@@ -341,15 +341,15 @@ class GGUFModelClient {
             }
 
             // 3. Auto detect MTP draft (strictly enforce model family matching)
-            var activeDraftPath = draftModelPath
-            if (activeDraftPath.isNullOrBlank()) {
+            var activeDraftPath = if (draftModelPath == "STANDALONE") null else draftModelPath
+            if (draftModelPath != "STANDALONE" && activeDraftPath.isNullOrBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
                 if (matched != null && matched.exists()) {
                     activeDraftPath = matched.absolutePath
                 }
             }
 
-            if (!activeDraftPath.isNullOrBlank()) {
+            if (!activeDraftPath.isNullOrBlank() && activeDraftPath != "STANDALONE") {
                 val draftFile = File(activeDraftPath)
                 if (!draftFile.exists()) {
                     activeDraftPath = null
@@ -370,7 +370,7 @@ class GGUFModelClient {
                 }
             }
 
-            val hasDraft = !activeDraftPath.isNullOrBlank() && File(activeDraftPath).exists()
+            val hasDraft = !activeDraftPath.isNullOrBlank() && activeDraftPath != "STANDALONE" && File(activeDraftPath).exists()
             val trialArgs = baseArgs.toMutableList()
 
             if (hasDraft) {
@@ -415,8 +415,8 @@ class GGUFModelClient {
             var serverBecameAlive = false
             var draftFailureDetected = false
 
-            // Fail fast on draft attempts (15s max) to prevent 100% CPU spinlock
-            val maxStartupWait = if (hasDraft) 15_000L else SERVER_START_TIMEOUT_MS
+            // Standard startup timeout for dual-model weight loading; fast-exit immediately on native errors
+            val maxStartupWait = SERVER_START_TIMEOUT_MS
 
             // 4. Polling loop with native error interception
             while (System.currentTimeMillis() - startTime < maxStartupWait) {
@@ -448,7 +448,7 @@ class GGUFModelClient {
 
                 if (hasDraft && logFile.exists()) {
                     val hasLogDraftError = try {
-                        val lines = logFile.readLines().takeLast(10)
+                        val lines = logFile.readLines().takeLast(15)
                         lines.any { line ->
                             val l = line.lowercase()
                             l.contains("failed to load draft") ||
@@ -459,6 +459,9 @@ class GGUFModelClient {
                             l.contains("vocab mismatch") ||
                             l.contains("invalid draft") ||
                             l.contains("llama_model_load: error") ||
+                            l.contains("cannot load draft") ||
+                            l.contains("incompatible") ||
+                            l.contains("error: failed to load") ||
                             l.contains("abort") ||
                             l.contains("sigsegv")
                         }

@@ -644,9 +644,10 @@ fun SettingsScreenContent(
                                     .background(if (isSelected) primaryContainer else surfaceContainer)
                                     .clickable {
                                         val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
+                                        val newDraft = if (config.draftModelPath == "STANDALONE") "STANDALONE" else (matchedMtp?.absolutePath ?: "")
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
-                                            draftModelPath = matchedMtp?.absolutePath ?: "",
+                                            draftModelPath = newDraft,
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -658,9 +659,10 @@ fun SettingsScreenContent(
                                     selected = isSelected,
                                     onClick = {
                                         val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
+                                        val newDraft = if (config.draftModelPath == "STANDALONE") "STANDALONE" else (matchedMtp?.absolutePath ?: "")
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
-                                            draftModelPath = matchedMtp?.absolutePath ?: "",
+                                            draftModelPath = newDraft,
                                             preferredModelType = ModelType.GGUF
                                         )
                                         viewModel.saveConfig(context, newConfig)
@@ -716,51 +718,6 @@ fun SettingsScreenContent(
                             }
                         }
 
-                        // Dedicated Base Model mmap Details Strip
-                        if (config.localModelPath.isNotBlank()) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = surfaceContainer,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                        Text(
-                                            "Base Memory Mapping (mmap)",
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            fontSize = 11.5.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            if (config.useMmap) {
-                                                "Weights paged from disk (--mmap) • Saves RAM footprint"
-                                            } else {
-                                                "Weights loaded fully into RAM (--no-mmap) • Zero disk latency"
-                                            },
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 9.5.sp
-                                        )
-                                    }
-                                    Switch(
-                                        checked = config.useMmap,
-                                        onCheckedChange = {
-                                            val newConfig = config.copy(useMmap = it)
-                                            viewModel.saveConfig(context, newConfig)
-                                        },
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = primary,
-                                            checkedTrackColor = primaryContainer
-                                        )
-                                    )
-                                }
-                            }
-                        }
                     }
 
                     // User-Driven Companion Draft / MTP Model Selection
@@ -768,14 +725,14 @@ fun SettingsScreenContent(
                         Text("COMPANION DRAFT / MTP MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
 
                         // Option 1: Standalone Execution (No MTP)
-                        val isStandalone = config.draftModelPath.isBlank()
+                        val isStandalone = config.draftModelPath.isBlank() || config.draftModelPath == "STANDALONE"
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isStandalone) primaryContainer else surfaceContainer)
                             .clickable {
-                                val newConfig = config.copy(draftModelPath = "")
+                                val newConfig = config.copy(draftModelPath = "STANDALONE")
                                 viewModel.saveConfig(context, newConfig)
                             }
                             .padding(10.dp),
@@ -784,7 +741,7 @@ fun SettingsScreenContent(
                             RadioButton(
                                 selected = isStandalone,
                                 onClick = {
-                                    val newConfig = config.copy(draftModelPath = "")
+                                    val newConfig = config.copy(draftModelPath = "STANDALONE")
                                     viewModel.saveConfig(context, newConfig)
                                 },
                                 colors = RadioButtonDefaults.colors(selectedColor = primary)
@@ -865,53 +822,6 @@ fun SettingsScreenContent(
                                         )
                                     }
                                 }
-                            }
-                        }
-
-                        // Dedicated Draft Model mmap Detail Row Inside Companion Draft Card
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = surfaceContainer,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text(
-                                        "Draft Memory Mapping (mmap)",
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        if (config.draftModelPath.isBlank()) {
-                                            "Companion draft inactive"
-                                        } else if (config.draftUseMmap) {
-                                            "Paged from disk (--mmap) • Saves RAM footprint"
-                                        } else {
-                                            "Locked in RAM for zero-latency lookups"
-                                        },
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 9.5.sp
-                                    )
-                                }
-                                Switch(
-                                    checked = config.draftUseMmap,
-                                    enabled = config.draftModelPath.isNotBlank(),
-                                    onCheckedChange = {
-                                        val newConfig = config.copy(draftUseMmap = it)
-                                        viewModel.saveConfig(context, newConfig)
-                                    },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = primary,
-                                        checkedTrackColor = primaryContainer
-                                    )
-                                )
                             }
                         }
                     }
