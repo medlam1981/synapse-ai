@@ -214,9 +214,17 @@ class GGUFModelClient {
                     Os.setenv("KMP_BLOCKTIME", "0", true)
                     Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
                 } catch (_: Exception) {}
-                val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
-                Os.dup2(fd, OsConstants.STDOUT_FILENO)
-                Os.dup2(fd, OsConstants.STDERR_FILENO)
+
+                // Eliminate pipe buffer deadlock: Merge stderr directly into stdout at the OS level
+                try {
+                    val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
+                    Os.dup2(fd, OsConstants.STDOUT_FILENO)
+                    Os.dup2(fd, OsConstants.STDERR_FILENO)
+                    try { Os.close(fd) } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    fileLog("Stderr/stdout redirection warning: ${e.message}")
+                }
+
                 LlamaServerJNI.start(args)
             } catch (t: Throwable) {
                 fileLog("Native execution crash: ${t.message}")
@@ -318,7 +326,6 @@ class GGUFModelClient {
                 "-n", "-1",                 // Unconstrained token generation at engine level
                 "--parallel", "1",
                 "--cont-batching",
-                "--cache-prompt",           // Server-side KV prefix cache: system prompt reused across turns
                 "--no-warmup",
                 "--fit", "off",
                 "-b", effectiveBatch.toString(),
@@ -334,6 +341,7 @@ class GGUFModelClient {
                 "--port", serverPort.toString()
             )
 
+            // Memory mapping: Never pass --mlock. When mmap is disabled, load directly into RAM without system mlock
             if (useMmap) {
                 baseArgs.add("--mmap")
             } else {
@@ -375,7 +383,9 @@ class GGUFModelClient {
 
             if (hasDraft) {
                 activeDraftModelPath = activeDraftPath
-                fileLog("MTP Draft Companion candidate linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap)")
+                // NOTE: Speculative decoding graph initialization deadlocks in llama.cpp when paired with --cache-prompt.
+                // OMIT --cache-prompt entirely when MTP companion draft is active.
+                fileLog("MTP Draft Companion candidate linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap, --cache-prompt omitted for speculative graph stability)")
                 trialArgs.add("--model-draft")
                 trialArgs.add(activeDraftPath)
                 trialArgs.add("--draft")
@@ -385,9 +395,13 @@ class GGUFModelClient {
                 trialArgs.add("--threads-draft")
                 trialArgs.add(safeThreads.toString())
                 trialArgs.add("--ctx-size-draft")
-                trialArgs.add(resolvedCtx.toString())
+                // Cap draft context to lightweight window (512) to avoid double KV-cache allocation exhaustion in RAM
+                val draftCtx = minOf(resolvedCtx, 512)
+                trialArgs.add(draftCtx.toString())
             } else {
                 activeDraftModelPath = null
+                // Pass --cache-prompt ONLY when running in 'Standalone Execution (No MTP)'
+                trialArgs.add("--cache-prompt")
             }
 
             fileLog("Launch args: ${trialArgs.joinToString(" ")} (base mmap=$useMmap, draft mmap=$draftUseMmap)")
@@ -525,7 +539,12 @@ class GGUFModelClient {
         onProgress: (Float, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         activeDraftModelPath = null
-        fileLog("Launching STANDALONE Server: ${args.joinToString(" ")}")
+        val standaloneArgs = if (!args.contains("--cache-prompt")) {
+            (args.toMutableList().apply { add("--cache-prompt") }).toTypedArray()
+        } else {
+            args
+        }
+        fileLog("Launching STANDALONE Server: ${standaloneArgs.joinToString(" ")}")
         onStatus("Launching High-Speed Base Model (STANDALONE)... ⏳")
 
         try { LlamaServerJNI.stop() } catch (_: Throwable) {}
@@ -536,7 +555,7 @@ class GGUFModelClient {
 
         val fallbackReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
         val newThread = Thread {
-            val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(args, logFile) }
+            val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(standaloneArgs, logFile) }
             fallbackReturnCode.set(ret)
             fileLog("Standalone server thread returned: $ret")
         }.apply {
