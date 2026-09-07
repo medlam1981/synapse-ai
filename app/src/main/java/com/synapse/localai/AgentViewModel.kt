@@ -213,89 +213,13 @@ class AgentViewModel : ViewModel() {
     }
 
     fun resolvePackageName(target: String, pm: PackageManager?): String {
-        var clean = target.trim().removeSurrounding("\"").removeSurrounding("'").trim()
-        if (clean.contains("/")) {
-            clean = clean.substringBefore("/")
-        }
-        val lower = clean.lowercase()
-
-        val aliasMap = mapOf(
-            "chrome" to "com.android.chrome",
-            "google chrome" to "com.android.chrome",
-            "google-chrome" to "com.android.chrome",
-            "browser" to "com.android.chrome",
-            "web browser" to "com.android.chrome",
-            "youtube" to "com.google.android.youtube",
-            "yt" to "com.google.android.youtube",
-            "settings" to "com.android.settings",
-            "android settings" to "com.android.settings",
-            "camera" to "com.android.camera2",
-            "calculator" to "com.google.android.calculator",
-            "maps" to "com.google.android.apps.maps",
-            "google maps" to "com.google.android.apps.maps",
-            "photos" to "com.google.android.apps.photos",
-            "gallery" to "com.google.android.apps.photos",
-            "gmail" to "com.google.android.gm",
-            "mail" to "com.google.android.gm",
-            "email" to "com.google.android.gm",
-            "files" to "com.google.android.documentsui",
-            "file manager" to "com.google.android.documentsui",
-            "play store" to "com.android.vending",
-            "playstore" to "com.android.vending",
-            "clock" to "com.google.android.deskclock",
-            "contacts" to "com.google.android.contacts",
-            "messages" to "com.google.android.apps.messaging",
-            "sms" to "com.google.android.apps.messaging",
-            "phone" to "com.google.android.dialer",
-            "dialer" to "com.google.android.dialer"
-        )
-
-        aliasMap[lower]?.let { return it }
-
-        if (clean.contains(".")) {
-            return clean
-        }
-
-        if (pm != null) {
-            try {
-                val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                }
-                val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
-                for (ri in resolveInfos) {
-                    val label = ri.loadLabel(pm).toString().lowercase()
-                    if (label == lower || label.contains(lower)) {
-                        return ri.activityInfo.packageName
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-
-        return clean
+        return AppLauncherManager.resolvePackageName(target, pm)
     }
 
     fun launchApplication(target: String, context: Context? = null): Pair<Boolean, String> {
-        val ctx = context ?: appContext ?: MainActivity.instance ?: return false to "Context unavailable"
-        val pm = ctx.packageManager
-        val packageName = resolvePackageName(target, pm)
-
-        return try {
-            val launchIntent = pm.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            } ?: return false to "Package '$packageName' not installed or has no launch intent"
-
-            ctx.startActivity(launchIntent)
-
-            val appLabel = try {
-                val appInfo = pm.getApplicationInfo(packageName, 0)
-                pm.getApplicationLabel(appInfo).toString()
-            } catch (_: Exception) {
-                packageName
-            }
-            true to appLabel
-        } catch (e: Exception) {
-            false to (e.message ?: "Failed to start activity")
-        }
+        val ctx = context ?: appContext ?: MainActivity.instance
+        val res = AppLauncherManager.launch(target, ctx)
+        return res.success to (if (res.success) res.appLabel else (res.errorMessage ?: "Failed to launch application"))
     }
 
     private fun extractTargetFromAmStart(cmd: String): String? {
@@ -845,6 +769,7 @@ The file execution engine automatically parses this block and writes the file di
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
             return """CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
+ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved. For launching apps, call open_app(package_or_app_name); aliases, localized names, shell fallback, and web deep-links are resolved automatically.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 Always plan your reasoning inside <think>...</think> tags first before writing your final response.
 When providing code, strictly enclose it in markdown code fences (```lang).
@@ -876,9 +801,10 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
 CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
+ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
 - Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
-- App Launching: Use open_app(package_name) (e.g. com.android.chrome) to launch Android applications natively. Do NOT pipe am start through run_shell.
+- App Launching: Use open_app(package_or_app_name) (e.g. youtube, whatsapp, com.android.chrome) to launch Android applications natively. Aliases, localized names, shell fallback, and web deep-links are resolved automatically. Do NOT pipe am start through run_shell.
 - Deliver code strictly inside ```lang code fences only when programming or requested to write code.
 - To write files to device storage (/sdcard/Medlam-Ai/...), use write_file(path, content) or place `file: <path>` immediately above the code fence.
 - Conclude with a high-level summary confirmation without echoing raw code.
@@ -2008,15 +1934,9 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             actionToolUsed = true
                             val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: params["name"] ?: innerBody.removeSurrounding("\"").trim()
                             if (target.isNotBlank()) {
-                                val (success, appNameOrErr) = launchApplication(target, actualContext)
-                                val resolvedPkg = resolvePackageName(target, actualContext?.packageManager)
-                                if (success) {
-                                    summaries.add("✔ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appNameOrErr brought to front.")
-                                    addSystemLog("Native app launch: $appNameOrErr ($resolvedPkg)")
-                                } else {
-                                    summaries.add("✖ Tool(open_app: $target) ─── [FAILED]\n✖ Status: $appNameOrErr")
-                                    addSystemLog("Launch failed: $target ($appNameOrErr)")
-                                }
+                                val toolRes = ToolHandler.handleOpenApp(target, actualContext)
+                                summaries.add(toolRes.summary)
+                                addSystemLog("App launch: $target -> ${toolRes.success}")
                             }
                         }
                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
@@ -2038,12 +1958,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         } else {
                                             inFlightCalls.add(openAppHash)
                                             try {
-                                                val (success, appLabel) = launchApplication(extractedTarget, actualContext)
-                                                if (success) {
+                                                val toolRes = ToolHandler.handleOpenApp(extractedTarget, actualContext)
+                                                if (toolRes.success) {
                                                     val resolvedPkg = resolvePackageName(extractedTarget, actualContext?.packageManager)
                                                     executedCallsThisTurn.add(openAppHash)
-                                                    summaries.add("✔ Tool(open_app: $resolvedPkg) ─── [LAUNCHED]\n✔ Status: $appLabel brought to front.")
-                                                    addSystemLog("Native fast-path launch (intercepted am start): $appLabel ($resolvedPkg)")
+                                                    summaries.add(toolRes.summary)
+                                                    addSystemLog("Native fast-path launch (intercepted am start): $extractedTarget ($resolvedPkg)")
                                                 } else {
                                                     // Fallback to real shell execution if native intent fails
                                                     val (code, out) = runShellWithExitCode(rawCmd)
@@ -2076,20 +1996,17 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             val content = params["content"] ?: params["code"] ?: params["text"] ?: ""
                             if (path.isNotBlank()) {
                                 actionToolUsed = true
-                                val resolved = ToolExecutor.resolvePath(path, ToolExecutor.BASE_DIR)
-                                val f = File(resolved)
-                                f.parentFile?.let { if (!it.exists()) it.mkdirs() }
-                                f.writeText(content, java.nio.charset.StandardCharsets.UTF_8)
-                                addSystemLog("File written natively: ${f.absolutePath} (${f.length()} bytes)")
-                                summaries.add("✔ Tool(write_file: ${f.name}) ─── [SAVED]\n✔ Status: Wrote ${f.length()} bytes to ${f.absolutePath}")
+                                val toolRes = ToolHandler.handleWriteFile(path, content)
+                                summaries.add(toolRes.summary)
+                                addSystemLog("File write: $path -> ${toolRes.success}")
                             }
                         }
                         "web_search", "search", "google_search" -> {
                             val q = params["query"] ?: params["q"] ?: innerBody.removeSurrounding("\"").trim()
                             if (q.isNotBlank()) {
                                 actionToolUsed = true
-                                val searchRes = WebSearchTool.search(q)
-                                summaries.add(searchRes)
+                                val toolRes = ToolHandler.handleWebSearch(q)
+                                summaries.add(toolRes.summary)
                             }
                         }
                         "schedule_task" -> {
