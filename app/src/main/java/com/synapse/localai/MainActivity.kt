@@ -266,8 +266,7 @@ class MainActivity : ComponentActivity() {
             Log.w("MainActivity", "ModelEngineService launch note: ${e.message}")
         }
 
-        // Early App Process Initialization: Background Neural Priming & Persistent Persona KV Cache
-        NeuralPrimingManager.primeNeuralCore(applicationContext)
+        // Early App Process Permissions Initialization
 
         lifecycleScope.launch {
             try {
@@ -791,9 +790,28 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val activePersonasSet by viewModel.activePersonas.collectAsState()
+                        val isChatActive = activePersonasSet.contains("chat.md")
                         val isCodeActive = activePersonasSet.contains("coding.md")
                         val isSysActive = activePersonasSet.contains("android_controller.md")
-                        val isChatActive = activePersonasSet.contains("chat.md")
+
+                        // [/chat]
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { viewModel.togglePersonaQuick("chat.md", context) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isChatActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
+                            border = BorderStroke(1.dp, if (isChatActive) Color(0xFF00E5FF) else Color(0xFF30363D))
+                        ) {
+                            Text(
+                                text = "/chat",
+                                color = if (isChatActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (isChatActive) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
 
                         // [/code]
                         Surface(
@@ -829,25 +847,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = if (isSysActive) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-
-                        // [/chat]
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.togglePersonaQuick("chat.md", context) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isChatActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isChatActive) Color(0xFF00E5FF) else Color(0xFF30363D))
-                        ) {
-                            Text(
-                                text = "/chat",
-                                color = if (isChatActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (isChatActive) FontWeight.Bold else FontWeight.Medium,
                                 modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
                             )
                         }

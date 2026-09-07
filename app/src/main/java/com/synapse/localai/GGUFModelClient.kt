@@ -201,6 +201,30 @@ class GGUFModelClient {
         }
     }
 
+    private fun clearBridgeLogs() {
+        try {
+            Runtime.getRuntime().exec(arrayOf("logcat", "-c"))
+        } catch (_: Exception) {}
+    }
+
+    private fun checkRecentErrors(): Boolean {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "60", "-s", "LlamaBridge:V"))
+            val text = process.inputStream.bufferedReader().readText().lowercase()
+            text.contains("failed to load draft") ||
+            text.contains("key not found in model") ||
+            text.contains("failed to load model") ||
+            text.contains("error loading model") ||
+            text.contains("vocab mismatch") ||
+            text.contains("different vocabulary") ||
+            text.contains("different n_vocab") ||
+            text.contains("cannot load draft") ||
+            text.contains("llama_model_load: error")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private suspend fun launchNativeProcess(args: Array<String>, logFile: File): Int {
         return withContext(Dispatchers.IO) {
             try {
@@ -225,6 +249,7 @@ class GGUFModelClient {
                     fileLog("Stderr/stdout redirection warning: ${e.message}")
                 }
 
+                clearBridgeLogs()
                 LlamaServerJNI.start(args)
             } catch (t: Throwable) {
                 fileLog("Native execution crash: ${t.message}")
@@ -238,20 +263,47 @@ class GGUFModelClient {
         onStatus: (String) -> Unit = {},
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): Boolean = withContext(Dispatchers.IO) {
+        if (serverMutex.isLocked) {
+            onStatus("Synchronizing with inference pipeline... ⏳")
+            onProgress(0.06f, "Awaiting engine lock...")
+        }
         serverMutex.withLock {
             fileLog("startServer requested for: $resolvedPath")
 
+            val effectiveDraft = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
             val isSameInstance = globalLoadedPath == resolvedPath &&
-                globalLoadedDraftPath == (draftModelPath?.ifBlank { null }) &&
+                globalLoadedDraftPath == effectiveDraft &&
                 globalLoadedUseMmap == useMmap &&
                 globalLoadedDraftUseMmap == draftUseMmap
-            if (isSameInstance && isServerReady()) {
-                fileLog("Server already active: $resolvedPath (draft: $draftModelPath, mmap: $useMmap, draftMmap: $draftUseMmap)")
-                isLoaded = true
-                serverThread = globalServerThread
-                onProgress(1.0f, "ONLINE • 100%")
-                onStatus("Local Model Ready ✓")
-                return@withLock true
+
+            if (isSameInstance) {
+                if (isServerReady()) {
+                    fileLog("Server already active: $resolvedPath (draft: $draftModelPath, mmap: $useMmap, draftMmap: $draftUseMmap)")
+                    isLoaded = true
+                    serverThread = globalServerThread
+                    onProgress(1.0f, "ONLINE • 100%")
+                    onStatus("Local Model Ready ✓")
+                    return@withLock true
+                }
+                if (globalServerThread?.isAlive == true || isServerAlive()) {
+                    fileLog("Server is currently booting for $resolvedPath. Joining startup progress...")
+                    val waitStart = System.currentTimeMillis()
+                    while (System.currentTimeMillis() - waitStart < 40_000L) {
+                        if (isServerReady()) {
+                            fileLog("🚀 Server became ONLINE while waiting!")
+                            isLoaded = true
+                            serverThread = globalServerThread
+                            onProgress(1.0f, "ONLINE • 100%")
+                            onStatus("Neural Core Ready ✓")
+                            return@withLock true
+                        }
+                        val elapsed = (System.currentTimeMillis() - waitStart) / 1000f
+                        val p = (0.2f + elapsed / 25f).coerceIn(0.1f, 0.95f)
+                        onProgress(p, "Loading Tensors into RAM (${elapsed.toInt()}s)...")
+                        onStatus("Loading Tensors into RAM (${elapsed.toInt()}s)...")
+                        delay(SERVER_POLL_INTERVAL_MS)
+                    }
+                }
             }
 
             if (!LlamaServerJNI.load()) {
@@ -260,17 +312,17 @@ class GGUFModelClient {
                 return@withLock false
             }
 
-            // 1. Clean previous state and zombie processes
-            try { LlamaServerJNI.stop() } catch (_: Throwable) {}
-            if (globalLoadedPath != null) {
+            // 1. Clean previous state and zombie processes only if needed
+            if (globalLoadedPath != null || globalServerThread != null) {
                 onStatus("Stopping previous instance...")
+                try { LlamaServerJNI.stop() } catch (_: Throwable) {}
                 delay(400)
                 var waitCount = 0
-                while (isServerAlive() && waitCount < 10) {
+                while ((isServerAlive() || globalServerThread?.isAlive == true) && waitCount < 15) {
                     delay(200)
                     waitCount++
                 }
-                globalServerThread?.interrupt()
+                try { globalServerThread?.interrupt() } catch (_: Exception) {}
                 globalServerThread = null
                 globalLoadedPath = null
                 serverThread = null
@@ -360,6 +412,9 @@ class GGUFModelClient {
             if (!activeDraftPath.isNullOrBlank() && activeDraftPath != "STANDALONE") {
                 val draftFile = File(activeDraftPath)
                 if (!draftFile.exists()) {
+                    activeDraftPath = null
+                } else if (!ModelScanner.isGGUFSupportedDraft(draftFile)) {
+                    fileLog("⚠️ Incompatible MTP draft (${draftFile.name}) architecture is unsupported by llama-server (e.g. gemma4-assistant). Automatically falling back to STANDALONE mode.")
                     activeDraftPath = null
                 } else {
                     val draftName = draftFile.nameWithoutExtension.lowercase()
@@ -460,6 +515,12 @@ class GGUFModelClient {
                     break
                 }
 
+                if (hasDraft && (checkRecentErrors() || (!newThread.isAlive && !isServerAlive() && (System.currentTimeMillis() - startTime > 2500L)))) {
+                    fileLog("⚠️ Native draft loading error detected via logcat/thread state! Fast-failing draft and immediately falling back to STANDALONE mode.")
+                    draftFailureDetected = true
+                    break
+                }
+
                 if (hasDraft && logFile.exists()) {
                     val hasLogDraftError = try {
                         val lines = logFile.readLines().takeLast(15)
@@ -489,7 +550,7 @@ class GGUFModelClient {
                 }
 
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                val progress = (elapsedSec / 25f).coerceIn(0.08f, 0.95f)
+                val progress = (elapsedSec / 20f).coerceIn(0.08f, 0.95f)
                 val statusText = if (serverBecameAlive) {
                     "Loading tensors into RAM (${elapsedSec.toInt()}s)..."
                 } else {
@@ -568,6 +629,8 @@ class GGUFModelClient {
         globalServerThread = newThread
         globalLoadedPath = resolvedPath
         globalLoadedDraftPath = null
+        globalLoadedUseMmap = useMmap
+        globalLoadedDraftUseMmap = false
         ZramOptimizer.disableOomKiller()
 
         val startTime = System.currentTimeMillis()
@@ -626,7 +689,8 @@ class GGUFModelClient {
 
         modelPath = path
 
-        val isSameInstance = isServerReady() && globalLoadedPath == resolvedPath && globalLoadedDraftPath == (draftModelPath?.ifBlank { null })
+        val effectiveDraft = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
+        val isSameInstance = isServerReady() && globalLoadedPath == resolvedPath && globalLoadedDraftPath == effectiveDraft
         if (isSameInstance) {
             isLoaded = true
             onLoaded()

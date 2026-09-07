@@ -235,7 +235,7 @@ object ModelScanner {
 
         val candidateFiles = mtpFiles.filter { file ->
             val name = file.name.lowercase()
-            val isAssistantBlock = name.contains("assistant")
+            val isAssistantBlock = name.contains("assistant") || !isGGUFSupportedDraft(file)
             val isBf16OnlyAuxiliary = name.contains("bf16") && name.contains("mtp-gemma-4") && !name.contains("e2b")
             val matchesFamily = if (baseFamily.isNotEmpty()) name.contains(baseFamily) else true
             !isAssistantBlock && !isBf16OnlyAuxiliary && matchesFamily
@@ -258,5 +258,27 @@ object ModelScanner {
         )
 
         return scored.firstOrNull { it.score > 0 }?.file
+    }
+
+    /**
+     * Inspects the GGUF binary header (first 2KB) without loading tensor weights.
+     * Prevents loading draft models with unsupported architectures (e.g. gemma4-assistant)
+     * which trigger native server aborts.
+     */
+    fun isGGUFSupportedDraft(file: File): Boolean {
+        if (!file.exists() || file.length() < 1024) return false
+        return try {
+            val buffer = ByteArray(2048)
+            java.io.FileInputStream(file).use { it.read(buffer) }
+            val headerStr = String(buffer, Charsets.ISO_8859_1)
+            if (!headerStr.startsWith("GGUF")) return false
+            // Detect unsupported architectures that crash llama.cpp speculative decoding
+            if (headerStr.contains("gemma4-assistant") || headerStr.contains("assistant.block_count")) {
+                return false
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 }

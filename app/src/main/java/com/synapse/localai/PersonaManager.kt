@@ -34,8 +34,8 @@ object PersonaManager {
     const val PREF_ACTIVE_PERSONA = "active_persona_file"
     const val PREF_ACTIVE_PERSONAS_SET = "active_personas_set"
     const val PREF_CACHED_PERSONAS = "cached_persona_manifest"
-    const val DEFAULT_PERSONA = "coding.md"
-    val DEFAULT_PERSONAS_SET = setOf("coding.md", "android_controller.md")
+    const val DEFAULT_PERSONA = "chat.md"
+    val DEFAULT_PERSONAS_SET = setOf("chat.md")
 
     const val CRITICAL_BEHAVIORAL_POLICY = """CRITICAL BEHAVIORAL POLICY:
 - NEVER say: 'I apologize', 'I am sorry', 'Unfortunately', 'I cannot', or offer excuses.
@@ -145,7 +145,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         val names = if (files != null && files.isNotEmpty()) {
             files.map { it.name }.sorted()
         } else {
-            listOf("coding.md", "chat.md", "android_controller.md")
+            listOf("chat.md", "coding.md", "android_controller.md")
         }
 
         cachedPersonas = names
@@ -203,18 +203,18 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
      */
     fun getActivePersonasContent(context: Context): String {
         val activeSet = getActivePersonas(context)
-        if (activeSet.isEmpty()) return DEFAULT_CODING_PERSONA
+        if (activeSet.isEmpty()) return DEFAULT_CHAT_PERSONA
 
         val dir = File(PERSONAS_DIR)
         val sections = mutableListOf<String>()
 
-        // Order personas predictably: coding first, then controller, then chat, then custom alphabetical
+        // Order personas predictably: chat first, then coding, then controller, then custom alphabetical
         val sortedList = activeSet.toList().sortedWith(
             compareBy<String> { 
                 when (it.lowercase()) {
-                    "coding.md" -> 0
-                    "android_controller.md" -> 1
-                    "chat.md" -> 2
+                    "chat.md" -> 0
+                    "coding.md" -> 1
+                    "android_controller.md" -> 2
                     else -> 3
                 }
             }.thenBy { it }
@@ -241,7 +241,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         return if (sections.isNotEmpty()) {
             sections.joinToString("\n\n---\n\n")
         } else {
-            DEFAULT_CODING_PERSONA
+            DEFAULT_CHAT_PERSONA
         }
     }
 

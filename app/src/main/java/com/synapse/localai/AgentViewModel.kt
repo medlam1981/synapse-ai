@@ -403,7 +403,7 @@ class AgentViewModel : ViewModel() {
             val rawLower = rawDraft.lowercase()
             val draftIsInvalid = !isExplicitStandalone && (rawLower.contains("assistant") ||
                 (rawLower.contains("bf16") && rawLower.contains("mtp-gemma-4") && !rawLower.contains("e2b")) ||
-                (rawDraft.isNotBlank() && !File(rawDraft).exists()))
+                (rawDraft.isNotBlank() && (!File(rawDraft).exists() || !ModelScanner.isGGUFSupportedDraft(File(rawDraft)))))
             var draftPath = if (isExplicitStandalone) "STANDALONE" else if (draftIsInvalid) "" else rawDraft
             if (!isExplicitStandalone && localPath.isNotBlank() && draftPath.isNotBlank()) {
                 val baseName = File(localPath).nameWithoutExtension.lowercase()
@@ -414,14 +414,16 @@ class AgentViewModel : ViewModel() {
                     baseName.contains("llama") && draftName.contains("llama") -> true
                     else -> false
                 }
-                if (!isFamilyMatch) {
+                if (!isFamilyMatch || !ModelScanner.isGGUFSupportedDraft(File(draftPath))) {
                     draftPath = ""
                 }
             }
             if (!isExplicitStandalone && draftPath.isBlank() && localPath.isNotBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(localPath, context)
-                if (matched != null) {
+                if (matched != null && ModelScanner.isGGUFSupportedDraft(matched)) {
                     draftPath = matched.absolutePath
+                } else {
+                    draftPath = "STANDALONE"
                 }
             }
             val gpuLayers = prefs.getInt("gpu_layers", 0)
@@ -578,13 +580,17 @@ class AgentViewModel : ViewModel() {
 
     private var modelLoadJob: Job? = null
     @Volatile private var isModelLoadingInProgress = false
+    @Volatile private var currentLoadingPath: String? = null
 
     suspend fun triggerModelLoad(context: Context, path: String) {
+        if (isModelLoadingInProgress && currentLoadingPath == path) {
+            Log.i(TAG, "Model load already in progress for $path, ignoring duplicate trigger")
+            return
+        }
+        currentLoadingPath = path
         modelLoadJob?.cancel()
-        isModelLoadingInProgress = false
 
         modelLoadJob = viewModelScope.launch {
-            if (isModelLoadingInProgress) return@launch
             isModelLoadingInProgress = true
             try {
                 val type = detectModelType(path)
@@ -624,6 +630,7 @@ class AgentViewModel : ViewModel() {
                             },
                             onLoaded = {
                                 isModelLoadingInProgress = false
+                                currentLoadingPath = null
                                 if (client.isLoaded) {
                                     _uiState.update { it.copy(
                                         localModelLoaded = true, 
@@ -657,7 +664,12 @@ class AgentViewModel : ViewModel() {
                             }
                         )
                     } catch (t: Throwable) {
+                        if (t is kotlinx.coroutines.CancellationException) {
+                            Log.i(TAG, "Model load job cancelled for $path")
+                            return@launch
+                        }
                         isModelLoadingInProgress = false
+                        currentLoadingPath = null
                         Log.e(TAG, "GGUF load failed", t)
                         addLog(LogEntry(sender = "SYSTEM", text = "Load Error: ${t.message}", isError = true))
                         _uiState.update { it.copy(
@@ -669,8 +681,18 @@ class AgentViewModel : ViewModel() {
                         ) }
                     }
                 }
-            } finally {
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) {
+                    return@launch
+                }
                 isModelLoadingInProgress = false
+                currentLoadingPath = null
+                Log.e(TAG, "Trigger model load error", t)
+            } finally {
+                if (coroutineContext[Job]?.isCancelled == true) {
+                    isModelLoadingInProgress = false
+                    currentLoadingPath = null
+                }
             }
         }
     }

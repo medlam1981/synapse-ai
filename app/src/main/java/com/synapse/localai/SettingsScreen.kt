@@ -755,13 +755,14 @@ fun SettingsScreenContent(
 
                         // Option 2: Discovered MTP models from storage
                         mtpModels.forEach { mtpFile ->
-                            val isMtpSelected = config.draftModelPath == mtpFile.absolutePath
+                            val isSupported = ModelScanner.isGGUFSupportedDraft(mtpFile)
+                            val isMtpSelected = isSupported && config.draftModelPath == mtpFile.absolutePath
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (isMtpSelected) primaryContainer else surfaceContainer)
-                                    .clickable {
+                                    .clickable(enabled = isSupported) {
                                         val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
                                         viewModel.saveConfig(context, newConfig)
                                     }
@@ -770,17 +771,29 @@ fun SettingsScreenContent(
                             ) {
                                 RadioButton(
                                     selected = isMtpSelected,
+                                    enabled = isSupported,
                                     onClick = {
-                                        val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
-                                        viewModel.saveConfig(context, newConfig)
+                                        if (isSupported) {
+                                            val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
+                                            viewModel.saveConfig(context, newConfig)
+                                        }
                                     },
                                     colors = RadioButtonDefaults.colors(selectedColor = primary)
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(mtpFile.name, color = if (isMtpSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     Text(
-                                        formatSize(mtpFile.length()) + " • " + (if (isMtpSelected) (if (config.draftUseMmap) "mmap (disk)" else "locked in RAM") + " • " else "") + mtpFile.parent,
+                                        if (isSupported) mtpFile.name else "${mtpFile.name} (Unsupported)",
+                                        color = if (!isSupported) MaterialTheme.colorScheme.error else if (isMtpSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        if (isSupported) {
+                                            formatSize(mtpFile.length()) + " • " + (if (isMtpSelected) (if (config.draftUseMmap) "mmap (disk)" else "locked in RAM") + " • " else "") + mtpFile.parent
+                                        } else {
+                                            "Incompatible architecture (auto-disables MTP)"
+                                        },
                                         color = if (isMtpSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 10.sp
                                     )
