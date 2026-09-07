@@ -66,7 +66,7 @@ object NeuralPrimingManager {
                     contextLength = prefs.getInt("context_length", 8192)
                     threadCount = prefs.getInt("thread_count", 4)
                     maxTokens = -1
-                    temperature = prefs.getFloat("temperature", 0.7f)
+                    temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it }
                     draftModelPath = prefs.getString("draft_model_path", null)?.ifBlank { null }
                     gpuLayers = prefs.getInt("gpu_layers", 0)
                     useMmap = prefs.getBoolean("use_mmap", true)

@@ -79,7 +79,12 @@ class GGUFModelClient {
     var contextLength: Int = 8192
     var threadCount: Int = 4
     var maxTokens: Int = -1
-    var temperature: Float = 0.7f
+    var temperature: Float = 0.5f
+    var topP: Float = 0.90f
+    var repeatPenalty: Float = 1.18f
+    var repeatLastN: Int = 128
+    var frequencyPenalty: Float = 0.25f
+    var presencePenalty: Float = 0.15f
     var draftModelPath: String? = null
     var activeDraftModelPath: String? = null
     var gpuLayers: Int = 0
@@ -620,6 +625,23 @@ class GGUFModelClient {
         generateStreamWithHistory(history, systemPrompt).collect { emit(it) }
     }.flowOn(Dispatchers.IO)
 
+    private fun isTrivialLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.length < 3) return true
+        val syntaxChars = setOf(
+            '{', '}', '[', ']', '(', ')', ';', ',', ':', '"', '\'', '`',
+            '<', '>', '/', '\\', '|', '-', '=', '*', '+', '~', '!', '?',
+            '.', '_', ' ', '\t', '\r', '\n'
+        )
+        if (trimmed.all { it in syntaxChars }) return true
+
+        val trivialKeywords = setOf(
+            "break;", "continue;", "return;", "return", "pass", "...",
+            "```", "```json", "```javascript", "```python", "```html", "```kotlin", "```xml", "```java"
+        )
+        return trimmed.lowercase() in trivialKeywords
+    }
+
     fun generateStreamWithHistory(
         history: List<Pair<String, String>>,
         systemPrompt: String = "",
@@ -665,11 +687,21 @@ class GGUFModelClient {
             .put("<start_of_turn>user")
 
         val targetMaxTokens = if (maxTokens > 0) maxTokens else -1
+        val targetTemp = if (temperature > 0f) temperature else 0.5f
+        val targetTopP = if (topP > 0f) topP else 0.90f
+        val targetRepeatPenalty = if (repeatPenalty > 0f) repeatPenalty else 1.18f
+        val targetRepeatLastN = if (repeatLastN > 0) repeatLastN else 128
+
         val body = JSONObject()
             .put("model", "local")
             .put("messages", messages)
-            .put("temperature", if (temperature > 0f) temperature.toDouble() else 0.7)
-            .put("top_p", 0.9)
+            .put("temperature", targetTemp.toDouble())
+            .put("top_p", targetTopP.toDouble())
+            .put("repeat_penalty", targetRepeatPenalty.toDouble())
+            .put("repetition_penalty", targetRepeatPenalty.toDouble())
+            .put("repeat_last_n", targetRepeatLastN)
+            .put("frequency_penalty", frequencyPenalty.toDouble())
+            .put("presence_penalty", presencePenalty.toDouble())
             .put("stream", true)
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)
@@ -729,6 +761,12 @@ class GGUFModelClient {
         lastFinishReason = null
         lastTokenCount = 0
 
+        // Hard Repetition Safeguard: stream interceptor tracking repeated lines
+        val lineBuffer = StringBuilder()
+        var lastEmittedLine = ""
+        var consecutiveLineRepeats = 0
+        var repetitionLimitExceeded = false
+
         try {
             while (coroutineContext.isActive && reader.readLine().also { line = it } != null) {
                 val l = line?.trim() ?: continue
@@ -761,6 +799,7 @@ class GGUFModelClient {
                         if (!inReasoningMode) {
                             inReasoningMode = true
                             emit("<think>")
+                            lineBuffer.clear()
                         }
                         if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
                         tokenCount++
@@ -775,6 +814,7 @@ class GGUFModelClient {
                         if (inReasoningMode) {
                             inReasoningMode = false
                             emit("</think>")
+                            lineBuffer.clear()
                         }
                         if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
                         tokenCount++
@@ -782,7 +822,47 @@ class GGUFModelClient {
                         if (elapsedSec > 0.1f) {
                             onSpeedUpdate?.invoke(tokenCount / elapsedSec)
                         }
-                        emit(content)
+
+                        // Hard Repetition Safeguard: inspect content stream for infinite repetition loops
+                        var emittedLength = 0
+                        for (i in content.indices) {
+                            val ch = content[i]
+                            if (ch == '\n') {
+                                val completedLine = lineBuffer.toString().trim()
+                                lineBuffer.clear()
+                                if (completedLine.isNotEmpty() && !isTrivialLine(completedLine)) {
+                                    if (completedLine == lastEmittedLine) {
+                                        consecutiveLineRepeats++
+                                        if (consecutiveLineRepeats > 3) {
+                                            Log.w(TAG, "Hard repetition safeguard triggered! Repeated line > 3 times: \"$completedLine\"")
+                                            fileLog("[SAFEGUARD] Terminated loop: line repeated > 3 times: \"$completedLine\"")
+                                            lastFinishReason = "STOP"
+                                            repetitionLimitExceeded = true
+                                            val remainingChunk = content.substring(emittedLength, i + 1)
+                                            if (remainingChunk.isNotEmpty()) {
+                                                emit(remainingChunk)
+                                            }
+                                            emittedLength = i + 1
+                                            break
+                                        }
+                                    } else {
+                                        lastEmittedLine = completedLine
+                                        consecutiveLineRepeats = 1
+                                    }
+                                }
+                            } else {
+                                lineBuffer.append(ch)
+                            }
+                        }
+
+                        if (repetitionLimitExceeded) {
+                            break
+                        }
+
+                        if (emittedLength < content.length) {
+                            val chunkToEmit = if (emittedLength > 0) content.substring(emittedLength) else content
+                            emit(chunkToEmit)
+                        }
                     }
                 } catch (_: Exception) {}
             }
