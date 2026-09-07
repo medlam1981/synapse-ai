@@ -413,23 +413,6 @@ class GGUFModelClient {
                 val draftFile = File(activeDraftPath)
                 if (!draftFile.exists()) {
                     activeDraftPath = null
-                } else if (!ModelScanner.isGGUFSupportedDraft(draftFile)) {
-                    fileLog("⚠️ Incompatible MTP draft (${draftFile.name}) architecture is unsupported by llama-server (e.g. gemma4-assistant). Automatically falling back to STANDALONE mode.")
-                    activeDraftPath = null
-                } else {
-                    val draftName = draftFile.nameWithoutExtension.lowercase()
-                    val isFamilyMatch = when {
-                        baseName.contains("gemma") && draftName.contains("gemma") -> true
-                        baseName.contains("qwen") && draftName.contains("qwen") -> true
-                        baseName.contains("llama") && draftName.contains("llama") -> true
-                        baseName.contains("phi") && draftName.contains("phi") -> true
-                        baseName.contains("deepseek") && draftName.contains("deepseek") -> true
-                        else -> false
-                    }
-                    if (!isFamilyMatch) {
-                        fileLog("⚠️ Incompatible MTP draft ($draftName) does not match base model ($baseName). Discarding draft and running in STANDALONE mode.")
-                        activeDraftPath = null
-                    }
                 }
             }
 

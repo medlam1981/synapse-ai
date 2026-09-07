@@ -400,30 +400,16 @@ class AgentViewModel : ViewModel() {
             }
             val rawDraft = prefs.getString("draft_model_path", "") ?: ""
             val isExplicitStandalone = rawDraft == "STANDALONE"
-            val rawLower = rawDraft.lowercase()
-            val draftIsInvalid = !isExplicitStandalone && (rawLower.contains("assistant") ||
-                (rawLower.contains("bf16") && rawLower.contains("mtp-gemma-4") && !rawLower.contains("e2b")) ||
-                (rawDraft.isNotBlank() && (!File(rawDraft).exists() || !ModelScanner.isGGUFSupportedDraft(File(rawDraft)))))
-            var draftPath = if (isExplicitStandalone) "STANDALONE" else if (draftIsInvalid) "" else rawDraft
-            if (!isExplicitStandalone && localPath.isNotBlank() && draftPath.isNotBlank()) {
-                val baseName = File(localPath).nameWithoutExtension.lowercase()
-                val draftName = File(draftPath).nameWithoutExtension.lowercase()
-                val isFamilyMatch = when {
-                    baseName.contains("gemma") && draftName.contains("gemma") -> true
-                    baseName.contains("qwen") && draftName.contains("qwen") -> true
-                    baseName.contains("llama") && draftName.contains("llama") -> true
-                    else -> false
-                }
-                if (!isFamilyMatch || !ModelScanner.isGGUFSupportedDraft(File(draftPath))) {
-                    draftPath = ""
-                }
-            }
-            if (!isExplicitStandalone && draftPath.isBlank() && localPath.isNotBlank()) {
-                val matched = ModelScanner.findMatchingMtpModel(localPath, context)
-                if (matched != null && ModelScanner.isGGUFSupportedDraft(matched)) {
-                    draftPath = matched.absolutePath
-                } else {
-                    draftPath = "STANDALONE"
+            val draftPath = when {
+                isExplicitStandalone -> "STANDALONE"
+                rawDraft.isNotBlank() && File(rawDraft).exists() -> rawDraft
+                else -> {
+                    if (localPath.isNotBlank()) {
+                        val matched = ModelScanner.findMatchingMtpModel(localPath, context)
+                        matched?.absolutePath ?: "STANDALONE"
+                    } else {
+                        "STANDALONE"
+                    }
                 }
             }
             val gpuLayers = prefs.getInt("gpu_layers", 0)
