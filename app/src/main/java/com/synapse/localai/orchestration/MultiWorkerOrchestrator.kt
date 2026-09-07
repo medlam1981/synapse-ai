@@ -20,9 +20,10 @@ import java.util.concurrent.atomic.AtomicInteger
 class MultiWorkerOrchestrator(
     private val sessionId: String,
     private val isCloudMode: Boolean,
-    private val modelInvoker: suspend (systemPrompt: String, userPrompt: String) -> String,
+    private val modelInvoker: suspend (systemPrompt: String, userPrompt: String, onChunk: ((String) -> Unit)?) -> String,
     private val onTelemetryUpdate: (activeTaskCount: Int) -> Unit,
     private val onTerminalLogUpdate: (cliText: String) -> Unit,
+    private val onStatusUpdate: ((status: String) -> Unit)? = null,
     private val shellExecutor: suspend (command: String) -> String = { "" }
 ) {
 
@@ -193,8 +194,19 @@ CRITICAL RULES:
         destinationDir: String = DEFAULT_PRODUCTION_DIR
     ): String = withContext(Dispatchers.IO) {
         val terminalBuffer = StringBuilder()
+        var lastTerminalUpdateTime = 0L
+
+        fun updateTerminal(throttleMs: Long = 50L) {
+            val now = System.currentTimeMillis()
+            if (now - lastTerminalUpdateTime >= throttleMs) {
+                lastTerminalUpdateTime = now
+                onTerminalLogUpdate(terminalBuffer.toString().trimEnd())
+            }
+        }
+
         fun appendCli(line: String) {
             terminalBuffer.append(line).append("\n")
+            lastTerminalUpdateTime = System.currentTimeMillis()
             onTerminalLogUpdate(terminalBuffer.toString().trimEnd())
         }
 
@@ -215,30 +227,66 @@ CRITICAL RULES:
         onTelemetryUpdate(initialTaskCount)
 
         appendCli("> $userPrompt\n")
-        appendCli("Orchestrator: Decomposed intent into $initialTaskCount parallel tasks [TSK $initialTaskCount]")
+        appendCli("Orchestrator: Decomposed intent into $initialTaskCount parallel tasks [TSK $initialTaskCount]\n")
 
-        // 2. Concurrency & Worker Dispatch
+        // 2. Concurrency & Worker Dispatch with Real-Time Code Streaming
         val workerResults = mutableMapOf<String, WorkerExecutionResult>()
 
-        val workerJobs = subTasks.map { task ->
-            async(Dispatchers.IO) {
-                val workerResult = executeWorker(task)
-                val remaining = activeTaskCounter.decrementAndGet()
-                onTelemetryUpdate(remaining.coerceAtLeast(0))
+        for ((workerIndex, task) in subTasks.withIndex()) {
+            val workerNum = workerIndex + 1
+            val totalWorkers = subTasks.size
+            val defaultTarget = task.targetFileNames.firstOrNull() ?: "output.txt"
+            val fullTarget = "$destinationDir/$defaultTarget"
 
-                val statusWord = if (workerResult.success) "Complete" else "Failed"
-                appendCli("  ├─ [${task.workerId}] ${task.taskDescription} ($statusWord)")
-                workerResult
-            }
-        }
+            onStatusUpdate?.invoke("Synthesizing $fullTarget [Worker $workerNum/$totalWorkers]...")
+            appendCli("  ├─ [${task.workerId}] ${task.taskDescription} (Running...)")
 
-        val completedResults = workerJobs.awaitAll()
-        completedResults.forEach { res ->
-            workerResults[res.workerId] = res
-            if (res.success && res.generatedFiles.isNotEmpty()) {
-                stagingManager.stageWorkerOutputs(res.workerId, res.generatedFiles)
+            val streamStartOffset = terminalBuffer.length
+            val liveWorkerBuffer = StringBuilder()
+
+            val workerResult = executeWorker(
+                task = task,
+                onChunk = { chunk ->
+                    liveWorkerBuffer.append(chunk)
+                    val formatted = formatWorkerOutputForDisplay(
+                        rawText = liveWorkerBuffer.toString(),
+                        destinationDir = destinationDir,
+                        task = task,
+                        workerNum = workerNum,
+                        totalWorkers = totalWorkers,
+                        isFinal = false
+                    )
+                    terminalBuffer.setLength(streamStartOffset)
+                    terminalBuffer.append(formatted)
+                    updateTerminal(50L)
+                }
+            )
+
+            // Finalize this worker's code frame in terminalBuffer
+            terminalBuffer.setLength(streamStartOffset)
+            val finalOutput = if (liveWorkerBuffer.isNotBlank()) liveWorkerBuffer.toString() else (workerResult.executionLog)
+            val finalFormatted = formatWorkerOutputForDisplay(
+                rawText = finalOutput,
+                destinationDir = destinationDir,
+                task = task,
+                workerNum = workerNum,
+                totalWorkers = totalWorkers,
+                isFinal = true
+            )
+            terminalBuffer.append(finalFormatted)
+            terminalBuffer.append("\n")
+
+            val statusWord = if (workerResult.success) "Complete" else "Failed"
+            appendCli("  ├─ [${task.workerId}] ${task.taskDescription} ($statusWord)")
+
+            val remaining = activeTaskCounter.decrementAndGet()
+            onTelemetryUpdate(remaining.coerceAtLeast(0))
+
+            workerResults[task.workerId] = workerResult
+            if (workerResult.success && workerResult.generatedFiles.isNotEmpty()) {
+                stagingManager.stageWorkerOutputs(workerResult.workerId, workerResult.generatedFiles)
             } else {
-                stagingManager.purgeWorkerStaging(res.workerId)
+                stagingManager.purgeWorkerStaging(workerResult.workerId)
             }
         }
 
@@ -317,11 +365,15 @@ CRITICAL RULES:
     /**
      * Executes an individual worker pass, respecting Cloud concurrent vs Local sequentialized GGUF modes.
      */
-    private suspend fun executeWorker(task: WorkerSubTask): WorkerExecutionResult {
+    private suspend fun executeWorker(
+        task: WorkerSubTask,
+        onChunk: ((String) -> Unit)? = null
+    ): WorkerExecutionResult {
         if (task.isShellTask && task.shellCommand != null) {
             // Environment & Dependencies via Shell MCP
             return try {
                 val result = shellExecutor(task.shellCommand)
+                onChunk?.invoke(result)
                 WorkerExecutionResult(
                     workerId = task.workerId,
                     role = task.role,
@@ -343,7 +395,8 @@ CRITICAL RULES:
         try {
             val rawOutput = runLlmPass(
                 systemPrompt = "You are ${task.workerId} (${task.role.displayName}). Output ONLY pure file code without XML tool tags.",
-                userPrompt = task.prompt
+                userPrompt = task.prompt,
+                onChunk = onChunk
             )
 
             if (rawOutput.isBlank()) {
@@ -381,14 +434,109 @@ CRITICAL RULES:
      * - Gemini Cloud Mode: True concurrent execution.
      * - Local GGUF Mode: Sequentialized execution via Mutex to prevent CPU starvation.
      */
-    private suspend fun runLlmPass(systemPrompt: String, userPrompt: String): String {
+    private suspend fun runLlmPass(
+        systemPrompt: String,
+        userPrompt: String,
+        onChunk: ((String) -> Unit)? = null
+    ): String {
         return if (isCloudMode) {
-            modelInvoker(systemPrompt, userPrompt)
+            modelInvoker(systemPrompt, userPrompt, onChunk)
         } else {
             ggufExecutionMutex.withLock {
-                modelInvoker(systemPrompt, userPrompt)
+                modelInvoker(systemPrompt, userPrompt, onChunk)
             }
         }
+    }
+
+    /**
+     * Formats streaming or completed worker code chunks into visual expanding code frames.
+     */
+    private fun formatWorkerOutputForDisplay(
+        rawText: String,
+        destinationDir: String,
+        task: WorkerSubTask,
+        workerNum: Int,
+        totalWorkers: Int,
+        isFinal: Boolean = false
+    ): String {
+        if (rawText.isBlank()) return ""
+
+        // Case 1: Multi-file output marked by ===FILE: filename===
+        if (rawText.contains("===FILE:")) {
+            val sb = StringBuilder()
+            val matches = Regex("""===FILE:\s*([^\n=]+)===""").findAll(rawText).toList()
+            val parts = rawText.split(Regex("""===FILE:\s*([^\n=]+)==="""))
+
+            if (matches.isNotEmpty()) {
+                for (i in matches.indices) {
+                    val rawName = matches[i].groupValues[1].trim()
+                    val fileName = File(rawName).name
+                    val fullPath = "$destinationDir/$fileName"
+                    val codeContent = if (i + 1 < parts.size) parts[i + 1].trimStart('\r', '\n') else ""
+                    val lang = when {
+                        fileName.endsWith(".html", ignoreCase = true) || fileName.endsWith(".htm", ignoreCase = true) -> "html"
+                        fileName.endsWith(".css", ignoreCase = true) -> "css"
+                        fileName.endsWith(".js", ignoreCase = true) || fileName.endsWith(".jsx", ignoreCase = true) -> "javascript"
+                        fileName.endsWith(".ts", ignoreCase = true) || fileName.endsWith(".tsx", ignoreCase = true) -> "typescript"
+                        fileName.endsWith(".py", ignoreCase = true) -> "python"
+                        fileName.endsWith(".sh", ignoreCase = true) || fileName.endsWith(".bash", ignoreCase = true) -> "bash"
+                        fileName.endsWith(".json", ignoreCase = true) -> "json"
+                        else -> "plaintext"
+                    }
+
+                    if (i > 0) sb.append("\n\n")
+                    sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing $fullPath] ─────────┐\n")
+                    sb.append("```$lang filepath=\"$fullPath\"\n")
+                    sb.append(codeContent)
+                    val isLast = (i == matches.size - 1)
+                    if (isFinal || !isLast) {
+                        if (!codeContent.endsWith("\n")) sb.append("\n")
+                        sb.append("```\n")
+                        sb.append("└────────────────────────────────────────────────────────────┘")
+                    }
+                }
+                return sb.toString()
+            }
+        }
+
+        // Case 2: Output already contains markdown code fences
+        if (rawText.contains("```")) {
+            val defaultFile = task.targetFileNames.firstOrNull() ?: "output.txt"
+            val fullPath = "$destinationDir/$defaultFile"
+            val sb = StringBuilder()
+            sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing $fullPath] ─────────┐\n")
+            sb.append(rawText.trim())
+            if (isFinal) {
+                if (!rawText.trimEnd().endsWith("```")) sb.append("\n```")
+                sb.append("\n└────────────────────────────────────────────────────────────┘")
+            }
+            return sb.toString()
+        }
+
+        // Case 3: Raw code stream (e.g. Worker 1 JavaScript or Python code)
+        val defaultFile = task.targetFileNames.firstOrNull() ?: "output.txt"
+        val fullPath = "$destinationDir/$defaultFile"
+        val lang = when {
+            defaultFile.endsWith(".html", ignoreCase = true) || defaultFile.endsWith(".htm", ignoreCase = true) -> "html"
+            defaultFile.endsWith(".css", ignoreCase = true) -> "css"
+            defaultFile.endsWith(".js", ignoreCase = true) || defaultFile.endsWith(".jsx", ignoreCase = true) -> "javascript"
+            defaultFile.endsWith(".ts", ignoreCase = true) || defaultFile.endsWith(".tsx", ignoreCase = true) -> "typescript"
+            defaultFile.endsWith(".py", ignoreCase = true) -> "python"
+            defaultFile.endsWith(".sh", ignoreCase = true) || defaultFile.endsWith(".bash", ignoreCase = true) -> "bash"
+            defaultFile.endsWith(".json", ignoreCase = true) -> "json"
+            else -> "plaintext"
+        }
+
+        val sb = StringBuilder()
+        sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing $fullPath] ─────────┐\n")
+        sb.append("```$lang filepath=\"$fullPath\"\n")
+        sb.append(rawText)
+        if (isFinal) {
+            if (!rawText.endsWith("\n")) sb.append("\n")
+            sb.append("```\n")
+            sb.append("└────────────────────────────────────────────────────────────┘")
+        }
+        return sb.toString()
     }
 
     /**

@@ -231,13 +231,19 @@ object StreamDemultiplexer {
                 break
             }
 
-            val rawLang = afterOpening.substring(0, newlineIdx).trim().lowercase()
+            val headerLine = afterOpening.substring(0, newlineIdx).trim()
+            val pathFromHeader = Regex("""(?:filepath|path)=["']?([^"'\s]+)["']?""", RegexOption.IGNORE_CASE)
+                .find(headerLine)?.groupValues?.get(1)
+            val rawLang = headerLine.substringBefore(" ").trim().lowercase()
             val codeStartIdx = fenceIdx + 3 + newlineIdx + 1
 
             // Strict Anti-HTML Guessing:
             // Do NOT assign HTML unless explicitly declared as "html" or "htm"
             val lang = when {
                 rawLang == "html" || rawLang == "htm" -> "html"
+                rawLang == "js" || rawLang == "javascript" -> "javascript"
+                rawLang == "css" -> "css"
+                rawLang == "py" || rawLang == "python" -> "python"
                 rawLang.isBlank() || rawLang == "code" -> {
                     val preview = textWithoutTools.substring(codeStartIdx).take(60).trim()
                     if (preview.startsWith("$") || preview.startsWith("#!/") ||
@@ -247,7 +253,7 @@ object StreamDemultiplexer {
                 else -> rawLang
             }
 
-            val targetPath = pendingFilePathFromProse
+            val targetPath = pathFromHeader ?: pendingFilePathFromProse
 
             val isHtml = lang == "html" || targetPath?.endsWith(".html", ignoreCase = true) == true
 

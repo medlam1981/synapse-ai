@@ -39,6 +39,8 @@ class GGUFModelClient {
         @Volatile private var globalServerThread: Thread? = null
         @Volatile private var globalLoadedPath: String? = null
         @Volatile private var globalLoadedDraftPath: String? = null
+        @Volatile private var globalLoadedUseMmap: Boolean? = null
+        @Volatile private var globalLoadedDraftUseMmap: Boolean? = null
         private val serverMutex = Mutex()
 
         fun stopGlobalServer() {
@@ -52,6 +54,8 @@ class GGUFModelClient {
             globalServerThread = null
             globalLoadedPath = null
             globalLoadedDraftPath = null
+            globalLoadedUseMmap = null
+            globalLoadedDraftUseMmap = null
             try { Thread.sleep(300) } catch (_: Exception) {}
         }
 
@@ -80,6 +84,7 @@ class GGUFModelClient {
     var activeDraftModelPath: String? = null
     var gpuLayers: Int = 0
     var useMmap: Boolean = true
+    var draftUseMmap: Boolean = true
 
     private val serverUrl: String
         get() = "http://127.0.0.1:$serverPort"
@@ -216,9 +221,12 @@ class GGUFModelClient {
         serverMutex.withLock {
             fileLog("startServer requested for: $resolvedPath")
 
-            val isSameInstance = globalLoadedPath == resolvedPath && globalLoadedDraftPath == (draftModelPath?.ifBlank { null })
+            val isSameInstance = globalLoadedPath == resolvedPath &&
+                globalLoadedDraftPath == (draftModelPath?.ifBlank { null }) &&
+                globalLoadedUseMmap == useMmap &&
+                globalLoadedDraftUseMmap == draftUseMmap
             if (isSameInstance && isServerReady()) {
-                fileLog("Server already active: $resolvedPath (draft: $draftModelPath)")
+                fileLog("Server already active: $resolvedPath (draft: $draftModelPath, mmap: $useMmap, draftMmap: $draftUseMmap)")
                 isLoaded = true
                 serverThread = globalServerThread
                 onProgress(1.0f, "ONLINE • 100%")
@@ -261,48 +269,50 @@ class GGUFModelClient {
             if (!logDir.exists()) logDir.mkdirs()
             val logFile = File(logDir, "native_log.txt")
             try { logFile.delete() } catch (_: Exception) {}
-
-            // 2. Hardware-Matched Resource Allocation (strictly physical performance cores for generation, all cores for prefill)
+            // 2. Model Architecture Detection (for attention / KV-cache compatibility)
             val hw = appContext?.let { DeviceProfile.detect(it) }
-            val optimalThreads = if (hw != null) DeviceProfile.optimalThreads(hw) else (if (threadCount in 2..4) threadCount else 4)
-            val optimalBatchThreads = if (hw != null) DeviceProfile.optimalBatchThreads(hw) else (if (threadCount > 0) threadCount else 8)
-            val optimalBatch = if (hw != null) DeviceProfile.optimalBatch(hw) else 256
-            val optimalUbatch = if (hw != null) DeviceProfile.optimalUbatch(hw) else 128
-
             val modelFile = File(resolvedPath)
-            val modelSizeMb = if (modelFile.exists()) modelFile.length() / (1024 * 1024) else 0L
-            val isLargeModel = modelSizeMb > 2500L
             val baseName = modelFile.nameWithoutExtension.lowercase()
             val isQwen = baseName.contains("qwen")
 
-            // Fast Attention & KV Cache selection
-            // For Qwen (hybrid SSM architecture with linear attention layers) or devices with ample RAM,
-            // enforce standard f16 KV cache to prevent graph tensor quantization assertion failures.
-            val kvCacheType = if (isQwen || (hw != null && hw.totalRamMb >= 6000L && !isLargeModel)) "f16" else "q8_0"
+            // KV cache type: Qwen hybrid-SSM and high-RAM devices use f16 to avoid quantization
+            // assertion failures on non-MHA attention layers.
+            val kvCacheType = if (isQwen || (hw != null && hw.totalRamMb >= 6000L)) "f16" else "q8_0"
 
-            // Flash Attention: Qwen 3.5 architecture incorporates linear recurrent attention (SSM).
-            // Forcing flash-attn causes FA graph check assertion crashes on non-MHA layers.
-            // Disable flash-attn for Qwen, while keeping it enabled for standard transformer architectures.
+            // Flash Attention: Qwen incorporates linear recurrent attention (SSM) layers.
+            // Forcing flash-attn on these causes FA graph assertion crashes — disable for Qwen only.
             val flashAttnArg = if (isQwen) "off" else "on"
 
-            // Balanced generation horizon: 4096 context for fast CPU prefill and ample reasoning headroom
-            val resolvedCtx = if (contextLength in 2048..4096) contextLength else 4096
-            val effectiveBatch = if (isLargeModel) minOf(optimalBatch, 128) else optimalBatch
-            val effectiveUbatch = if (isLargeModel) minOf(optimalUbatch, 64) else optimalUbatch
-            val effectiveGpuLayers = 0 // CPU-only native runtime: libllama.so links to libggml-cpu.so without GPU backend
+            // ── Thermal Guardrails ─────────────────────────────────────────────────────
+            // Hard-cap threads to 4: big.LITTLE/DynamIQ cores suffer severe sync latency when
+            // efficiency cores are included. 4 threads locks strictly to Performance/Prime cores
+            // and prevents sustained 100% duty cycle at the SoC package level.
+            val safeThreads = 4
+
+            // Context ceiling: 4096 max on-device. 8192+ bloats KV-cache bandwidth and causes
+            // continuous DRAM pressure that drives package temps to 85°C+. Default: 2048.
+            val resolvedCtx = contextLength.coerceIn(2048, 4096)
+
+            // Fixed sustainable batch sizes for mobile thermals. Dynamic scaling based on RAM
+            // caused oversized batches that pegged the memory bus and prevented P-state transitions.
+            val effectiveBatch = 512
+            val effectiveUbatch = 256
+
+            val effectiveGpuLayers = 0 // CPU-only: libllama.so → libggml-cpu.so, no GPU backend
 
             val baseArgs = mutableListOf(
                 "-m", resolvedPath,
                 "-c", resolvedCtx.toString(),
-                "-n", "-1", // Unconstrained token generation at engine level
+                "-n", "-1",                 // Unconstrained token generation at engine level
                 "--parallel", "1",
                 "--cont-batching",
+                "--cache-prompt",           // Server-side KV prefix cache: system prompt reused across turns
                 "--no-warmup",
                 "--fit", "off",
                 "-b", effectiveBatch.toString(),
                 "-ub", effectiveUbatch.toString(),
-                "-t", optimalThreads.toString(),
-                "-tb", optimalBatchThreads.toString(), // Multi-core burst prefill on all available cores
+                "-t", safeThreads.toString(),   // Hard-capped: 4 perf cores, no efficiency cores
+                "-tb", safeThreads.toString(),  // Prefill also capped — prevents thermal spike on prompt eval
                 "-ngl", "0",
                 "--flash-attn", flashAttnArg,
                 "--cache-type-k", kvCacheType,
@@ -359,7 +369,7 @@ class GGUFModelClient {
 
             if (isStandaloneDraft) {
                 activeDraftModelPath = activeDraftPath
-                fileLog("Speculative Decoding linked: ${File(activeDraftPath!!).name}")
+                fileLog("Speculative Decoding linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap)")
                 trialArgs.add("--model-draft")
                 trialArgs.add(activeDraftPath)
                 trialArgs.add("--draft")
@@ -367,14 +377,14 @@ class GGUFModelClient {
                 trialArgs.add("--draft-min")
                 trialArgs.add("1")
                 trialArgs.add("--threads-draft")
-                trialArgs.add(optimalThreads.toString())
+                trialArgs.add(safeThreads.toString())
                 trialArgs.add("--ctx-size-draft")
-                trialArgs.add(if (resolvedCtx > 4096) "4096" else resolvedCtx.toString())
+                trialArgs.add(resolvedCtx.toString())
             } else {
                 activeDraftModelPath = null
             }
 
-            fileLog("Launch args: ${trialArgs.joinToString(" ")}")
+            fileLog("Launch args: ${trialArgs.joinToString(" ")} (base mmap=$useMmap, draft mmap=$draftUseMmap)")
 
             val nativeReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
             val newThread = Thread {
@@ -391,6 +401,8 @@ class GGUFModelClient {
             globalServerThread = newThread
             globalLoadedPath = resolvedPath
             globalLoadedDraftPath = activeDraftPath
+            globalLoadedUseMmap = useMmap
+            globalLoadedDraftUseMmap = draftUseMmap
             ZramOptimizer.disableOomKiller()
 
             val startTime = System.currentTimeMillis()
@@ -780,6 +792,10 @@ class GGUFModelClient {
             lastTokenCount = tokenCount
             if (lastFinishReason == null) {
                 lastFinishReason = "STOP"
+            }
+            val totalElapsedSec = (System.currentTimeMillis() - firstTokenTime) / 1000f
+            if (firstTokenTime > 0L && totalElapsedSec > 0.05f && tokenCount > 0) {
+                onSpeedUpdate?.invoke(tokenCount / totalElapsedSec)
             }
         } catch (e: Exception) {
             emit("[ERROR: ${e.message}]")

@@ -70,6 +70,7 @@ object NeuralPrimingManager {
                     draftModelPath = prefs.getString("draft_model_path", null)?.ifBlank { null }
                     gpuLayers = prefs.getInt("gpu_layers", 0)
                     useMmap = prefs.getBoolean("use_mmap", true)
+                    draftUseMmap = prefs.getBoolean("draft_use_mmap", true)
                 }
 
                 client.loadModel(

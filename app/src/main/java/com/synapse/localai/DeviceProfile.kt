@@ -76,12 +76,9 @@ object DeviceProfile {
         return hw.performanceCores.coerceIn(2, 4)
     }
 
-    /**
-     * Burst thread allocation for prompt prefill (-tb) utilizing all available cores
-     * to accelerate prompt evaluation matrix operations.
-     */
     fun optimalBatchThreads(hw: HardwareProfile): Int {
-        return hw.totalCores.coerceIn(optimalThreads(hw), 8)
+        // Thermal guardrail: cap burst prefill threads to at most 4 to prevent package thermal spikes
+        return optimalThreads(hw).coerceAtMost(4)
     }
 
     /**

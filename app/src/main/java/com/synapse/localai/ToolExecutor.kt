@@ -39,7 +39,8 @@ object ToolExecutor {
     private val FILE_PATH_PATTERNS = listOf(
         Regex("""(?:file|path|save to|write to|create file|filename)[:\s]+[`"']?([^\s`"'\n]+\.[a-zA-Z0-9]{1,10})[`"']?""", RegexOption.IGNORE_CASE),
         Regex("""(?://|/\*|#|<!--)\s*(?:file|path)[:\s]+([^\s*`"'\n]+\.[a-zA-Z0-9]{1,10})""", RegexOption.IGNORE_CASE),
-        Regex("""(/sdcard/Medlam-Ai/[^\s\n"'`]+\.[a-zA-Z0-9]{1,10})""")
+        Regex("""(?:Synthesizing|Scaffolding)\s+([^\s`"'\n:\]]+\.[a-zA-Z0-9]{1,10})""", RegexOption.IGNORE_CASE),
+        Regex("""(/sdcard/Medlam-Ai/[^\s\n"'`\]:]+\.[a-zA-Z0-9]{1,10})""")
     )
 
     // Extensions that represent executable web/UI content

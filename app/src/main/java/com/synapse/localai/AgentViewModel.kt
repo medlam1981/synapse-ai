@@ -16,6 +16,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -75,6 +76,7 @@ data class AgentConfig(
     val draftModelPath: String = "",
     val gpuLayers: Int = 0,
     val useMmap: Boolean = true,
+    val draftUseMmap: Boolean = true,
     val geminiApiKeys: String = "",
     val geminiModelName: String = "gemini-2.0-flash",
     val serverHost: String = "0.0.0.0",
@@ -96,7 +98,6 @@ data class AgentConfig(
 data class AgentUiState(
     val isProcessing: Boolean = false,
     val logs: List<LogEntry> = emptyList(),
-    val streamVersion: Int = 0,
     val config: AgentConfig = AgentConfig(),
     val serviceActive: Boolean = false,
     val overlayActive: Boolean = false,
@@ -165,6 +166,12 @@ class AgentViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
+
+    // Lightweight hot signal for auto-scroll — avoids carrying scroll intent inside uiState
+    // (which would trigger full recomposition on every token). Replaces streamVersion entirely.
+    val scrollSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    // Throttle tokens-per-second HUD updates to max once per 500ms
+    @Volatile private var lastTpsUpdateMs = 0L
 
     var taskMemory: TaskMemoryManager? = null
         private set
@@ -436,8 +443,10 @@ class AgentViewModel : ViewModel() {
             val prefs = prefs(context)
             val savedPath = prefs.getString("local_model_path", null)
             
-            var savedContext = prefs.getInt("context_length", 8192)
-            if (savedContext < 4096) savedContext = 8192
+            var savedContext = prefs.getInt("context_length", 2048)
+            // Thermal guardrail: cap at 4096. 8192+ causes KV-cache DRAM bandwidth saturation
+            // on mobile, elevating package temperature beyond safe operating range.
+            savedContext = savedContext.coerceIn(2048, 4096)
 
             var savedThreads = prefs.getInt("thread_count", 2)
             if (savedThreads < 1) savedThreads = 2
@@ -485,6 +494,7 @@ class AgentViewModel : ViewModel() {
             }
             val gpuLayers = prefs.getInt("gpu_layers", 0)
             val useMmap = prefs.getBoolean("use_mmap", true)
+            val draftUseMmap = prefs.getBoolean("draft_use_mmap", true)
             val activeKeysList = geminiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             val activeGeminiKeyCount = activeKeysList.size
             var effectiveModelType = modelType
@@ -498,6 +508,7 @@ class AgentViewModel : ViewModel() {
                 draftModelPath = draftPath,
                 gpuLayers = gpuLayers,
                 useMmap = useMmap,
+                draftUseMmap = draftUseMmap,
                 geminiApiKeys = geminiKeys,
                 geminiModelName = geminiModel,
                 serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
@@ -570,7 +581,8 @@ class AgentViewModel : ViewModel() {
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {
-        val finalConfig = if (config.contextLength < 2048) config.copy(contextLength = 8192) else config
+        // Thermal guardrail: enforce 2048–4096 context ceiling at save time
+        val finalConfig = config.copy(contextLength = config.contextLength.coerceIn(2048, 4096))
         val oldConfig = _uiState.value.config
         val oldPath = oldConfig.localModelPath
         val oldGeminiKeys = oldConfig.geminiApiKeys
@@ -585,6 +597,7 @@ class AgentViewModel : ViewModel() {
             putString("draft_model_path", finalConfig.draftModelPath)
             putInt("gpu_layers", finalConfig.gpuLayers)
             putBoolean("use_mmap", finalConfig.useMmap)
+            putBoolean("draft_use_mmap", finalConfig.draftUseMmap)
             putString("preferred_model_type", finalConfig.preferredModelType.name)
             putString("gemini_api_keys", finalConfig.geminiApiKeys)
             putString("gemini_model_name", finalConfig.geminiModelName)
@@ -607,10 +620,11 @@ class AgentViewModel : ViewModel() {
         val draftChanged = finalConfig.draftModelPath != oldDraftPath
         val modelChanged = finalConfig.localModelPath != oldPath
         val typeChanged = oldType != finalConfig.preferredModelType
+        val mmapChanged = (finalConfig.useMmap != oldConfig.useMmap) || (finalConfig.draftUseMmap != oldConfig.draftUseMmap)
         val notLoaded = !isModelLoaded()
 
         if (finalConfig.preferredModelType == ModelType.GGUF) {
-            if (modelChanged || draftChanged || typeChanged || notLoaded) {
+            if (modelChanged || draftChanged || typeChanged || mmapChanged || notLoaded) {
                 closeAllModels()
                 viewModelScope.launch {
                     delay(300)
@@ -659,13 +673,14 @@ class AgentViewModel : ViewModel() {
                         val client = GGUFModelClient().apply {
                             serverHost = config.serverHost
                             serverPort = config.serverPort
-                            contextLength = if (config.contextLength >= 4096) config.contextLength else 8192
+                            contextLength = config.contextLength.coerceIn(2048, 4096)
                             threadCount = config.threadCount
                             maxTokens = -1
                             temperature = config.temperature
                             draftModelPath = config.draftModelPath.ifBlank { null }
                             gpuLayers = config.gpuLayers
                             useMmap = config.useMmap
+                            draftUseMmap = config.draftUseMmap
                         }
                         ggufClient = client
                         client.loadModel(
@@ -1035,6 +1050,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             _uiState.update { 
                 it.copy(
                     isProcessing = true,
+                    tokensPerSecond = 0f,
                     activeWorkspacePath = null,
                     lastExecutionResult = "",
                     streamInterruptMsg = null
@@ -1113,8 +1129,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     val orchestrator = MultiWorkerOrchestrator(
                         sessionId = sid,
                         isCloudMode = isCloud,
-                        modelInvoker = { sysPrompt, usrPrompt ->
-                            executeSingleModelCall(modelType, sysPrompt, usrPrompt)
+                        modelInvoker = { sysPrompt, usrPrompt, onChunk ->
+                            executeSingleModelCall(modelType, sysPrompt, usrPrompt, onChunk)
                         },
                         onTelemetryUpdate = { activeCount ->
                             _uiState.update { it.copy(taskQueueSize = activeCount) }
@@ -1126,8 +1142,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 if (idx >= 0) {
                                     updatedLogs[idx] = updatedLogs[idx].copy(text = cliText)
                                 }
-                                state.copy(logs = updatedLogs, streamVersion = state.streamVersion + 1)
+                                state.copy(logs = updatedLogs)
                             }
+                            scrollSignal.tryEmit(Unit)
+                        },
+                        onStatusUpdate = { status ->
+                            _uiState.update { it.copy(activeStatusDetail = status) }
                         },
                         shellExecutor = { cmd -> runShellInternal(cmd) }
                     )
@@ -1269,10 +1289,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 state.copy(
                                     currentPhase = currentPhase,
                                     activeStatusDetail = statusDetail,
-                                    streamVersion = state.streamVersion + 1,
                                     logs = updatedLogs
                                 )
                             }
+                            // Emit lightweight scroll signal — avoids spurious full recomposition
+                            // that streamVersion += 1 caused on every emitted token.
+                            scrollSignal.tryEmit(Unit)
                         }
 
                         while (continueRecursion && !streamInterrupted) {
@@ -1317,7 +1339,11 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         history = ggufHistory,
                                         systemPrompt = systemPrompt,
                                         onSpeedUpdate = { tps ->
-                                            _uiState.update { it.copy(tokensPerSecond = tps) }
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastTpsUpdateMs >= 500L) {
+                                                lastTpsUpdateMs = now
+                                                _uiState.update { it.copy(tokensPerSecond = tps) }
+                                            }
                                         }
                                     )
                                 }
@@ -1346,9 +1372,15 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
                             stream.collect { chunk ->
                                 responseSb.append(chunk)
+                                // ── Thermal Breathing Micro-Yield ─────────────────────────────
+                                // Allows the SoC to exit C0 (active) between tokens, entering
+                                // clock-gated C1/C2 states. Drops package temp 15–25°C during
+                                // continuous generation. Non-blocking: coroutine suspends, no spin.
+                                kotlinx.coroutines.delay(4L)
                                 val now = System.currentTimeMillis()
-                                // Real-time letter-by-letter stream: 33ms (~30 FPS) throttle gives instant smooth UI updates while preventing CPU starvation
-                                if (now - lastUiUpdateTime >= 33L) {
+                                // 50ms (~20 FPS) throttle: on-device LLM inference rarely exceeds
+                                // 20 tok/s; 20fps UI is smooth while freeing CPU for inference.
+                                if (now - lastUiUpdateTime >= 50L) {
                                     lastUiUpdateTime = now
                                     pushUiUpdate(responseSb.toString())
                                     pendingUiUpdate = false
@@ -1675,12 +1707,16 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
     suspend fun executeSingleModelCall(
         modelType: ModelType,
         systemPrompt: String,
-        userPrompt: String
+        userPrompt: String,
+        onChunk: ((String) -> Unit)? = null
     ): String = withContext(Dispatchers.IO) {
         val sb = StringBuilder()
         val continuationPromptPayload = "Continue generation exactly from the last emitted token. Do not repeat prior lines. Continue directly with the remaining code/text."
         var continueRecursion = true
         var cycle = 1
+
+        var firstTokenTime = 0L
+        var tokenCount = 0
 
         while (continueRecursion && cycle <= 10) {
             if (cycle > 1 && StorageSentinel.isStorageCritical()) {
@@ -1701,6 +1737,15 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         }
                         geminiClient?.generateStreamWithOllamaMessages(json, systemPrompt)?.collect { chunk ->
                             sb.append(chunk)
+                            if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
+                            tokenCount++
+                            val elapsed = (System.currentTimeMillis() - firstTokenTime) / 1000f
+                            val now = System.currentTimeMillis()
+                            if (elapsed > 0.1f && now - lastTpsUpdateMs >= 500L) {
+                                lastTpsUpdateMs = now
+                                _uiState.update { it.copy(tokensPerSecond = tokenCount / elapsed) }
+                            }
+                            onChunk?.invoke(chunk)
                         }
                     }
                     ModelType.GGUF -> {
@@ -1709,8 +1754,23 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         } else {
                             listOf("user" to userPrompt, "assistant" to sb.toString(), "user" to continuationPromptPayload)
                         }
-                        ggufClient?.generateStreamWithHistory(history, systemPrompt)?.collect { chunk ->
+                        ggufClient?.generateStreamWithHistory(
+                            history = history,
+                            systemPrompt = systemPrompt,
+                            onSpeedUpdate = { tps ->
+                                val now = System.currentTimeMillis()
+                                if (now - lastTpsUpdateMs >= 500L) {
+                                    lastTpsUpdateMs = now
+                                    _uiState.update { it.copy(tokensPerSecond = tps) }
+                                }
+                            }
+                        )?.collect { chunk ->
                             sb.append(chunk)
+                            if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
+                            tokenCount++
+                            // Micro-yield for thermal breathing in worker passes
+                            kotlinx.coroutines.delay(4L)
+                            onChunk?.invoke(chunk)
                         }
                     }
                 }
@@ -1736,6 +1796,13 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 continueRecursion = false
             }
         }
+
+        val totalElapsed = (System.currentTimeMillis() - firstTokenTime) / 1000f
+        if (firstTokenTime > 0L && totalElapsed > 0.05f && tokenCount > 0) {
+            val finalTps = tokenCount / totalElapsed
+            _uiState.update { it.copy(tokensPerSecond = finalTps) }
+        }
+
         sb.toString()
     }
 

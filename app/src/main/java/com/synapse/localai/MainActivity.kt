@@ -62,6 +62,7 @@ import com.synapse.localai.ui.theme.*
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import android.util.Log
 import java.io.File
@@ -269,6 +270,13 @@ class MainActivity : ComponentActivity() {
         instance = this
 
         setupGlobalCrashHandler()
+
+        // Initialize Native MedlamEngine (mmap, speculative decoding, ARM NEON acceleration)
+        try {
+            LlamaNativeEngine.load()
+        } catch (t: Throwable) {
+            Log.e("MainActivity", "LlamaNativeEngine load error: ${t.message}")
+        }
 
         // Prevent activity destruction/restart on back press: move task to back cleanly
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -556,10 +564,13 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         }
     }
 
-    // Kinetic Stream-Tracking: instantaneous, zero-jitter tracking of live streaming tail
-    LaunchedEffect(uiState.streamVersion, uiState.isProcessing, uiState.activeStatusDetail) {
-        if (!userScrolledAway && !listState.isScrollInProgress && uiState.logs.isNotEmpty()) {
-            listState.scrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
+    // Kinetic Stream-Tracking: collect the lightweight scrollSignal SharedFlow instead of
+    // re-keying on streamVersion (which triggered a full LaunchedEffect relaunch per token).
+    LaunchedEffect(viewModel.scrollSignal) {
+        viewModel.scrollSignal.collect {
+            if (!userScrolledAway && !listState.isScrollInProgress && uiState.logs.isNotEmpty()) {
+                listState.scrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
+            }
         }
     }
 
@@ -1382,12 +1393,16 @@ fun ConsolidatedMasterHeader(
                 .replace("-Q4_K_XL", " Q4")
                 .replace("-BF16", "")
 
+            val modeLabel = if (draftName != null) "MTP" else "STANDALONE"
+            val tpsSuffix = if (uiState.tokensPerSecond > 0f) {
+                val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond)
+                " • $formattedTps T/s"
+            } else ""
+
             val specChipText = if (isCloudMode) {
-                "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}"
-            } else if (draftName != null) {
-                "$cleanBaseName • MTP: $draftName"
+                "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
             } else {
-                "$cleanBaseName • STANDALONE"
+                "${cleanBaseName.uppercase()} • $modeLabel$tpsSuffix"
             }
 
             val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
@@ -1413,7 +1428,7 @@ fun ConsolidatedMasterHeader(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = specChipText.uppercase(),
+                        text = specChipText,
                         color = textDim,
                         fontSize = 8.5.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -2561,7 +2576,8 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
 
 @Composable
 fun CliFormattedBody(raw: String, isDark: Boolean) {
-    val text = StreamDemultiplexer.sanitizeProse(raw).trim()
+    // Cache sanitize + split only when raw text changes (avoids regex re-run on every recompose)
+    val text = remember(raw) { StreamDemultiplexer.sanitizeProse(raw).trim() }
     if (text.isBlank()) return
 
     val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
@@ -2572,7 +2588,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        val lines = text.lines()
+        val lines = remember(text) { text.lines() }
         var i = 0
         while (i < lines.size) {
             val line = lines[i]

@@ -38,6 +38,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -667,9 +668,96 @@ fun SettingsScreenContent(
                                     colors = RadioButtonDefaults.colors(selectedColor = primary)
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
-                                    Text(formatSize(file.length()) + " • " + file.parent, color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                    Text(
+                                        formatSize(file.length()) + " • " + (if (isSelected) (if (config.useMmap) "mmap (disk)" else "RAM loaded") + " • " else "") + file.parent,
+                                        color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                if (isSelected) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                "mmap",
+                                                color = onPrimaryContainer,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            Text(
+                                                if (config.useMmap) "disk" else "RAM",
+                                                color = onPrimaryContainer.copy(alpha = 0.75f),
+                                                fontSize = 8.5.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                        Switch(
+                                            checked = config.useMmap,
+                                            onCheckedChange = {
+                                                val newConfig = config.copy(useMmap = it)
+                                                viewModel.saveConfig(context, newConfig)
+                                            },
+                                            modifier = Modifier.scale(0.75f),
+                                            colors = SwitchDefaults.colors(
+                                                checkedThumbColor = primary,
+                                                checkedTrackColor = surfaceColor,
+                                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                                                uncheckedTrackColor = surfaceContainer
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Dedicated Base Model mmap Details Strip
+                        if (config.localModelPath.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = surfaceContainer,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Text(
+                                            "Base Memory Mapping (mmap)",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            if (config.useMmap) {
+                                                "Weights paged from disk (--mmap) • Saves RAM footprint"
+                                            } else {
+                                                "Weights loaded fully into RAM (--no-mmap) • Zero disk latency"
+                                            },
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 9.5.sp
+                                        )
+                                    }
+                                    Switch(
+                                        checked = config.useMmap,
+                                        onCheckedChange = {
+                                            val newConfig = config.copy(useMmap = it)
+                                            viewModel.saveConfig(context, newConfig)
+                                        },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = primary,
+                                            checkedTrackColor = primaryContainer
+                                        )
+                                    )
                                 }
                             }
                         }
@@ -732,39 +820,105 @@ fun SettingsScreenContent(
                                     colors = RadioButtonDefaults.colors(selectedColor = primary)
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(mtpFile.name, color = if (isMtpSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text(formatSize(mtpFile.length()) + " • " + mtpFile.parent, color = if (isMtpSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                    Text(
+                                        formatSize(mtpFile.length()) + " • " + (if (isMtpSelected) (if (config.draftUseMmap) "mmap (disk)" else "locked in RAM") + " • " else "") + mtpFile.parent,
+                                        color = if (isMtpSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 10.sp
+                                    )
                                 }
+                                if (isMtpSelected) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                "mmap",
+                                                color = onPrimaryContainer,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            Text(
+                                                if (config.draftUseMmap) "disk" else "locked",
+                                                color = onPrimaryContainer.copy(alpha = 0.75f),
+                                                fontSize = 8.5.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                        Switch(
+                                            checked = config.draftUseMmap,
+                                            onCheckedChange = {
+                                                val newConfig = config.copy(draftUseMmap = it)
+                                                viewModel.saveConfig(context, newConfig)
+                                            },
+                                            modifier = Modifier.scale(0.75f),
+                                            colors = SwitchDefaults.colors(
+                                                checkedThumbColor = primary,
+                                                checkedTrackColor = surfaceColor,
+                                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                                                uncheckedTrackColor = surfaceContainer
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Dedicated Draft Model mmap Detail Row Inside Companion Draft Card
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = surfaceContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text(
+                                        "Draft Memory Mapping (mmap)",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        if (config.draftModelPath.isBlank()) {
+                                            "Companion draft inactive"
+                                        } else if (config.draftUseMmap) {
+                                            "Paged from disk (--mmap) • Saves RAM footprint"
+                                        } else {
+                                            "Locked in RAM for zero-latency lookups"
+                                        },
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 9.5.sp
+                                    )
+                                }
+                                Switch(
+                                    checked = config.draftUseMmap,
+                                    enabled = config.draftModelPath.isNotBlank(),
+                                    onCheckedChange = {
+                                        val newConfig = config.copy(draftUseMmap = it)
+                                        viewModel.saveConfig(context, newConfig)
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = primary,
+                                        checkedTrackColor = primaryContainer
+                                    )
+                                )
                             }
                         }
                     }
 
-                    // Hardware Offloading Controls (GPU Layers & MMAP)
+                    // Hardware Offloading Controls (GPU Layers)
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("HARDWARE OFFLOADING & ACCELERATION:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                                Text("Memory-Mapped Files (mmap)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Direct disk paging to optimize RAM footprint", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                            }
-                            Switch(
-                                checked = config.useMmap,
-                                onCheckedChange = {
-                                    val newConfig = config.copy(useMmap = it)
-                                    viewModel.saveConfig(context, newConfig)
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = primary,
-                                    checkedTrackColor = primaryContainer
-                                )
-                            )
-                        }
 
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
