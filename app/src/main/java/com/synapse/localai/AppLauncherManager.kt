@@ -3,21 +3,19 @@ package com.synapse.localai
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
-import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * AppLauncherManager — Autonomous Zero-Fail Android Application Launcher & Dynamic Package Resolver.
+ * AppLauncherManager — Autonomous Android Application Launcher & Dynamic Package Resolver.
  *
  * Implements:
- * 1. Common Package Alias Map (English, Arabic, French, colloquial aliases).
- * 2. Dynamic PackageManager Resolution (label matching against localized installed apps).
- * 3. Shell Execution Fallback (pm list packages | grep + monkey / am start via root or sh).
- * 4. Zero-Failure Fallback (web deep-link or market://details?id=... if app is genuinely uninstalled).
+ * 1. Strict YouTube package mapping (com.google.android.youtube).
+ * 2. Common Package Alias Map (English, Arabic, French, colloquial aliases).
+ * 3. Dynamic PackageManager Resolution (label matching against localized installed apps).
+ * 4. Direct Shell Execution Fallback (am start || monkey) without web/store redirection.
  */
 object AppLauncherManager {
 
@@ -142,30 +140,22 @@ object AppLauncherManager {
         "file manager" to "com.google.android.documentsui"
     )
 
-    // Fallback URLs for web deep-link resolution when app is genuinely missing
-    private val WEB_FALLBACK_URLS = mapOf(
-        "com.google.android.youtube" to "https://m.youtube.com",
-        "com.whatsapp" to "https://web.whatsapp.com",
-        "org.telegram.messenger" to "https://web.telegram.org",
-        "com.facebook.katana" to "https://m.facebook.com",
-        "com.instagram.android" to "https://www.instagram.com",
-        "com.twitter.android" to "https://mobile.twitter.com",
-        "com.zhiliaoapp.musically" to "https://www.tiktok.com",
-        "com.google.android.apps.maps" to "https://maps.google.com",
-        "com.google.android.gm" to "https://mail.google.com",
-        "com.android.chrome" to "https://www.google.com"
-    )
-
     /**
      * Resolves target string to a candidate Android package name using:
-     * 1. Deterministic alias map
-     * 2. Camera package detection
-     * 3. Dynamic PackageManager matching (labels and package names)
-     * 4. Shell `pm list packages` search
+     * 1. Strict YouTube rule
+     * 2. Deterministic alias map
+     * 3. Camera package detection
+     * 4. Dynamic PackageManager matching (labels and package names)
+     * 5. Shell `pm list packages` search
      */
     fun resolvePackageName(target: String, pm: PackageManager?): String {
         val clean = target.trim().removeSurrounding("\"").removeSurrounding("'").trim()
         val lower = clean.lowercase(Locale.ROOT)
+
+        // Strict YouTube rule: map youtube strictly to com.google.android.youtube
+        if (lower == "youtube" || lower == "yt" || lower == "يوتيوب" || lower == "اليوتيوب" || lower.contains("youtube") || lower.contains("يوتيوب")) {
+            return "com.google.android.youtube"
+        }
 
         // 1. Direct Alias Lookup
         val alias = ALIAS_MAP[lower] ?: ALIAS_MAP[clean]
@@ -276,8 +266,8 @@ object AppLauncherManager {
     /**
      * Executes bulletproof application launch.
      * Tier 1: Standard Intent
-     * Tier 2: Shell fallback (monkey / am start via root or sh)
-     * Tier 3: Zero-Failure Fallback (web deep-link or market://)
+     * Tier 2: Direct Shell Execution (am start || monkey)
+     * All web deep-links and Play Store redirects are strictly banned.
      */
     fun launch(target: String, context: Context?): LaunchResult {
         val ctx = context ?: MainActivity.instance ?: return LaunchResult(
@@ -314,12 +304,12 @@ object AppLauncherManager {
                 )
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Tier 1 standard launch failed: ${e.message}, escalating to Tier 2 (Shell)")
+            Log.w(TAG, "Tier 1 standard launch failed: ${e.message}, escalating to direct shell launch")
         }
 
-        // ── Tier 2: Shell Execution Fallback (Root / ADB / sh) ───────────────
+        // ── Tier 2: Direct Shell Execution Fallback (am start || monkey) ───────────
         try {
-            val shellResult = launchViaShell(resolvedPkg, target)
+            val shellResult = launchViaDirectShell(resolvedPkg, target)
             if (shellResult) {
                 friendlyLabel = try {
                     val appInfo = pm.getApplicationInfo(resolvedPkg, 0)
@@ -327,100 +317,50 @@ object AppLauncherManager {
                 } catch (_: Exception) {
                     resolvedPkg
                 }
-                Log.i(TAG, "Tier 2: Successfully launched $friendlyLabel ($resolvedPkg) via shell fallback")
+                Log.i(TAG, "Tier 2: Successfully launched $friendlyLabel ($resolvedPkg) via direct shell")
                 return LaunchResult(
                     success = true,
                     appLabel = friendlyLabel,
                     packageName = resolvedPkg,
-                    method = "SHELL_FALLBACK"
+                    method = "DIRECT_SHELL"
                 )
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Tier 2 shell launch failed: ${e.message}, escalating to Tier 3 (Zero-Fail Web/Store)")
+            Log.w(TAG, "Tier 2 direct shell launch failed: ${e.message}")
         }
 
-        // ── Tier 3: Zero-Failure Fallback (Web Deep-Link / Play Store) ───────
-        val fallbackUrl = WEB_FALLBACK_URLS[resolvedPkg]
-        if (fallbackUrl != null) {
-            try {
-                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl)).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                ctx.startActivity(browserIntent)
-                Log.i(TAG, "Tier 3: Launched web fallback $fallbackUrl for $resolvedPkg")
-                return LaunchResult(
-                    success = true,
-                    appLabel = "$resolvedPkg (Web Service)",
-                    packageName = resolvedPkg,
-                    method = "WEB_FALLBACK"
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Web fallback intent failed: ${e.message}")
-            }
-        }
-
-        // Play Store Deep-Link
-        try {
-            val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$resolvedPkg")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            ctx.startActivity(marketIntent)
-            Log.i(TAG, "Tier 3: Launched Play Store deep-link for $resolvedPkg")
-            return LaunchResult(
-                success = true,
-                appLabel = "$resolvedPkg (Play Store)",
-                packageName = resolvedPkg,
-                method = "STORE_DEEP_LINK"
-            )
-        } catch (_: Exception) {
-            try {
-                val webStoreIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$resolvedPkg")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                ctx.startActivity(webStoreIntent)
-                return LaunchResult(
-                    success = true,
-                    appLabel = "$resolvedPkg (Web Store)",
-                    packageName = resolvedPkg,
-                    method = "STORE_WEB_FALLBACK"
-                )
-            } catch (err: Exception) {
-                return LaunchResult(
-                    success = false,
-                    appLabel = target,
-                    packageName = resolvedPkg,
-                    method = "FAILED",
-                    errorMessage = err.message ?: "Unable to launch application"
-                )
-            }
-        }
+        // Banned Web & Play Store Fallbacks - return clean failure
+        Log.e(TAG, "Failed to launch $resolvedPkg natively and via direct shell execution")
+        return LaunchResult(
+            success = false,
+            appLabel = target,
+            packageName = resolvedPkg,
+            method = "FAILED",
+            errorMessage = "Failed to launch package '$resolvedPkg' directly on device."
+        )
     }
 
     /**
-     * Executes shell launch fallback using monkey and am start.
+     * Executes direct shell launch using am start and monkey:
+     * am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$TARGET_PKG" 2>/dev/null || monkey -p "$TARGET_PKG" -c android.intent.category.LAUNCHER 1 2>/dev/null
      */
-    private fun launchViaShell(pkg: String, originalTarget: String): Boolean {
+    private fun launchViaDirectShell(pkg: String, originalTarget: String): Boolean {
         val cleanPkg = pkg.trim()
         val cleanTarget = originalTarget.filter { it.isLetterOrDigit() || it == '.' || it == '_' }
 
         val script = "TARGET_PKG=\"$cleanPkg\"\n" +
-            "if ! pm list packages | grep -q \"$cleanPkg\"; then\n" +
+            "if ! pm list packages | grep -q \"^package:$cleanPkg\$\"; then\n" +
             "    FOUND_PKG=\$(pm list packages | grep -i \"$cleanTarget\" | head -n 1 | cut -d: -f2)\n" +
             "    if [ -n \"\$FOUND_PKG\" ]; then\n" +
             "        TARGET_PKG=\"\$FOUND_PKG\"\n" +
             "    fi\n" +
             "fi\n" +
-            "if pm list packages | grep -q \"\$TARGET_PKG\"; then\n" +
-            "    monkey -p \"\$TARGET_PKG\" -c android.intent.category.LAUNCHER 1 2>/dev/null || am start -n \"\$TARGET_PKG\" 2>/dev/null\n" +
-            "    exit 0\n" +
-            "else\n" +
-            "    exit 1\n" +
-            "fi\n"
+            "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p \"\$TARGET_PKG\" 2>/dev/null || monkey -p \"\$TARGET_PKG\" -c android.intent.category.LAUNCHER 1 2>/dev/null\n"
 
         return try {
             val pb = ProcessBuilder("sh", "-c", script)
             val proc = pb.start()
-            val exited = proc.waitFor(3, TimeUnit.SECONDS)
+            val exited = proc.waitFor(4, TimeUnit.SECONDS)
             exited && proc.exitValue() == 0
         } catch (_: Exception) {
             false

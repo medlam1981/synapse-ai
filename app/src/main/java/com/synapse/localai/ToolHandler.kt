@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets
  * ToolHandler — Centralized Autonomous Tool Chaining & Execution Dispatcher.
  *
  * Dispatches and chains:
- * 1. open_app: Delegates to AppLauncherManager (deterministic alias map, PM resolution, shell fallback, zero-fail store/web fallback).
+ * 1. open_app: Delegates to AppLauncherManager (deterministic alias map, PM resolution, direct shell launch fallback).
  * 2. web_search: Delegates to WebSearchClient (query distillation, multi-tier search, curl shell scraping, zero-surrender policy).
  * 3. write_file: Delegates to atomic disk writer in /sdcard/Medlam-Ai/.
  * 4. run_shell: Intercepts am start and heredoc writes; passes through clean commands.
@@ -37,9 +37,7 @@ object ToolHandler {
         val result = AppLauncherManager.launch(cleanTarget, context)
         val summary = if (result.success) {
             val methodTag = when (result.method) {
-                "WEB_FALLBACK" -> " (Web Fallback)"
-                "STORE_DEEP_LINK", "STORE_WEB_FALLBACK" -> " (Play Store)"
-                "SHELL_FALLBACK" -> " (Shell Fallback)"
+                "DIRECT_SHELL" -> " (Shell Launch)"
                 else -> ""
             }
             "✔ Tool(open_app: ${result.packageName}) ─── [LAUNCHED]\n✔ Status: ${result.appLabel}$methodTag brought to front."
