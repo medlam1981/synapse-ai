@@ -1350,29 +1350,40 @@ fun ConsolidatedMasterHeader(
             // -------------------------------------------------------------
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
             val isLocalMode = !isCloudMode
-            val effectiveDraftPath = if (uiState.localModelLoaded) {
-                uiState.activeDraftModelPath
-            } else {
-                uiState.config.draftModelPath.ifBlank { null }
-            }
+            val effectiveDraftPath = uiState.activeDraftModelPath
+                ?: uiState.config.draftModelPath.takeIf { it.isNotBlank() && it != "STANDALONE" }
             val hasMtp = !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE" && File(effectiveDraftPath).exists()
             val draftFile = if (hasMtp) File(effectiveDraftPath!!) else null
             val draftName = draftFile?.nameWithoutExtension
             val draftTag = if (hasMtp && draftName != null) {
                 val quantRegex = Regex("""(?i)(Q\d+_[A-Z0-9_]+|BF16|FP16|F16|F32)""")
                 val match = quantRegex.find(draftName)
-                match?.value?.uppercase() ?: draftName.removePrefix("mtp-").removePrefix("gemma-4-").removePrefix("it-")
+                match?.value?.uppercase() ?: draftName.removePrefix("mtp-").removePrefix("gemma-4-").removePrefix("it-").uppercase()
             } else null
             val rawBaseName = uiState.activeModelName.ifBlank {
-                if (uiState.config.localModelPath.isNotBlank()) File(uiState.config.localModelPath).nameWithoutExtension else "GEMMA-4-E2B"
+                if (uiState.config.localModelPath.isNotBlank()) {
+                    File(uiState.config.localModelPath).nameWithoutExtension
+                } else {
+                    "GEMMA-4-E2B Q4"
+                }
             }
-            val cleanBaseName = rawBaseName
-                .replace("-it", "")
-                .replace("-qat", "")
-                .replace("-UD", "")
-                .replace("-Q2_K_XL", " Q2")
-                .replace("-Q4_K_XL", " Q4")
-                .replace("-BF16", "")
+            val cleanBaseName = remember(rawBaseName) {
+                var name = rawBaseName
+                    .replace("(?i)-it".toRegex(), "")
+                    .replace("(?i)-qat".toRegex(), "")
+                    .replace("(?i)-ud".toRegex(), "")
+                    .replace("(?i)-Q2_K_XL".toRegex(), " Q2")
+                    .replace("(?i)-Q4_K_XL".toRegex(), " Q4")
+                    .replace("(?i)-Q4_K_M".toRegex(), " Q4")
+                    .replace("(?i)-Q4_0".toRegex(), " Q4_0")
+                    .replace("(?i)-Q8_0".toRegex(), " Q8")
+                    .replace("(?i)-BF16".toRegex(), " BF16")
+                    .replace("(?i)-F16".toRegex(), " F16")
+                    .replace("(?i)_".toRegex(), "-")
+                    .trim()
+                    .uppercase()
+                if (name.isBlank()) "GEMMA-4-E2B Q4" else name
+            }
 
             val tpsSuffix = if (uiState.tokensPerSecond > 0f) {
                 val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond)
@@ -1382,9 +1393,9 @@ fun ConsolidatedMasterHeader(
             val specChipText = if (isCloudMode) {
                 "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
             } else if (hasMtp && draftTag != null) {
-                "${cleanBaseName.uppercase()} • MTP: $draftTag$tpsSuffix"
+                "$cleanBaseName • MTP: $draftTag$tpsSuffix"
             } else {
-                "STANDALONE$tpsSuffix"
+                "$cleanBaseName • STANDALONE$tpsSuffix"
             }
 
             val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)

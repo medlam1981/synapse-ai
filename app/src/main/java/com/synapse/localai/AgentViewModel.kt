@@ -451,6 +451,14 @@ class AgentViewModel : ViewModel() {
             val savedKeyIndex = prefs.getInt("current_key_index", 0)
             val safeKeyIndex = if (activeGeminiKeyCount > 0) savedKeyIndex.coerceIn(0, activeGeminiKeyCount - 1) else 0
 
+            val newDraftPath = if (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE") config.draftModelPath else null
+            val baseModelName = if (config.localModelPath.isNotBlank()) {
+                File(config.localModelPath).nameWithoutExtension
+            } else {
+                val baseModels = ModelScanner.getBaseModels(context)
+                baseModels.firstOrNull()?.nameWithoutExtension ?: "GEMMA-4-E2B Q4"
+            }
+
             _uiState.update { 
                 it.copy(
                     config = config, 
@@ -458,7 +466,9 @@ class AgentViewModel : ViewModel() {
                     currentKeyIndex = safeKeyIndex,
                     activePersona = activePersonaName,
                     activePersonas = activePersonasSet,
-                    availablePersonas = cachedPersonasList
+                    availablePersonas = cachedPersonasList,
+                    activeDraftModelPath = newDraftPath,
+                    activeModelName = baseModelName
                 ) 
             }
             prefs.edit()
@@ -509,7 +519,20 @@ class AgentViewModel : ViewModel() {
         val oldType = oldConfig.preferredModelType
 
         val activeKeys = finalConfig.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        _uiState.update { it.copy(config = finalConfig, totalKeys = activeKeys.size) }
+        val newDraftPath = if (finalConfig.draftModelPath.isNotBlank() && finalConfig.draftModelPath != "STANDALONE") finalConfig.draftModelPath else null
+        val baseModelName = if (finalConfig.localModelPath.isNotBlank()) {
+            File(finalConfig.localModelPath).nameWithoutExtension
+        } else {
+            _uiState.value.activeModelName.ifBlank { "GEMMA-4-E2B Q4" }
+        }
+        _uiState.update { 
+            it.copy(
+                config = finalConfig, 
+                totalKeys = activeKeys.size,
+                activeDraftModelPath = newDraftPath,
+                activeModelName = baseModelName
+            ) 
+        }
         
         val prefs = prefs(context)
         prefs.edit().apply {
@@ -618,13 +641,15 @@ class AgentViewModel : ViewModel() {
                                 isModelLoadingInProgress = false
                                 currentLoadingPath = null
                                 if (client.isLoaded) {
+                                    val effectiveDraft = client.activeDraftModelPath 
+                                        ?: config.draftModelPath.takeIf { it.isNotBlank() && it != "STANDALONE" }
                                     _uiState.update { it.copy(
                                         localModelLoaded = true, 
                                         localModelLoading = false, 
                                         modelLoadFailed = false,
                                         activeModelType = ModelType.GGUF, 
                                         activeModelName = modelName,
-                                        activeDraftModelPath = client.activeDraftModelPath,
+                                        activeDraftModelPath = effectiveDraft,
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
@@ -1356,16 +1381,19 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 }
                             }
 
+                            var lastThermalCheckTime = 0L
                             stream.collect { chunk ->
                                 responseSb.append(chunk)
-                                // ── Thermal Recovery (delay 8L) & SoC Cooldown ─────────────────
-                                kotlinx.coroutines.delay(8L)
-                                val currentTemp = DeviceProfile.readDeviceTemperature()
-                                if (currentTemp > 68) {
-                                    _uiState.update { it.copy(activeStatusDetail = "Thermal Cooling (SoC ${currentTemp}°C > 68°C)...") }
-                                    kotlinx.coroutines.delay(2000L)
-                                }
+                                // ── SoC Thermal Breaker: Only pause if temperature strictly exceeds 75°C ──
                                 val now = System.currentTimeMillis()
+                                if (now - lastThermalCheckTime >= 1000L) {
+                                    lastThermalCheckTime = now
+                                    val currentTemp = DeviceProfile.readDeviceTemperature()
+                                    if (currentTemp > 75) {
+                                        _uiState.update { it.copy(activeStatusDetail = "Thermal Cooling (SoC > 75°C)...") }
+                                        kotlinx.coroutines.delay(2000L)
+                                    }
+                                }
                                 // 50ms (~20 FPS) throttle: on-device LLM inference rarely exceeds
                                 // 20 tok/s; 20fps UI is smooth while freeing CPU for inference.
                                 if (now - lastUiUpdateTime >= 50L) {

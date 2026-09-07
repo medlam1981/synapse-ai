@@ -277,6 +277,7 @@ class GGUFModelClient {
                 globalLoadedDraftUseMmap == draftUseMmap
 
             if (isSameInstance) {
+                activeDraftModelPath = effectiveDraft
                 if (isServerReady()) {
                     fileLog("Server already active: $resolvedPath (draft: $draftModelPath, mmap: $useMmap, draftMmap: $draftUseMmap)")
                     isLoaded = true
@@ -293,6 +294,7 @@ class GGUFModelClient {
                             fileLog("🚀 Server became ONLINE while waiting!")
                             isLoaded = true
                             serverThread = globalServerThread
+                            activeDraftModelPath = effectiveDraft
                             onProgress(1.0f, "ONLINE • 100%")
                             onStatus("Neural Core Ready ✓")
                             return@withLock true
@@ -675,6 +677,7 @@ class GGUFModelClient {
         val effectiveDraft = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
         val isSameInstance = isServerReady() && globalLoadedPath == resolvedPath && globalLoadedDraftPath == effectiveDraft
         if (isSameInstance) {
+            activeDraftModelPath = effectiveDraft
             isLoaded = true
             onLoaded()
             return
@@ -894,16 +897,13 @@ class GGUFModelClient {
                 if (data == "[DONE]") break
                 if (data.isEmpty()) continue
 
-                // ── Mandatory Hardware Throttling & Core Thermal Duty-Cycle Recovery ──
-                delay(8L)
-
-                // ── Automatic Thermal Breaker: Pause 2s if device temp > 68°C ────────
+                // ── Automatic Thermal Breaker: Pause 2s strictly if device temp > 75°C ────────
                 val now = System.currentTimeMillis()
-                if (now - lastThermalCheckTime >= 600L) {
+                if (now - lastThermalCheckTime >= 1000L) {
                     lastThermalCheckTime = now
                     val currentTemp = DeviceProfile.readDeviceTemperature()
-                    if (currentTemp > 68) {
-                        fileLog("⚠️ [THERMAL BREAKER] Device SoC temp is ${currentTemp}°C (> 68°C). Pausing generation for 2000ms...")
+                    if (currentTemp > 75) {
+                        fileLog("⚠️ [THERMAL BREAKER] Device SoC temp is ${currentTemp}°C (> 75°C). Pausing generation for 2000ms...")
                         delay(2000L)
                     }
                 }
