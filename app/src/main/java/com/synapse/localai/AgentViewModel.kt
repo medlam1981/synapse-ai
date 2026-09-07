@@ -129,7 +129,8 @@ data class AgentUiState(
     val activePersona: String = PersonaManager.DEFAULT_PERSONA,
     val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET,
     val availablePersonas: List<String> = emptyList(),
-    val isLiveCanvasOpen: Boolean = false
+    val isLiveCanvasOpen: Boolean = false,
+    val activeDraftModelPath: String? = null
 )
 
 class AgentViewModel : ViewModel() {
@@ -623,6 +624,7 @@ class AgentViewModel : ViewModel() {
                                         modelLoadFailed = false,
                                         activeModelType = ModelType.GGUF, 
                                         activeModelName = modelName,
+                                        activeDraftModelPath = client.activeDraftModelPath,
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
@@ -639,6 +641,7 @@ class AgentViewModel : ViewModel() {
                                         localModelLoaded = false, 
                                         localModelLoading = false, 
                                         modelLoadFailed = true,
+                                        activeDraftModelPath = null,
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
@@ -760,10 +763,42 @@ The file execution engine automatically parses this block and writes the file di
     @Volatile
     private var cachedPrefixKey: String = ""
 
+    fun isChatPersonaActive(): Boolean {
+        val state = _uiState.value
+        val primary = state.activePersona.lowercase(Locale.ROOT)
+        val configPrimary = state.config.activePersona.lowercase(Locale.ROOT)
+        val set = state.activePersonas.map { it.lowercase(Locale.ROOT) }
+        return primary.contains("chat") || configPrimary.contains("chat") || set.any { it.contains("chat") }
+    }
+
+    fun isSimpleGreeting(text: String): Boolean {
+        val clean = text.trim().lowercase(Locale.ROOT)
+            .replace("!", "")
+            .replace(".", "")
+            .replace("?", "")
+            .trim()
+        val greetings = setOf(
+            "hello", "hi", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening",
+            "مرحبا", "اهلا", "أهلا", "سلام", "السلام عليكم", "صباح الخير", "مساء الخير",
+            "bonjour", "salut", "coucou", "bonsoir", "hola", "yo"
+        )
+        return clean in greetings || (clean.startsWith("hello") && clean.length < 10) || (clean.startsWith("hi") && clean.length < 5)
+    }
+
     private fun buildSystemPrompt(context: Context? = null, forLocalModel: Boolean = false): String {
         val config = _uiState.value.config
         val actualContext = context ?: MainActivity.instance
         val customPrompt = config.systemPrompt.trim()
+
+        // Pure conversational prompt for /chat mode — completely eliminates architectural reasoning loops
+        if (isChatPersonaActive()) {
+            val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
+            return """You are a direct, natural, and helpful conversational AI assistant in Chat Mode.
+Respond naturally and conversationally.
+For simple greetings (such as "hello", "hi", "hey", "bonjour", "مرحبا", "سلام") and general conversation, provide an instant, friendly conversational reply with zero architectural planning loops, zero <think> tags, and zero tool invocations.
+Match user language natively (Moroccan Darija, Standard Arabic, English, French).
+Be direct, authentic, concise, and fast.$custom""".trimIndent()
+        }
 
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
@@ -1035,7 +1070,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 }
 
                 // ── Multi-Worker MCP Orchestration Pipeline ─────────────────
-                if (MultiWorkerOrchestrator.isOrchestrationCandidate(finalCommand)) {
+                if (!isChatPersonaActive() && MultiWorkerOrchestrator.isOrchestrationCandidate(finalCommand)) {
                     val isCloud = modelType == ModelType.GEMINI
                     val liveLogId = UUID.randomUUID().toString()
                     val initialLiveLog = LogEntry(
@@ -1113,6 +1148,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     return@launch
                 }
 
+                val isChatMode = isChatPersonaActive()
                 val systemPrompt = buildSystemPrompt(actualContext, forLocalModel = modelType == ModelType.GGUF)
                 var keepGoing = true
                 var iterationCount = 0
@@ -1138,12 +1174,12 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         sender = "AGENT",
                         text = "",
                         thinkingText = "",
-                        isThinking = true
+                        isThinking = !isChatMode
                     )
                     _uiState.update { it.copy(
                         logs = it.logs + initialLiveLog,
-                        currentPhase = AgentActionPhase.THINKING,
-                        activeStatusDetail = "Thinking & Planning...",
+                        currentPhase = if (isChatMode) AgentActionPhase.COMPLETING else AgentActionPhase.THINKING,
+                        activeStatusDetail = if (isChatMode) "Replying..." else "Thinking & Planning...",
                         streamInterruptMsg = null
                     ) }
 
@@ -1180,6 +1216,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             val isToolInvoking = rawText.contains("<invoke")
 
                             val statusDetail = when {
+                                isChatMode -> "Replying..."
                                 demuxed.isThinking -> "Thinking & Planning..."
                                 isWritingFile -> {
                                     val path = detectedPath ?: "/sdcard/Medlam-Ai/..."
@@ -1195,6 +1232,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             }
 
                             val currentPhase = when {
+                                isChatMode -> AgentActionPhase.COMPLETING
                                 demuxed.isThinking -> AgentActionPhase.THINKING
                                 isToolInvoking -> AgentActionPhase.EXECUTING_TOOL
                                 isCodeStreaming -> AgentActionPhase.GENERATING_CODE
@@ -1298,11 +1336,13 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
                             stream.collect { chunk ->
                                 responseSb.append(chunk)
-                                // ── Thermal Breathing Micro-Yield ─────────────────────────────
-                                // Allows the SoC to exit C0 (active) between tokens, entering
-                                // clock-gated C1/C2 states. Drops package temp 15–25°C during
-                                // continuous generation. Non-blocking: coroutine suspends, no spin.
-                                kotlinx.coroutines.delay(4L)
+                                // ── Thermal Recovery (delay 8L) & SoC Cooldown ─────────────────
+                                kotlinx.coroutines.delay(8L)
+                                val currentTemp = DeviceProfile.readDeviceTemperature()
+                                if (currentTemp > 68) {
+                                    _uiState.update { it.copy(activeStatusDetail = "Thermal Cooling (SoC ${currentTemp}°C > 68°C)...") }
+                                    kotlinx.coroutines.delay(2000L)
+                                }
                                 val now = System.currentTimeMillis()
                                 // 50ms (~20 FPS) throttle: on-device LLM inference rarely exceeds
                                 // 20 tok/s; 20fps UI is smooth while freeing CPU for inference.

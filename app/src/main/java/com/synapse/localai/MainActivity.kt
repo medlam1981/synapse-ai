@@ -108,38 +108,7 @@ fun getSystemStats(context: Context): SystemStats {
     val totalKeys = if (geminiKeys.isBlank()) 0 else geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
     val currentKeyIndex = if (totalKeys > 0) (prefs.getInt("current_key_index", 0) + 1) else 0
 
-    var maxTemp = 0
-    try {
-        val thermalDir = File("/sys/class/thermal")
-        val zones = thermalDir.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") } ?: emptyArray()
-        
-        for (zone in zones) {
-            val typeFile = File(zone, "type")
-            val tempFile = File(zone, "temp")
-            if (tempFile.exists()) {
-                val type = if (typeFile.exists()) typeFile.readText().lowercase() else ""
-                val t = tempFile.readText().trim().toIntOrNull() ?: 0
-                val normalized = if (t > 1000) t / 1000 else t
-                
-                if (normalized in 20..100) {
-                    if (type.contains("cpu") || type.contains("tsens") || type.contains("cluster")) {
-                        maxTemp = normalized
-                        break
-                    }
-                    if (normalized > maxTemp && normalized != 37) {
-                        maxTemp = normalized
-                    }
-                }
-            }
-        }
-        if (maxTemp == 0 || maxTemp == 37) {
-            val t0 = File("/sys/class/thermal/thermal_zone0/temp")
-            if (t0.exists()) {
-                 val t = t0.readText().trim().toIntOrNull() ?: 0
-                 maxTemp = if (t > 1000) t / 1000 else t
-            }
-        }
-    } catch (_: Exception) {}
+    val maxTemp = DeviceProfile.readDeviceTemperature()
 
     var cpuUsage = "0%"
     try {
@@ -1380,8 +1349,13 @@ fun ConsolidatedMasterHeader(
             // -------------------------------------------------------------
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
             val isLocalMode = !isCloudMode
-            val hasMtp = uiState.config.draftModelPath.isNotBlank() && File(uiState.config.draftModelPath).exists()
-            val draftName = if (hasMtp) File(uiState.config.draftModelPath).nameWithoutExtension else null
+            val effectiveDraftPath = if (uiState.localModelLoaded) {
+                uiState.activeDraftModelPath
+            } else {
+                uiState.config.draftModelPath.ifBlank { null }
+            }
+            val hasMtp = !effectiveDraftPath.isNullOrBlank() && File(effectiveDraftPath).exists()
+            val draftName = if (hasMtp) File(effectiveDraftPath!!).nameWithoutExtension else null
             val rawBaseName = uiState.activeModelName.ifBlank {
                 if (uiState.config.localModelPath.isNotBlank()) File(uiState.config.localModelPath).nameWithoutExtension else "GEMMA-4-E2B"
             }
@@ -1393,7 +1367,7 @@ fun ConsolidatedMasterHeader(
                 .replace("-Q4_K_XL", " Q4")
                 .replace("-BF16", "")
 
-            val modeLabel = if (draftName != null) "MTP" else "STANDALONE"
+            val modeLabel = if (draftName != null) "MTP: $draftName" else "STANDALONE"
             val tpsSuffix = if (uiState.tokensPerSecond > 0f) {
                 val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond)
                 " • $formattedTps T/s"

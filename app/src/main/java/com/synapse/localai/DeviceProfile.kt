@@ -92,4 +92,42 @@ object DeviceProfile {
         val mask = ((1 shl perf) - 1) shl little
         return mask.toString(16)
     }
+
+    /**
+     * Reads the real-time package / CPU temperature in °C from system thermal zones.
+     */
+    fun readDeviceTemperature(): Int {
+        var maxTemp = 0
+        try {
+            val thermalDir = File("/sys/class/thermal")
+            val zones = thermalDir.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") } ?: emptyArray()
+            for (zone in zones) {
+                val typeFile = File(zone, "type")
+                val tempFile = File(zone, "temp")
+                if (tempFile.exists()) {
+                    val type = if (typeFile.exists()) typeFile.readText().lowercase() else ""
+                    val t = tempFile.readText().trim().toIntOrNull() ?: 0
+                    val normalized = if (t > 1000) t / 1000 else t
+                    if (normalized in 20..115) {
+                        if (type.contains("cpu") || type.contains("tsens") || type.contains("cluster")) {
+                            maxTemp = normalized
+                            break
+                        }
+                        if (normalized > maxTemp && normalized != 37) {
+                            maxTemp = normalized
+                        }
+                    }
+                }
+            }
+            if (maxTemp == 0 || maxTemp == 37) {
+                val t0 = File("/sys/class/thermal/thermal_zone0/temp")
+                if (t0.exists()) {
+                    val t = t0.readText().trim().toIntOrNull() ?: 0
+                    val normalized = if (t > 1000) t / 1000 else t
+                    if (normalized in 20..115) maxTemp = normalized
+                }
+            }
+        } catch (_: Exception) {}
+        return maxTemp
+    }
 }

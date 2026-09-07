@@ -207,6 +207,13 @@ class GGUFModelClient {
                 try {
                     android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE)
                 } catch (_: Exception) {}
+                // Eliminate busy-spin polling across OpenMP and GGML worker threads
+                try {
+                    Os.setenv("OMP_WAIT_POLICY", "PASSIVE", true)
+                    Os.setenv("OMP_NUM_THREADS", "4", true)
+                    Os.setenv("KMP_BLOCKTIME", "0", true)
+                    Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
+                } catch (_: Exception) {}
                 val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
                 Os.dup2(fd, OsConstants.STDOUT_FILENO)
                 Os.dup2(fd, OsConstants.STDERR_FILENO)
@@ -333,48 +340,42 @@ class GGUFModelClient {
                 baseArgs.add("--no-mmap")
             }
 
-            // 3. Auto detect MTP (strictly enforce model family matching)
+            // 3. Auto detect MTP draft (strictly enforce model family matching)
             var activeDraftPath = draftModelPath
             if (activeDraftPath.isNullOrBlank()) {
                 val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
                 if (matched != null && matched.exists()) {
                     activeDraftPath = matched.absolutePath
                 }
-            } else {
-                // Ensure existing draftModelPath actually matches the base model family
-                val draftName = File(activeDraftPath).nameWithoutExtension.lowercase()
-                val isFamilyMatch = when {
-                    baseName.contains("gemma") && draftName.contains("gemma") -> true
-                    baseName.contains("qwen") && draftName.contains("qwen") -> true
-                    baseName.contains("llama") && draftName.contains("llama") -> true
-                    else -> false
-                }
-                if (!isFamilyMatch) {
-                    fileLog("⚠️ Incompatible MTP draft ($draftName) discarded for base model ($baseName)")
+            }
+
+            if (!activeDraftPath.isNullOrBlank()) {
+                val draftFile = File(activeDraftPath)
+                if (!draftFile.exists()) {
                     activeDraftPath = null
+                } else {
+                    val draftName = draftFile.nameWithoutExtension.lowercase()
+                    val isFamilyMatch = when {
+                        baseName.contains("gemma") && draftName.contains("gemma") -> true
+                        baseName.contains("qwen") && draftName.contains("qwen") -> true
+                        baseName.contains("llama") && draftName.contains("llama") -> true
+                        baseName.contains("phi") && draftName.contains("phi") -> true
+                        baseName.contains("deepseek") && draftName.contains("deepseek") -> true
+                        else -> false
+                    }
+                    if (!isFamilyMatch) {
+                        fileLog("⚠️ Incompatible MTP draft ($draftName) does not match base model ($baseName). Discarding draft and running in STANDALONE mode.")
+                        activeDraftPath = null
+                    }
                 }
             }
 
             val hasDraft = !activeDraftPath.isNullOrBlank() && File(activeDraftPath).exists()
             val trialArgs = baseArgs.toMutableList()
 
-            val isStandaloneDraft = if (hasDraft) {
-                try {
-                    val draftFile = File(activeDraftPath!!)
-                    if (draftFile.name.startsWith("mtp-", ignoreCase = true) || draftFile.name.contains("assistant", ignoreCase = true)) {
-                        fileLog("ℹ️ '${draftFile.name}' is an auxiliary MTP head (Next-N tensor adapter, not standalone autoregressive draft). Skipping --model-draft to preserve engine stability.")
-                        false
-                    } else {
-                        true
-                    }
-                } catch (_: Exception) {
-                    false
-                }
-            } else false
-
-            if (isStandaloneDraft) {
+            if (hasDraft) {
                 activeDraftModelPath = activeDraftPath
-                fileLog("Speculative Decoding linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap)")
+                fileLog("MTP Draft Companion candidate linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap)")
                 trialArgs.add("--model-draft")
                 trialArgs.add(activeDraftPath)
                 trialArgs.add("--draft")
@@ -412,13 +413,18 @@ class GGUFModelClient {
 
             val startTime = System.currentTimeMillis()
             var serverBecameAlive = false
+            var draftFailureDetected = false
+
+            // Fail fast on draft attempts (15s max) to prevent 100% CPU spinlock
+            val maxStartupWait = if (hasDraft) 15_000L else SERVER_START_TIMEOUT_MS
 
             // 4. Polling loop with native error interception
-            while (System.currentTimeMillis() - startTime < SERVER_START_TIMEOUT_MS) {
+            while (System.currentTimeMillis() - startTime < maxStartupWait) {
                 if (isServerReady()) {
                     val totalSec = (System.currentTimeMillis() - startTime) / 1000
                     fileLog("🚀 Server fully ONLINE (HTTP 200) in ${totalSec}s!")
                     isLoaded = true
+                    activeDraftModelPath = if (hasDraft) activeDraftPath else null
                     hw?.let { h ->
                         val mask = DeviceProfile.performanceAffinityMask(h)
                         ZramOptimizer.pinToPerformanceCores(mask)
@@ -436,11 +442,37 @@ class GGUFModelClient {
                 val retCode = nativeReturnCode.get()
                 if (retCode != null && retCode != 0) {
                     fileLog("⚠️ Native server start failed with exit code: $retCode")
+                    draftFailureDetected = true
                     break
                 }
 
+                if (hasDraft && logFile.exists()) {
+                    val hasLogDraftError = try {
+                        val lines = logFile.readLines().takeLast(10)
+                        lines.any { line ->
+                            val l = line.lowercase()
+                            l.contains("failed to load draft") ||
+                            l.contains("error loading model") ||
+                            l.contains("failed to load model") ||
+                            l.contains("different vocabulary") ||
+                            l.contains("different n_vocab") ||
+                            l.contains("vocab mismatch") ||
+                            l.contains("invalid draft") ||
+                            l.contains("llama_model_load: error") ||
+                            l.contains("abort") ||
+                            l.contains("sigsegv")
+                        }
+                    } catch (_: Exception) { false }
+
+                    if (hasLogDraftError) {
+                        fileLog("⚠️ Native draft loading error detected in native_log.txt! Aborting draft to prevent spinlock.")
+                        draftFailureDetected = true
+                        break
+                    }
+                }
+
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                val progress = (elapsedSec / 35f).coerceIn(0.08f, 0.95f)
+                val progress = (elapsedSec / 25f).coerceIn(0.08f, 0.95f)
                 val statusText = if (serverBecameAlive) {
                     "Loading tensors into RAM (${elapsedSec.toInt()}s)..."
                 } else {
@@ -454,14 +486,24 @@ class GGUFModelClient {
             }
 
             val finalError = try { if (logFile.exists()) logFile.readLines().takeLast(6).joinToString(" | ") else "" } catch (_: Exception) { "" }
-            fileLog("Boot timeout. Native output: $finalError")
+            fileLog("Startup pass ended. isReady=${isServerReady()}, hasDraft=$hasDraft, draftFailureDetected=$draftFailureDetected. Output: $finalError")
 
-            // If speculative decoding was attempted with draft args and failed, fallback to base model
-            if (hasDraft) {
-                fileLog("Attempting fallback to standalone base model...")
-                onStatus("Falling back to base model... ⏳")
-                val fallbackSuccess = startServerFallback(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
+            // If MTP/draft loading failed or timed out, do NOT spinlock at 100% CPU.
+            // Immediately fall back to STANDALONE mode.
+            if (hasDraft && !isLoaded) {
+                fileLog("Draft companion failed to load. Gracefully falling back to STANDALONE mode immediately...")
+                onStatus("Draft failed: Falling back to STANDALONE mode... ⏳")
+                
+                try { LlamaServerJNI.stop() } catch (_: Throwable) {}
+                try { newThread.interrupt() } catch (_: Exception) {}
+                serverThread = null
+                globalServerThread = null
+                activeDraftModelPath = null
+                delay(400)
+
+                val fallbackSuccess = startServerStandalone(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
                 if (fallbackSuccess) {
+                    activeDraftModelPath = null
                     return@withLock true
                 }
             }
@@ -472,7 +514,7 @@ class GGUFModelClient {
         }
     }
 
-    private suspend fun startServerFallback(
+    private suspend fun startServerStandalone(
         resolvedPath: String,
         args: Array<String>,
         logFile: File,
@@ -480,16 +522,22 @@ class GGUFModelClient {
         onProgress: (Float, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         activeDraftModelPath = null
-        fileLog("Launching Fallback Server: ${args.joinToString(" ")}")
-        onStatus("Launching High-Speed Base Model... ⏳")
+        fileLog("Launching STANDALONE Server: ${args.joinToString(" ")}")
+        onStatus("Launching High-Speed Base Model (STANDALONE)... ⏳")
+
+        try { LlamaServerJNI.stop() } catch (_: Throwable) {}
+        try {
+            Runtime.getRuntime().exec(arrayOf("sh", "-c", "killall -9 llama-server 2>/dev/null; pkill -9 llama-server 2>/dev/null"))
+        } catch (_: Exception) {}
+        delay(300)
 
         val fallbackReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
         val newThread = Thread {
             val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(args, logFile) }
             fallbackReturnCode.set(ret)
-            fileLog("Fallback server thread returned: $ret")
+            fileLog("Standalone server thread returned: $ret")
         }.apply {
-            name = "llama-server-fallback"
+            name = "llama-server-standalone"
             isDaemon = true
             start()
         }
@@ -504,26 +552,27 @@ class GGUFModelClient {
         while (System.currentTimeMillis() - startTime < 60_000L) {
             if (isServerReady()) {
                 val totalSec = (System.currentTimeMillis() - startTime) / 1000
-                fileLog("🚀 Fallback Server ONLINE in ${totalSec}s!")
+                fileLog("🚀 STANDALONE Server ONLINE in ${totalSec}s!")
                 isLoaded = true
+                activeDraftModelPath = null
                 val hwFb = appContext?.let { DeviceProfile.detect(it) }
                 hwFb?.let { h ->
                     val mask = DeviceProfile.performanceAffinityMask(h)
                     ZramOptimizer.pinToPerformanceCores(mask)
                 }
                 onProgress(1.0f, "ONLINE • 100%")
-                onStatus("Neural Core Ready (${totalSec}s) ✓")
+                onStatus("Neural Core Ready (STANDALONE) (${totalSec}s) ✓")
                 return@withContext true
             }
 
             val fbCode = fallbackReturnCode.get()
             if (fbCode != null && fbCode != 0) {
-                fileLog("⚠️ Fallback server start failed with exit code: $fbCode")
+                fileLog("⚠️ Standalone server start failed with exit code: $fbCode")
                 break
             }
 
             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-            val progress = (elapsedSec / 12f).coerceIn(0.10f, 0.95f)
+            val progress = (elapsedSec / 15f).coerceIn(0.10f, 0.95f)
             onProgress(progress, "Loading Tensors (${elapsedSec.toInt()}s)...")
             onStatus("Loading Tensors (${elapsedSec.toInt()}s)...")
 
@@ -760,6 +809,7 @@ class GGUFModelClient {
 
         lastFinishReason = null
         lastTokenCount = 0
+        var lastThermalCheckTime = 0L
 
         // Hard Repetition Safeguard: stream interceptor tracking repeated lines
         val lineBuffer = StringBuilder()
@@ -774,6 +824,20 @@ class GGUFModelClient {
                 val data = l.removePrefix("data:").trim()
                 if (data == "[DONE]") break
                 if (data.isEmpty()) continue
+
+                // ── Mandatory Hardware Throttling & Core Thermal Duty-Cycle Recovery ──
+                delay(8L)
+
+                // ── Automatic Thermal Breaker: Pause 2s if device temp > 68°C ────────
+                val now = System.currentTimeMillis()
+                if (now - lastThermalCheckTime >= 600L) {
+                    lastThermalCheckTime = now
+                    val currentTemp = DeviceProfile.readDeviceTemperature()
+                    if (currentTemp > 68) {
+                        fileLog("⚠️ [THERMAL BREAKER] Device SoC temp is ${currentTemp}°C (> 68°C). Pausing generation for 2000ms...")
+                        delay(2000L)
+                    }
+                }
 
                 try {
                     val json = JSONObject(data)
