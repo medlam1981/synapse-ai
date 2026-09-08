@@ -407,11 +407,13 @@ class AgentViewModel : ViewModel() {
                     localPath = cachedModels.first().absolutePath
                 }
             }
-            val rawDraft = prefs.getString("draft_model_path", "") ?: ""
+            val rawDraft = AgentSettingsRepository.getDraftModelPath(context).ifBlank {
+                prefs.getString("draft_model_path", "") ?: ""
+            }
             val isExplicitStandalone = rawDraft == "STANDALONE"
             val draftPath = when {
                 isExplicitStandalone -> "STANDALONE"
-                rawDraft.isNotBlank() && File(rawDraft).exists() -> rawDraft
+                rawDraft.isNotBlank() -> rawDraft
                 else -> {
                     if (localPath.isNotBlank()) {
                         val matched = ModelScanner.findMatchingMtpModel(localPath, context)
@@ -519,6 +521,33 @@ class AgentViewModel : ViewModel() {
         }
     }
 
+    fun setDraftModelPath(context: Context, path: String) {
+        val trimmed = path.trim()
+        val currentConfig = _uiState.value.config
+        val updatedConfig = currentConfig.copy(draftModelPath = trimmed)
+        val effectiveDraft = if (trimmed.isNotBlank() && trimmed != "STANDALONE") trimmed else null
+
+        _uiState.update { 
+            it.copy(
+                config = updatedConfig,
+                activeDraftModelPath = effectiveDraft
+            ) 
+        }
+
+        AgentSettingsRepository.setDraftModelPath(context, trimmed)
+        try {
+            prefs(context).edit().putString("draft_model_path", trimmed).commit()
+        } catch (_: Exception) {}
+
+        if (updatedConfig.preferredModelType == ModelType.GGUF && updatedConfig.localModelPath.isNotBlank()) {
+            closeAllModels()
+            viewModelScope.launch {
+                delay(300)
+                triggerModelLoad(context, updatedConfig.localModelPath)
+            }
+        }
+    }
+
     fun saveConfig(context: Context, config: AgentConfig) {
         val finalConfig = config.copy(
             contextLength = config.contextLength.coerceIn(2048, 16384),
@@ -545,6 +574,7 @@ class AgentViewModel : ViewModel() {
             ) 
         }
         
+        AgentSettingsRepository.saveConfig(context, finalConfig)
         val prefs = prefs(context)
         prefs.edit().apply {
             putString("local_model_path", finalConfig.localModelPath)
@@ -662,10 +692,6 @@ class AgentViewModel : ViewModel() {
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
-                                    if (effectiveDraft == null && config.draftModelPath != "STANDALONE") {
-                                        _uiState.update { it.copy(config = it.config.copy(draftModelPath = "STANDALONE")) }
-                                        prefs(context).edit().putString("draft_model_path", "STANDALONE").apply()
-                                    }
                                     addSystemLog("Local Model Active: $modelName" + if (effectiveDraft != null) " (MTP Active)" else " (STANDALONE)")
                                     viewModelScope.launch(Dispatchers.IO) {
                                         val systemPrompt = buildSystemPrompt(context, forLocalModel = true)

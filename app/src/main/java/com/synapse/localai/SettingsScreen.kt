@@ -643,7 +643,7 @@ fun SettingsScreenContent(
                                     .background(if (isSelected) primaryContainer else surfaceContainer)
                                     .clickable {
                                         val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
-                                        val newDraft = if (config.draftModelPath == "STANDALONE") "STANDALONE" else (matchedMtp?.absolutePath ?: "")
+                                        val newDraft = if (config.draftModelPath.isNotBlank()) config.draftModelPath else (matchedMtp?.absolutePath ?: "STANDALONE")
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
                                             draftModelPath = newDraft,
@@ -658,7 +658,7 @@ fun SettingsScreenContent(
                                     selected = isSelected,
                                     onClick = {
                                         val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
-                                        val newDraft = if (config.draftModelPath == "STANDALONE") "STANDALONE" else (matchedMtp?.absolutePath ?: "")
+                                        val newDraft = if (config.draftModelPath.isNotBlank()) config.draftModelPath else (matchedMtp?.absolutePath ?: "STANDALONE")
                                         val newConfig = config.copy(
                                             localModelPath = file.absolutePath,
                                             draftModelPath = newDraft,
@@ -731,8 +731,7 @@ fun SettingsScreenContent(
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isStandalone) primaryContainer else surfaceContainer)
                             .clickable {
-                                val newConfig = config.copy(draftModelPath = "STANDALONE")
-                                viewModel.saveConfig(context, newConfig)
+                                viewModel.setDraftModelPath(context, "STANDALONE")
                             }
                             .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -740,8 +739,7 @@ fun SettingsScreenContent(
                             RadioButton(
                                 selected = isStandalone,
                                 onClick = {
-                                    val newConfig = config.copy(draftModelPath = "STANDALONE")
-                                    viewModel.saveConfig(context, newConfig)
+                                    viewModel.setDraftModelPath(context, "STANDALONE")
                                 },
                                 colors = RadioButtonDefaults.colors(selectedColor = primary)
                             )
@@ -754,15 +752,15 @@ fun SettingsScreenContent(
 
                         // Option 2: Discovered MTP models from storage
                         mtpModels.forEach { mtpFile ->
-                            val isMtpSelected = config.draftModelPath == mtpFile.absolutePath
+                            val isMtpSelected = config.draftModelPath == mtpFile.absolutePath ||
+                                (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE" && File(config.draftModelPath).name == mtpFile.name)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (isMtpSelected) primaryContainer else surfaceContainer)
                                     .clickable {
-                                        val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
-                                        viewModel.saveConfig(context, newConfig)
+                                        viewModel.setDraftModelPath(context, mtpFile.absolutePath)
                                     }
                                     .padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -770,8 +768,7 @@ fun SettingsScreenContent(
                                 RadioButton(
                                     selected = isMtpSelected,
                                     onClick = {
-                                        val newConfig = config.copy(draftModelPath = mtpFile.absolutePath)
-                                        viewModel.saveConfig(context, newConfig)
+                                        viewModel.setDraftModelPath(context, mtpFile.absolutePath)
                                     },
                                     colors = RadioButtonDefaults.colors(selectedColor = primary)
                                 )

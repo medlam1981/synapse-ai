@@ -209,26 +209,20 @@ class GGUFModelClient {
     private fun isDraftErrorLine(line: String): Boolean {
         val l = line.lowercase()
         return l.contains("failed to load draft") ||
-               l.contains("error loading model") ||
-               l.contains("failed to load model") ||
+               l.contains("error loading draft") ||
                l.contains("different vocabulary") ||
                l.contains("different n_vocab") ||
                l.contains("vocab mismatch") ||
                l.contains("invalid draft") ||
-               l.contains("llama_model_load: error") ||
                l.contains("cannot load draft") ||
-               l.contains("incompatible") ||
-               l.contains("error: failed to load") ||
                l.contains("failed to build speculative graph") ||
                l.contains("speculative decoding failed") ||
                l.contains("speculative graph error") ||
-               l.contains("key not found in model") ||
                l.contains("draft model is not compatible") ||
                l.contains("draft model has different") ||
                l.contains("failed to initialize draft") ||
                l.contains("failed to init draft") ||
                l.contains("error initializing draft") ||
-               l.contains("abort") ||
                l.contains("sigsegv")
     }
 
@@ -492,35 +486,16 @@ class GGUFModelClient {
             while (System.currentTimeMillis() - startTime < maxStartupWait) {
                 if (isServerReady()) {
                     val totalSec = (System.currentTimeMillis() - startTime) / 1000
-                    fileLog("🚀 Server fully ONLINE (HTTP 200) in ${totalSec}s!")
+                    fileLog("🚀 Server fully ONLINE (HTTP 200) in ${totalSec}s! (draft: ${if (hasDraft) activeDraftPath else "STANDALONE"})")
                     isLoaded = true
-
-                    var draftActuallyLoaded = false
-                    if (hasDraft) {
-                        val hasDraftError = checkRecentErrors() || (logFile.exists() && checkLogFileForDraftError(logFile))
-                        if (hasDraftError) {
-                            fileLog("⚠️ MTP Draft companion failed or was rejected in native engine logs! Falling back active draft to null (STANDALONE).")
-                            draftActuallyLoaded = false
-                            activeDraftModelPath = null
-                            appContext?.let { ctx ->
-                                val prefs = ctx.getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
-                                prefs.edit().putString("draft_model_path", "STANDALONE").apply()
-                            }
-                            onStatus("⚠️ MTP Draft incompatible with base model. Switched to STANDALONE.")
-                        } else {
-                            draftActuallyLoaded = true
-                            activeDraftModelPath = activeDraftPath
-                        }
-                    } else {
-                        activeDraftModelPath = null
-                    }
+                    activeDraftModelPath = if (hasDraft) activeDraftPath else null
 
                     hw?.let { h ->
                         val mask = DeviceProfile.performanceAffinityMask(h)
                         ZramOptimizer.pinToPerformanceCores(mask)
                     }
                     onProgress(1.0f, "ONLINE • 100%")
-                    val readyMsg = if (draftActuallyLoaded) {
+                    val readyMsg = if (hasDraft) {
                         "Neural Core Ready (MTP Active) (${totalSec}s) ✓"
                     } else {
                         "Neural Core Ready (STANDALONE) (${totalSec}s) ✓"
@@ -589,11 +564,7 @@ class GGUFModelClient {
                 val fallbackSuccess = startServerStandalone(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
                 if (fallbackSuccess) {
                     activeDraftModelPath = null
-                    appContext?.let { ctx ->
-                        val prefs = ctx.getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
-                        prefs.edit().putString("draft_model_path", "STANDALONE").apply()
-                    }
-                    onStatus("⚠️ MTP Draft incompatible: Switched to STANDALONE mode ✓")
+                    onStatus("⚠️ Standalone mode active ✓")
                     return@withLock true
                 }
             }
@@ -652,10 +623,6 @@ class GGUFModelClient {
                 fileLog("🚀 STANDALONE Server ONLINE in ${totalSec}s!")
                 isLoaded = true
                 activeDraftModelPath = null
-                appContext?.let { ctx ->
-                    val prefs = ctx.getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
-                    prefs.edit().putString("draft_model_path", "STANDALONE").apply()
-                }
                 val hwFb = appContext?.let { DeviceProfile.detect(it) }
                 hwFb?.let { h ->
                     val mask = DeviceProfile.performanceAffinityMask(h)

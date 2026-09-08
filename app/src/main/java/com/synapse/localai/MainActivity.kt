@@ -1350,9 +1350,9 @@ fun ConsolidatedMasterHeader(
             // -------------------------------------------------------------
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
             val isLocalMode = !isCloudMode
-            val effectiveDraftPath = uiState.activeDraftModelPath
-            val hasMtp = isLocalMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE" && File(effectiveDraftPath).exists()
-            val draftFile = if (hasMtp) File(effectiveDraftPath!!) else null
+            val effectiveDraftPath = uiState.activeDraftModelPath ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
+            val hasMtp = isLocalMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
+            val draftFile = if (hasMtp && effectiveDraftPath != null) File(effectiveDraftPath) else null
             val draftName = draftFile?.nameWithoutExtension
             val draftTag = if (hasMtp && draftName != null) {
                 val quantRegex = Regex("""(?i)(Q\d+_[A-Z0-9_]+|BF16|FP16|F16|F32)""")
