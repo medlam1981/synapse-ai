@@ -76,8 +76,8 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 16384
-    var threadCount: Int = 8
+    var contextLength: Int = 4096
+    var threadCount: Int = 4
     var maxTokens: Int = -1
     var temperature: Float = 0.5f
     var topP: Float = 0.90f
@@ -87,7 +87,6 @@ class GGUFModelClient {
     var presencePenalty: Float = 0.15f
     var draftModelPath: String? = null
     var activeDraftModelPath: String? = null
-    var gpuLayers: Int = 0
     var useMmap: Boolean = true
     var draftUseMmap: Boolean = true
 
@@ -234,9 +233,9 @@ class GGUFModelClient {
                 // Eliminate busy-spin polling across OpenMP and GGML worker threads
                 try {
                     Os.setenv("OMP_WAIT_POLICY", "PASSIVE", true)
-                    Os.setenv("OMP_NUM_THREADS", "8", true)
+                    Os.setenv("OMP_NUM_THREADS", "4", true)
                     Os.setenv("KMP_BLOCKTIME", "0", true)
-                    Os.setenv("GGML_SCHED_MAX_COPIES", "8", true)
+                    Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
                 } catch (_: Exception) {}
 
                 // Eliminate pipe buffer deadlock: Merge stderr directly into stdout at the OS level
@@ -357,14 +356,12 @@ class GGUFModelClient {
             // Forcing flash-attn on these causes FA graph assertion crashes — disable for Qwen only.
             val flashAttnArg = if (isQwen) "off" else "on"
 
-            val safeThreads = threadCount.coerceIn(1, 8).let { if (it < 8) 8 else it }
-            val resolvedCtx = if (contextLength >= 2048) contextLength else 16384
+            val safeThreads = 4
+            val resolvedCtx = 4096
 
             // Fixed sustainable batch sizes for mobile inference
             val effectiveBatch = 512
             val effectiveUbatch = 256
-
-            val effectiveGpuLayers = 0 // CPU-only: libllama.so → libggml-cpu.so, no GPU backend
 
             val baseArgs = mutableListOf(
                 "-m", resolvedPath,
@@ -377,7 +374,7 @@ class GGUFModelClient {
                 "-ub", effectiveUbatch.toString(),
                 "--threads", safeThreads.toString(),
                 "-tb", safeThreads.toString(),
-                "-ngl", "0",
+                "--n-gpu-layers", "0",
                 "--flash-attn", flashAttnArg,
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,

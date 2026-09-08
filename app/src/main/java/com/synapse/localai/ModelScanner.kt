@@ -84,7 +84,7 @@ object ModelScanner {
                 val prefs = getPrefs(context)
                 val stored = prefs.getStringSet(PREF_CACHED_BASE, null)
                 if (!stored.isNullOrEmpty()) {
-                    val list = stored.map { File(it) }.filter { it.exists() }
+                    val list = stored.map { File(it) }.filter { it.exists() && isBaseModelFile(it) }
                     if (list.isNotEmpty()) {
                         cachedBaseModels = list
                         return list
@@ -148,13 +148,20 @@ object ModelScanner {
     fun scanBaseModels(): List<File> = getBaseModels(forceRescan = false)
     fun scanMtpModels(): List<File> = getMtpModels(forceRescan = false)
 
+    fun isBaseModelFile(file: File): Boolean {
+        val name = file.name.lowercase()
+        return !name.startsWith("mtp-") && !name.contains("draft")
+    }
+
     private fun scanBaseModelsFromDisk(): List<File> {
         val found = mutableListOf<File>()
 
         for (path in MODELS_DIRS) {
             val dir = File(path)
             if (dir.exists() && dir.isDirectory) {
-                dir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) }?.let {
+                dir.listFiles { f ->
+                    f.isFile && f.extension.equals("gguf", ignoreCase = true) && isBaseModelFile(f)
+                }?.let {
                     found.addAll(it)
                 }
             }
@@ -164,7 +171,9 @@ object ModelScanner {
             LEGACY_DIRS.forEach { path ->
                 val dir = File(path)
                 if (dir.exists() && dir.isDirectory) {
-                    dir.listFiles { f -> f.isFile && f.extension.equals("gguf", ignoreCase = true) }?.let {
+                    dir.listFiles { f ->
+                        f.isFile && f.extension.equals("gguf", ignoreCase = true) && isBaseModelFile(f)
+                    }?.let {
                         found.addAll(it)
                     }
                 }

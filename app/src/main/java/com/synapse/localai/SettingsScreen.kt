@@ -113,7 +113,6 @@ fun SettingsScreenContent(
     var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
-    var gpuLayersState by remember(config.gpuLayers) { mutableStateOf(config.gpuLayers) }
 
     LaunchedEffect(Unit) {
         // Zero-Overhead: Read exclusively from cached manifests (NO automatic filesystem sweep on resume)
@@ -634,7 +633,7 @@ fun SettingsScreenContent(
                     // Base Model Picker
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                        models.forEach { file ->
+                        models.filter { ModelScanner.isBaseModelFile(it) }.forEach { file ->
                             val isSelected = config.localModelPath == file.absolutePath
 
                             Row(
@@ -831,69 +830,41 @@ fun SettingsScreenContent(
                         }
                     }
 
-                    // Hardware Offloading Controls (GPU Layers)
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("HARDWARE OFFLOADING & ACCELERATION:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
 
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("GPU Offloaded Layers (ngl)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("$gpuLayersState Layers", color = primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                            }
-
-                            Slider(
-                                value = gpuLayersState.toFloat(),
-                                onValueChange = { gpuLayersState = it.toInt() },
-                                onValueChangeFinished = {
-                                    val newConfig = config.copy(gpuLayers = gpuLayersState)
-                                    viewModel.saveConfig(context, newConfig)
-                                },
-                                valueRange = 0f..33f,
-                                steps = 32,
-                                colors = SliderDefaults.colors(thumbColor = primary, activeTrackColor = primary)
-                            )
-                        }
-
-                        Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-
-                        // Bottom Row: Centered single [Re-Scan Models] button
-                        Button(
-                            onClick = {
-                                isScanning = true
-                                coroutineScope.launch {
-                                    val (freshBase, freshMtp) = withContext(Dispatchers.IO) {
-                                        viewModel.rescanModels(context)
-                                    }
-                                    models = freshBase
-                                    mtpModels = freshMtp
-                                    isScanning = false
-                                    Toast.makeText(context, "Discovered ${freshBase.size} models, ${freshMtp.size} MTP drafts", Toast.LENGTH_SHORT).show()
+                    // Bottom Row: Centered single [Re-Scan Models] button
+                    Button(
+                        onClick = {
+                            isScanning = true
+                            coroutineScope.launch {
+                                val (freshBase, freshMtp) = withContext(Dispatchers.IO) {
+                                    viewModel.rescanModels(context)
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = primaryContainer,
-                                contentColor = onPrimaryContainer
-                            )
-                        ) {
-                            if (isScanning) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = onPrimaryContainer
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("Scanning Storage...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            } else {
-                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = onPrimaryContainer)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Re-Scan Models", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                models = freshBase
+                                mtpModels = freshMtp
+                                isScanning = false
+                                Toast.makeText(context, "Discovered ${freshBase.size} models, ${freshMtp.size} MTP drafts", Toast.LENGTH_SHORT).show()
                             }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = primaryContainer,
+                            contentColor = onPrimaryContainer
+                        )
+                    ) {
+                        if (isScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = onPrimaryContainer
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Scanning Storage...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = onPrimaryContainer)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Re-Scan Models", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

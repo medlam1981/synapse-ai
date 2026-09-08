@@ -39,6 +39,7 @@ object NeuralPrimingManager {
                 var localPath = prefs.getString("local_model_path", "") ?: ""
                 if (localPath.isBlank()) {
                     val cachedModels = ModelScanner.getBaseModels(appContext, forceRescan = false)
+                        .filter { ModelScanner.isBaseModelFile(it) }
                     if (cachedModels.isNotEmpty()) {
                         localPath = cachedModels.first().absolutePath
                     }
@@ -63,12 +64,11 @@ object NeuralPrimingManager {
                 val client = GGUFModelClient().apply {
                     serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0"
                     serverPort = prefs.getInt("server_port", 8088)
-                    contextLength = prefs.getInt("context_length", 16384)
-                    threadCount = prefs.getInt("thread_count", 8)
+                    contextLength = prefs.getInt("context_length", 4096)
+                    threadCount = prefs.getInt("thread_count", 4)
                     maxTokens = -1
                     temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it }
                     draftModelPath = prefs.getString("draft_model_path", null)?.ifBlank { null }
-                    gpuLayers = prefs.getInt("gpu_layers", 0)
                     useMmap = prefs.getBoolean("use_mmap", true)
                     draftUseMmap = prefs.getBoolean("draft_use_mmap", true)
                 }

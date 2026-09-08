@@ -69,23 +69,25 @@ object DeviceProfile {
     }
 
     /**
-     * Optimal thread allocation prioritizing high-performance cores
-     * over efficiency clusters to maximize token generation speed without thrashing.
+     * Optimal thread allocation strictly binding to 4 high-performance cores
+     * to eliminate big.LITTLE core synchronization latency.
      */
     fun optimalThreads(hw: HardwareProfile): Int {
-        return hw.totalCores.coerceIn(4, 8)
+        return 4
     }
 
     fun optimalBatchThreads(hw: HardwareProfile): Int {
-        return hw.totalCores.coerceIn(4, 8)
+        return 4
     }
 
     /**
-     * Bitmask string for taskset to utilize all logical cores.
+     * Bitmask string for taskset to bind strictly to performance cores.
      */
     fun performanceAffinityMask(hw: HardwareProfile): String {
         val total = hw.totalCores.coerceIn(1, 16)
-        val mask = (1 shl total) - 1
+        val perf = hw.performanceCores.coerceIn(1, total)
+        val little = (total - perf).coerceAtLeast(0)
+        val mask = ((1 shl perf) - 1) shl little
         return mask.toString(16)
     }
 

@@ -84,8 +84,8 @@ data class AgentConfig(
     val geminiModelName: String = "gemini-2.0-flash",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 8088,
-    val contextLength: Int = 16384,
-    val threadCount: Int = 8,
+    val contextLength: Int = 4096,
+    val threadCount: Int = 4,
     val maxTokens: Int = -1,
     val temperature: Float = 0.5f,
     val enableVisualHistory: Boolean = false,
@@ -374,20 +374,20 @@ class AgentViewModel : ViewModel() {
             val prefs = prefs(context)
             val savedPath = prefs.getString("local_model_path", null)
             
-            val hasMigrated16k = prefs.getBoolean("has_migrated_16k_8t", false)
-            var savedContext = prefs.getInt("context_length", 16384)
-            var savedThreads = prefs.getInt("thread_count", 8)
-            if (!hasMigrated16k || savedContext < 16384 || savedThreads < 8) {
-                savedContext = 16384
-                savedThreads = 8
+            val hasMigrated4k4t = prefs.getBoolean("has_migrated_4k_4t", false)
+            var savedContext = prefs.getInt("context_length", 4096)
+            var savedThreads = prefs.getInt("thread_count", 4)
+            if (!hasMigrated4k4t) {
+                savedContext = 4096
+                savedThreads = 4
                 prefs.edit()
-                    .putBoolean("has_migrated_16k_8t", true)
-                    .putInt("context_length", 16384)
-                    .putInt("thread_count", 8)
+                    .putBoolean("has_migrated_4k_4t", true)
+                    .putInt("context_length", 4096)
+                    .putInt("thread_count", 4)
                     .apply()
             } else {
-                savedContext = savedContext.coerceIn(2048, 32768)
-                if (savedThreads < 1) savedThreads = 8
+                savedContext = savedContext.coerceIn(2048, 16384)
+                if (savedThreads < 1) savedThreads = 4
             }
             
             val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
@@ -402,6 +402,7 @@ class AgentViewModel : ViewModel() {
             var localPath = savedPath ?: ""
             if (localPath.isBlank()) {
                 val cachedModels = ModelScanner.getBaseModels(context, forceRescan = false)
+                    .filter { ModelScanner.isBaseModelFile(it) }
                 if (cachedModels.isNotEmpty()) {
                     localPath = cachedModels.first().absolutePath
                 }
@@ -420,7 +421,7 @@ class AgentViewModel : ViewModel() {
                     }
                 }
             }
-            val gpuLayers = prefs.getInt("gpu_layers", 0)
+            val gpuLayers = 0 // CPU-only: Zero GPU offloading
             val useMmap = prefs.getBoolean("use_mmap", true)
             val draftUseMmap = prefs.getBoolean("draft_use_mmap", true)
             val activeKeysList = geminiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -441,7 +442,7 @@ class AgentViewModel : ViewModel() {
                 geminiModelName = geminiModel,
                 serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
                 serverPort = prefs.getInt("server_port", 8088),
-                contextLength = if (savedContext >= 2048) savedContext else 16384,
+                contextLength = if (savedContext >= 2048) savedContext else 4096,
                 threadCount = savedThreads,
                 maxTokens = prefs.getInt("max_tokens", -1),
                 temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it },
@@ -519,7 +520,10 @@ class AgentViewModel : ViewModel() {
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {
-        val finalConfig = config.copy(contextLength = config.contextLength.coerceIn(2048, 32768))
+        val finalConfig = config.copy(
+            contextLength = config.contextLength.coerceIn(2048, 16384),
+            gpuLayers = 0
+        )
         val oldConfig = _uiState.value.config
         val oldPath = oldConfig.localModelPath
         val oldGeminiKeys = oldConfig.geminiApiKeys
@@ -627,12 +631,11 @@ class AgentViewModel : ViewModel() {
                         val client = GGUFModelClient().apply {
                             serverHost = config.serverHost
                             serverPort = config.serverPort
-                            contextLength = config.contextLength.coerceIn(2048, 32768)
+                            contextLength = config.contextLength.coerceIn(2048, 16384)
                             threadCount = config.threadCount
                             maxTokens = -1
                             temperature = config.temperature
                             draftModelPath = config.draftModelPath.ifBlank { null }
-                            gpuLayers = config.gpuLayers
                             useMmap = config.useMmap
                             draftUseMmap = config.draftUseMmap
                         }
@@ -1401,9 +1404,10 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         kotlinx.coroutines.delay(2000L)
                                     }
                                 }
-                                // 50ms (~20 FPS) throttle: on-device LLM inference rarely exceeds
-                                // 20 tok/s; 20fps UI is smooth while freeing CPU for inference.
-                                if (now - lastUiUpdateTime >= 50L) {
+                                // Stream generated tokens immediately to UI without heavy buffering to maintain high T/s rate
+                                val isThinking = responseSb.contains("<think>") && !responseSb.contains("</think>")
+                                val throttleInterval = if (isThinking) 0L else 20L
+                                if (throttleInterval == 0L || now - lastUiUpdateTime >= throttleInterval) {
                                     lastUiUpdateTime = now
                                     pushUiUpdate(responseSb.toString())
                                     pendingUiUpdate = false
@@ -1791,8 +1795,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             sb.append(chunk)
                             if (firstTokenTime == 0L) firstTokenTime = System.currentTimeMillis()
                             tokenCount++
-                            // Micro-yield for thermal breathing in worker passes
-                            kotlinx.coroutines.delay(4L)
                             onChunk?.invoke(chunk)
                         }
                     }
