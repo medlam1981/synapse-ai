@@ -1464,10 +1464,10 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         kotlinx.coroutines.delay(2000L)
                                     }
                                 }
-                                // Stream generated tokens immediately to UI without heavy buffering to maintain high T/s rate
+                                // Smooth UI update stream without per-token recomposition thrashing
                                 val isThinking = responseSb.contains("<think>") && !responseSb.contains("</think>")
-                                val throttleInterval = if (isThinking) 0L else 20L
-                                if (throttleInterval == 0L || now - lastUiUpdateTime >= throttleInterval) {
+                                val throttleInterval = if (isThinking) 35L else 25L
+                                if (now - lastUiUpdateTime >= throttleInterval) {
                                     lastUiUpdateTime = now
                                     pushUiUpdate(responseSb.toString())
                                     pendingUiUpdate = false

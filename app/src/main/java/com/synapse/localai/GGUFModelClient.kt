@@ -252,11 +252,14 @@ class GGUFModelClient {
                 try {
                     android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE)
                 } catch (_: Exception) {}
-                // Eliminate busy-spin polling across OpenMP and GGML worker threads
                 try {
-                    Os.setenv("OMP_WAIT_POLICY", "PASSIVE", true)
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_FOREGROUND)
+                } catch (_: Exception) {}
+                // Active worker thread execution without kernel futex sleep penalty
+                try {
+                    Os.setenv("OMP_WAIT_POLICY", "ACTIVE", true)
                     Os.setenv("OMP_NUM_THREADS", "4", true)
-                    Os.setenv("KMP_BLOCKTIME", "0", true)
+                    Os.unsetenv("KMP_BLOCKTIME")
                     Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
                 } catch (_: Exception) {}
 
@@ -370,16 +373,17 @@ class GGUFModelClient {
             val baseName = modelFile.nameWithoutExtension.lowercase()
             val isQwen = baseName.contains("qwen")
 
-            // KV cache type: Qwen hybrid-SSM and high-RAM devices use f16 to avoid quantization
-            // assertion failures on non-MHA attention layers.
-            val kvCacheType = if (isQwen || (hw != null && hw.totalRamMb >= 6000L)) "f16" else "q8_0"
+            // KV cache type: Strictly f16 for high-speed CPU inference.
+            // On CPU (n-gpu-layers = 0), q8_0 KV-cache lacks SIMD kernels and forces scalar
+            // dequantization on every attention head for every token, collapsing generation speed to 0.2 T/s.
+            // f16 KV-cache runs direct vector instructions without dequantization overhead.
+            val kvCacheType = "f16"
 
-            // Flash Attention: Qwen incorporates linear recurrent attention (SSM) layers.
-            // Forcing flash-attn on these causes FA graph assertion crashes — disable for Qwen only.
-            val flashAttnArg = if (isQwen) "off" else "on"
+            // Flash Attention: Disabled on CPU to allow ggml's native optimized CPU attention kernels to run.
+            val flashAttnArg = "off"
 
-            val safeThreads = 4
-            val resolvedCtx = 4096
+            val safeThreads = if (this@GGUFModelClient.threadCount in 2..8) this@GGUFModelClient.threadCount else 4
+            val resolvedCtx = if (this@GGUFModelClient.contextLength >= 2048) this@GGUFModelClient.contextLength else 4096
 
             // Fixed sustainable batch sizes for mobile inference
             val effectiveBatch = 512
@@ -438,7 +442,11 @@ class GGUFModelClient {
                 fileLog("MTP Draft Companion candidate linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap, --cache-prompt omitted for speculative graph stability)")
                 trialArgs.add("--model-draft")
                 trialArgs.add(activeDraftPath)
+                trialArgs.add("--spec-type")
+                trialArgs.add("draft")
                 trialArgs.add("--draft")
+                trialArgs.add("4")
+                trialArgs.add("--draft-max")
                 trialArgs.add("4")
                 trialArgs.add("--draft-min")
                 trialArgs.add("1")
@@ -490,10 +498,6 @@ class GGUFModelClient {
                     isLoaded = true
                     activeDraftModelPath = if (hasDraft) activeDraftPath else null
 
-                    hw?.let { h ->
-                        val mask = DeviceProfile.performanceAffinityMask(h)
-                        ZramOptimizer.pinToPerformanceCores(mask)
-                    }
                     onProgress(1.0f, "ONLINE • 100%")
                     val readyMsg = if (hasDraft) {
                         "Neural Core Ready (MTP Active) (${totalSec}s) ✓"
@@ -623,11 +627,6 @@ class GGUFModelClient {
                 fileLog("🚀 STANDALONE Server ONLINE in ${totalSec}s!")
                 isLoaded = true
                 activeDraftModelPath = null
-                val hwFb = appContext?.let { DeviceProfile.detect(it) }
-                hwFb?.let { h ->
-                    val mask = DeviceProfile.performanceAffinityMask(h)
-                    ZramOptimizer.pinToPerformanceCores(mask)
-                }
                 onProgress(1.0f, "ONLINE • 100%")
                 onStatus("Neural Core Ready (STANDALONE) (${totalSec}s) ✓")
                 return@withContext true
@@ -840,7 +839,7 @@ class GGUFModelClient {
             .put("stream", true)
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)
-            .put("cache_prompt", true)
+            .put("cache_prompt", activeDraftModelPath == null)
             .put("stop", stopArray)
 
         val bodyBytes = body.toString().toByteArray()

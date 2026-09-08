@@ -74,20 +74,8 @@ object ZramOptimizer {
      * directly to the big / high-performance CPU cores (e.g. Kryo Gold).
      */
     suspend fun pinToPerformanceCores(mask: String = "f0"): Boolean = withContext(Dispatchers.IO) {
-        val pid = Process.myPid()
-        // 1. Direct unprivileged taskset on current process and threads (works without root)
-        try {
-            val userCmd = "taskset -p $mask $pid 2>/dev/null; for tid in /proc/$pid/task/*; do taskset -p $mask \$(basename \$tid) 2>/dev/null; done"
-            Runtime.getRuntime().exec(arrayOf("sh", "-c", userCmd)).waitFor()
-        } catch (_: Exception) {}
-
-        // 2. Superuser taskset targeting all app and llama-server pids if root is granted
-        val rootCmd = "taskset -a -p $mask $pid 2>/dev/null; for p in \$(pgrep -f com.synapse.localai); do taskset -a -p $mask \$p 2>/dev/null; done; for p in \$(pgrep llama-server); do taskset -a -p $mask \$p 2>/dev/null; done"
-        val ok = executeSuperuserCommand(rootCmd)
-        if (ok) {
-            Log.i(TAG, "✓ CPU affinity pinned to performance cores mask ($mask) via root")
-        }
-        ok
+        // Preserving Linux EAS (Energy Aware Scheduling) and dynamic CPU frequency scaling
+        true
     }
 
     /**
