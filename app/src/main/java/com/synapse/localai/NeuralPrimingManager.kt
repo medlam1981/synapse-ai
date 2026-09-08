@@ -63,8 +63,8 @@ object NeuralPrimingManager {
                 val client = GGUFModelClient().apply {
                     serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0"
                     serverPort = prefs.getInt("server_port", 8088)
-                    contextLength = prefs.getInt("context_length", 8192)
-                    threadCount = prefs.getInt("thread_count", 4)
+                    contextLength = prefs.getInt("context_length", 16384)
+                    threadCount = prefs.getInt("thread_count", 8)
                     maxTokens = -1
                     temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it }
                     draftModelPath = prefs.getString("draft_model_path", null)?.ifBlank { null }

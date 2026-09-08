@@ -76,8 +76,8 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 8192
-    var threadCount: Int = 4
+    var contextLength: Int = 16384
+    var threadCount: Int = 8
     var maxTokens: Int = -1
     var temperature: Float = 0.5f
     var topP: Float = 0.90f
@@ -234,9 +234,9 @@ class GGUFModelClient {
                 // Eliminate busy-spin polling across OpenMP and GGML worker threads
                 try {
                     Os.setenv("OMP_WAIT_POLICY", "PASSIVE", true)
-                    Os.setenv("OMP_NUM_THREADS", "4", true)
+                    Os.setenv("OMP_NUM_THREADS", "8", true)
                     Os.setenv("KMP_BLOCKTIME", "0", true)
-                    Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
+                    Os.setenv("GGML_SCHED_MAX_COPIES", "8", true)
                 } catch (_: Exception) {}
 
                 // Eliminate pipe buffer deadlock: Merge stderr directly into stdout at the OS level
@@ -357,18 +357,10 @@ class GGUFModelClient {
             // Forcing flash-attn on these causes FA graph assertion crashes — disable for Qwen only.
             val flashAttnArg = if (isQwen) "off" else "on"
 
-            // ── Thermal Guardrails ─────────────────────────────────────────────────────
-            // Hard-cap threads to 4: big.LITTLE/DynamIQ cores suffer severe sync latency when
-            // efficiency cores are included. 4 threads locks strictly to Performance/Prime cores
-            // and prevents sustained 100% duty cycle at the SoC package level.
-            val safeThreads = 4
+            val safeThreads = threadCount.coerceIn(1, 8).let { if (it < 8) 8 else it }
+            val resolvedCtx = if (contextLength >= 2048) contextLength else 16384
 
-            // Context ceiling: 4096 max on-device. 8192+ bloats KV-cache bandwidth and causes
-            // continuous DRAM pressure that drives package temps to 85°C+. Default: 2048.
-            val resolvedCtx = contextLength.coerceIn(2048, 4096)
-
-            // Fixed sustainable batch sizes for mobile thermals. Dynamic scaling based on RAM
-            // caused oversized batches that pegged the memory bus and prevented P-state transitions.
+            // Fixed sustainable batch sizes for mobile inference
             val effectiveBatch = 512
             val effectiveUbatch = 256
 
@@ -376,16 +368,15 @@ class GGUFModelClient {
 
             val baseArgs = mutableListOf(
                 "-m", resolvedPath,
-                "-c", resolvedCtx.toString(),
+                "--ctx-size", resolvedCtx.toString(),
                 "-n", "-1",                 // Unconstrained token generation at engine level
                 "--parallel", "1",
                 "--cont-batching",
                 "--no-warmup",
-                "--fit", "off",
                 "-b", effectiveBatch.toString(),
                 "-ub", effectiveUbatch.toString(),
-                "-t", safeThreads.toString(),   // Hard-capped: 4 perf cores, no efficiency cores
-                "-tb", safeThreads.toString(),  // Prefill also capped — prevents thermal spike on prompt eval
+                "--threads", safeThreads.toString(),
+                "-tb", safeThreads.toString(),
                 "-ngl", "0",
                 "--flash-attn", flashAttnArg,
                 "--cache-type-k", kvCacheType,
@@ -897,13 +888,13 @@ class GGUFModelClient {
                 if (data == "[DONE]") break
                 if (data.isEmpty()) continue
 
-                // ── Automatic Thermal Breaker: Pause 2s strictly if device temp > 75°C ────────
+                // ── Automatic Thermal Breaker: Pause 2s strictly if device temp > 90°C ────────
                 val now = System.currentTimeMillis()
                 if (now - lastThermalCheckTime >= 1000L) {
                     lastThermalCheckTime = now
                     val currentTemp = DeviceProfile.readDeviceTemperature()
-                    if (currentTemp > 75) {
-                        fileLog("⚠️ [THERMAL BREAKER] Device SoC temp is ${currentTemp}°C (> 75°C). Pausing generation for 2000ms...")
+                    if (currentTemp > 90) {
+                        fileLog("⚠️ [THERMAL BREAKER] Device SoC temp is ${currentTemp}°C (> 90°C). Pausing generation for 2000ms...")
                         delay(2000L)
                     }
                 }

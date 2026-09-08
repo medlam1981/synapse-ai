@@ -73,23 +73,19 @@ object DeviceProfile {
      * over efficiency clusters to maximize token generation speed without thrashing.
      */
     fun optimalThreads(hw: HardwareProfile): Int {
-        return hw.performanceCores.coerceIn(2, 4)
+        return hw.totalCores.coerceIn(4, 8)
     }
 
     fun optimalBatchThreads(hw: HardwareProfile): Int {
-        // Thermal guardrail: cap burst prefill threads to at most 4 to prevent package thermal spikes
-        return optimalThreads(hw).coerceAtMost(4)
+        return hw.totalCores.coerceIn(4, 8)
     }
 
     /**
-     * Bitmask string for taskset to pin threads strictly to physical Performance/Big cores.
-     * e.g., on an 8-core CPU with 4 performance cores (cores 4..7), mask is "f0".
+     * Bitmask string for taskset to utilize all logical cores.
      */
     fun performanceAffinityMask(hw: HardwareProfile): String {
         val total = hw.totalCores.coerceIn(1, 16)
-        val perf = hw.performanceCores.coerceIn(1, total)
-        val little = (total - perf).coerceAtLeast(0)
-        val mask = ((1 shl perf) - 1) shl little
+        val mask = (1 shl total) - 1
         return mask.toString(16)
     }
 

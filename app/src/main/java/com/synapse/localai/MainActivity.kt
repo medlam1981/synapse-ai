@@ -1385,10 +1385,8 @@ fun ConsolidatedMasterHeader(
                 if (name.isBlank()) "GEMMA-4-E2B Q4" else name
             }
 
-            val tpsSuffix = if (uiState.tokensPerSecond > 0f) {
-                val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond)
-                " • $formattedTps T/s"
-            } else ""
+            val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond.coerceAtLeast(0f))
+            val tpsSuffix = " • $formattedTps T/s"
 
             val specChipText = if (isCloudMode) {
                 "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
@@ -1441,8 +1439,8 @@ fun ConsolidatedMasterHeader(
             val thermalColor = when {
                 stats.cpuTempInt <= 0 -> Color(0xFF2DD4BF)
                 stats.cpuTempInt < 50 -> Color(0xFF2DD4BF) // Turquoise <50°C
-                stats.cpuTempInt <= 75 -> Color(0xFFF59E0B) // Warm amber 50–75°C
-                else -> Color(0xFFEF4444) // Coral red >75°C
+                stats.cpuTempInt <= 90 -> Color(0xFFF59E0B) // Warm amber 50–90°C
+                else -> Color(0xFFEF4444) // Coral red >90°C
             }
             val storageColor = Color(0xFF38BDF8) // Titanium / azure
             val registeredKeysList = remember(uiState.config.geminiApiKeys) {

@@ -84,8 +84,8 @@ data class AgentConfig(
     val geminiModelName: String = "gemini-2.0-flash",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 8088,
-    val contextLength: Int = 8192,
-    val threadCount: Int = 4,
+    val contextLength: Int = 16384,
+    val threadCount: Int = 8,
     val maxTokens: Int = -1,
     val temperature: Float = 0.5f,
     val enableVisualHistory: Boolean = false,
@@ -374,13 +374,21 @@ class AgentViewModel : ViewModel() {
             val prefs = prefs(context)
             val savedPath = prefs.getString("local_model_path", null)
             
-            var savedContext = prefs.getInt("context_length", 2048)
-            // Thermal guardrail: cap at 4096. 8192+ causes KV-cache DRAM bandwidth saturation
-            // on mobile, elevating package temperature beyond safe operating range.
-            savedContext = savedContext.coerceIn(2048, 4096)
-
-            var savedThreads = prefs.getInt("thread_count", 2)
-            if (savedThreads < 1) savedThreads = 2
+            val hasMigrated16k = prefs.getBoolean("has_migrated_16k_8t", false)
+            var savedContext = prefs.getInt("context_length", 16384)
+            var savedThreads = prefs.getInt("thread_count", 8)
+            if (!hasMigrated16k || savedContext < 16384 || savedThreads < 8) {
+                savedContext = 16384
+                savedThreads = 8
+                prefs.edit()
+                    .putBoolean("has_migrated_16k_8t", true)
+                    .putInt("context_length", 16384)
+                    .putInt("thread_count", 8)
+                    .apply()
+            } else {
+                savedContext = savedContext.coerceIn(2048, 32768)
+                if (savedThreads < 1) savedThreads = 8
+            }
             
             val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
             val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
@@ -433,7 +441,7 @@ class AgentViewModel : ViewModel() {
                 geminiModelName = geminiModel,
                 serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
                 serverPort = prefs.getInt("server_port", 8088),
-                contextLength = if (savedContext >= 2048) savedContext else 8192,
+                contextLength = if (savedContext >= 2048) savedContext else 16384,
                 threadCount = savedThreads,
                 maxTokens = prefs.getInt("max_tokens", -1),
                 temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it },
@@ -511,8 +519,7 @@ class AgentViewModel : ViewModel() {
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {
-        // Thermal guardrail: enforce 2048–4096 context ceiling at save time
-        val finalConfig = config.copy(contextLength = config.contextLength.coerceIn(2048, 4096))
+        val finalConfig = config.copy(contextLength = config.contextLength.coerceIn(2048, 32768))
         val oldConfig = _uiState.value.config
         val oldPath = oldConfig.localModelPath
         val oldGeminiKeys = oldConfig.geminiApiKeys
@@ -620,7 +627,7 @@ class AgentViewModel : ViewModel() {
                         val client = GGUFModelClient().apply {
                             serverHost = config.serverHost
                             serverPort = config.serverPort
-                            contextLength = config.contextLength.coerceIn(2048, 4096)
+                            contextLength = config.contextLength.coerceIn(2048, 32768)
                             threadCount = config.threadCount
                             maxTokens = -1
                             temperature = config.temperature
@@ -1389,8 +1396,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 if (now - lastThermalCheckTime >= 1000L) {
                                     lastThermalCheckTime = now
                                     val currentTemp = DeviceProfile.readDeviceTemperature()
-                                    if (currentTemp > 75) {
-                                        _uiState.update { it.copy(activeStatusDetail = "Thermal Cooling (SoC > 75°C)...") }
+                                    if (currentTemp > 90) {
+                                        _uiState.update { it.copy(activeStatusDetail = "Thermal Cooling (SoC > 90°C)...") }
                                         kotlinx.coroutines.delay(2000L)
                                     }
                                 }
