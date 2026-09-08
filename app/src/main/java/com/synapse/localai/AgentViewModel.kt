@@ -374,19 +374,19 @@ class AgentViewModel : ViewModel() {
             val prefs = prefs(context)
             val savedPath = prefs.getString("local_model_path", null)
             
-            val hasMigrated4k4t = prefs.getBoolean("has_migrated_4k_4t", false)
+            val hasMigratedRollback = prefs.getBoolean("has_migrated_rollback_4k_4t", false)
             var savedContext = prefs.getInt("context_length", 4096)
             var savedThreads = prefs.getInt("thread_count", 4)
-            if (!hasMigrated4k4t) {
+            if (!hasMigratedRollback) {
                 savedContext = 4096
                 savedThreads = 4
                 prefs.edit()
-                    .putBoolean("has_migrated_4k_4t", true)
+                    .putBoolean("has_migrated_rollback_4k_4t", true)
                     .putInt("context_length", 4096)
                     .putInt("thread_count", 4)
                     .apply()
             } else {
-                savedContext = savedContext.coerceIn(2048, 16384)
+                savedContext = savedContext.coerceIn(2048, 8192)
                 if (savedThreads < 1) savedThreads = 4
             }
             
@@ -651,8 +651,7 @@ class AgentViewModel : ViewModel() {
                                 isModelLoadingInProgress = false
                                 currentLoadingPath = null
                                 if (client.isLoaded) {
-                                    val effectiveDraft = client.activeDraftModelPath 
-                                        ?: config.draftModelPath.takeIf { it.isNotBlank() && it != "STANDALONE" }
+                                    val effectiveDraft = client.activeDraftModelPath
                                     _uiState.update { it.copy(
                                         localModelLoaded = true, 
                                         localModelLoading = false, 
@@ -663,7 +662,11 @@ class AgentViewModel : ViewModel() {
                                         loadingProgress = null,
                                         loadingStatusText = ""
                                     ) }
-                                    addSystemLog("Local Model Active: $modelName")
+                                    if (effectiveDraft == null && config.draftModelPath != "STANDALONE") {
+                                        _uiState.update { it.copy(config = it.config.copy(draftModelPath = "STANDALONE")) }
+                                        prefs(context).edit().putString("draft_model_path", "STANDALONE").apply()
+                                    }
+                                    addSystemLog("Local Model Active: $modelName" + if (effectiveDraft != null) " (MTP Active)" else " (STANDALONE)")
                                     viewModelScope.launch(Dispatchers.IO) {
                                         val systemPrompt = buildSystemPrompt(context, forLocalModel = true)
                                         val primed = client.warmupPersonaKVCache(systemPrompt)
@@ -815,8 +818,37 @@ The file execution engine automatically parses this block and writes the file di
 
     fun isChatPersonaActive(): Boolean {
         val state = _uiState.value
+        if (state.activePersona.lowercase(Locale.ROOT).contains("chat")) return true
         val set = state.activePersonas.map { it.lowercase(Locale.ROOT) }
-        return set.isNotEmpty() && set.all { it.contains("chat") }
+        return set.isNotEmpty() && set.any { it.contains("chat") }
+    }
+
+    private fun appendEosControlToken(prompt: String, modelPath: String): String {
+        val clean = prompt.trimEnd()
+        val pathLower = modelPath.lowercase(Locale.ROOT)
+        return when {
+            pathLower.contains("gemma") -> {
+                if (clean.endsWith("<end_of_turn>") || clean.endsWith("<start_of_turn>user")) {
+                    clean
+                } else {
+                    "$clean\n<end_of_turn>\n<start_of_turn>user\n"
+                }
+            }
+            pathLower.contains("bitnet") -> {
+                if (clean.endsWith("<|im_end|>") || clean.endsWith("<|im_start|>user") || clean.endsWith("<|eot_id|>")) {
+                    clean
+                } else {
+                    "$clean\n<|im_end|>\n<|im_start|>user\n"
+                }
+            }
+            else -> {
+                if (clean.endsWith("<|im_end|>") || clean.endsWith("<|im_start|>user") || clean.endsWith("<end_of_turn>")) {
+                    clean
+                } else {
+                    "$clean\n<|im_end|>\n<|im_start|>user\n"
+                }
+            }
+        }
     }
 
     fun isSimpleGreeting(text: String): Boolean {
@@ -841,13 +873,14 @@ The file execution engine automatically parses this block and writes the file di
         // Pure conversational prompt for /chat mode — completely eliminates architectural reasoning loops
         if (isChatPersonaActive()) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
+            val prompt = """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
 
 You are a direct, natural, and helpful conversational AI assistant in Chat Mode.
 Respond naturally and conversationally.
 For simple greetings (such as "hello", "hi", "hey", "bonjour", "مرحبا", "سلام") and general conversation, provide an instant, friendly conversational reply with zero architectural planning loops, zero <think> tags, and zero tool invocations.
 Match user language natively (Moroccan Darija, Standard Arabic, English, French).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
+            return if (forLocalModel) appendEosControlToken(prompt, config.localModelPath) else prompt
         }
 
         val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
@@ -857,7 +890,7 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
+            val prompt = """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
 
 CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved. For launching apps, call open_app(package_or_app_name); aliases, localized names, shell fallback, and web deep-links are resolved automatically.
@@ -875,6 +908,7 @@ Format for calling tools:
 </function_calls>
 Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 Be direct, authentic, concise, and fast.$custom""".trimIndent()
+            return appendEosControlToken(prompt, config.localModelPath)
         }
 
         val currentKey = "${activePersonas.sorted().joinToString(",")}|$customPrompt"

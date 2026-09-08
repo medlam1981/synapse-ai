@@ -206,19 +206,47 @@ class GGUFModelClient {
         } catch (_: Exception) {}
     }
 
+    private fun isDraftErrorLine(line: String): Boolean {
+        val l = line.lowercase()
+        return l.contains("failed to load draft") ||
+               l.contains("error loading model") ||
+               l.contains("failed to load model") ||
+               l.contains("different vocabulary") ||
+               l.contains("different n_vocab") ||
+               l.contains("vocab mismatch") ||
+               l.contains("invalid draft") ||
+               l.contains("llama_model_load: error") ||
+               l.contains("cannot load draft") ||
+               l.contains("incompatible") ||
+               l.contains("error: failed to load") ||
+               l.contains("failed to build speculative graph") ||
+               l.contains("speculative decoding failed") ||
+               l.contains("speculative graph error") ||
+               l.contains("key not found in model") ||
+               l.contains("draft model is not compatible") ||
+               l.contains("draft model has different") ||
+               l.contains("failed to initialize draft") ||
+               l.contains("failed to init draft") ||
+               l.contains("error initializing draft") ||
+               l.contains("abort") ||
+               l.contains("sigsegv")
+    }
+
+    private fun checkLogFileForDraftError(logFile: File): Boolean {
+        if (!logFile.exists()) return false
+        return try {
+            val lines = logFile.readLines()
+            lines.any { isDraftErrorLine(it) }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun checkRecentErrors(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "60", "-s", "LlamaBridge:V"))
-            val text = process.inputStream.bufferedReader().readText().lowercase()
-            text.contains("failed to load draft") ||
-            text.contains("key not found in model") ||
-            text.contains("failed to load model") ||
-            text.contains("error loading model") ||
-            text.contains("vocab mismatch") ||
-            text.contains("different vocabulary") ||
-            text.contains("different n_vocab") ||
-            text.contains("cannot load draft") ||
-            text.contains("llama_model_load: error")
+            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "100", "-s", "LlamaBridge:V", "DEBUG:V"))
+            val text = process.inputStream.bufferedReader().readText()
+            text.lines().any { isDraftErrorLine(it) }
         } catch (_: Exception) {
             false
         }
@@ -466,13 +494,38 @@ class GGUFModelClient {
                     val totalSec = (System.currentTimeMillis() - startTime) / 1000
                     fileLog("🚀 Server fully ONLINE (HTTP 200) in ${totalSec}s!")
                     isLoaded = true
-                    activeDraftModelPath = if (hasDraft) activeDraftPath else null
+
+                    var draftActuallyLoaded = false
+                    if (hasDraft) {
+                        val hasDraftError = checkRecentErrors() || (logFile.exists() && checkLogFileForDraftError(logFile))
+                        if (hasDraftError) {
+                            fileLog("⚠️ MTP Draft companion failed or was rejected in native engine logs! Falling back active draft to null (STANDALONE).")
+                            draftActuallyLoaded = false
+                            activeDraftModelPath = null
+                            appContext?.let { ctx ->
+                                val prefs = ctx.getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+                                prefs.edit().putString("draft_model_path", "STANDALONE").apply()
+                            }
+                            onStatus("⚠️ MTP Draft incompatible with base model. Switched to STANDALONE.")
+                        } else {
+                            draftActuallyLoaded = true
+                            activeDraftModelPath = activeDraftPath
+                        }
+                    } else {
+                        activeDraftModelPath = null
+                    }
+
                     hw?.let { h ->
                         val mask = DeviceProfile.performanceAffinityMask(h)
                         ZramOptimizer.pinToPerformanceCores(mask)
                     }
                     onProgress(1.0f, "ONLINE • 100%")
-                    onStatus("Neural Core Ready (${totalSec}s) ✓")
+                    val readyMsg = if (draftActuallyLoaded) {
+                        "Neural Core Ready (MTP Active) (${totalSec}s) ✓"
+                    } else {
+                        "Neural Core Ready (STANDALONE) (${totalSec}s) ✓"
+                    }
+                    onStatus(readyMsg)
                     return@withLock true
                 }
 
@@ -495,26 +548,7 @@ class GGUFModelClient {
                 }
 
                 if (hasDraft && logFile.exists()) {
-                    val hasLogDraftError = try {
-                        val lines = logFile.readLines().takeLast(15)
-                        lines.any { line ->
-                            val l = line.lowercase()
-                            l.contains("failed to load draft") ||
-                            l.contains("error loading model") ||
-                            l.contains("failed to load model") ||
-                            l.contains("different vocabulary") ||
-                            l.contains("different n_vocab") ||
-                            l.contains("vocab mismatch") ||
-                            l.contains("invalid draft") ||
-                            l.contains("llama_model_load: error") ||
-                            l.contains("cannot load draft") ||
-                            l.contains("incompatible") ||
-                            l.contains("error: failed to load") ||
-                            l.contains("abort") ||
-                            l.contains("sigsegv")
-                        }
-                    } catch (_: Exception) { false }
-
+                    val hasLogDraftError = checkLogFileForDraftError(logFile)
                     if (hasLogDraftError) {
                         fileLog("⚠️ Native draft loading error detected in native_log.txt! Aborting draft to prevent spinlock.")
                         draftFailureDetected = true
@@ -555,6 +589,11 @@ class GGUFModelClient {
                 val fallbackSuccess = startServerStandalone(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
                 if (fallbackSuccess) {
                     activeDraftModelPath = null
+                    appContext?.let { ctx ->
+                        val prefs = ctx.getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+                        prefs.edit().putString("draft_model_path", "STANDALONE").apply()
+                    }
+                    onStatus("⚠️ MTP Draft incompatible: Switched to STANDALONE mode ✓")
                     return@withLock true
                 }
             }
@@ -613,6 +652,10 @@ class GGUFModelClient {
                 fileLog("🚀 STANDALONE Server ONLINE in ${totalSec}s!")
                 isLoaded = true
                 activeDraftModelPath = null
+                appContext?.let { ctx ->
+                    val prefs = ctx.getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putString("draft_model_path", "STANDALONE").apply()
+                }
                 val hwFb = appContext?.let { DeviceProfile.detect(it) }
                 hwFb?.let { h ->
                     val mask = DeviceProfile.performanceAffinityMask(h)
@@ -727,6 +770,25 @@ class GGUFModelClient {
         }
     }
 
+    fun ensurePromptEos(prompt: String, path: String? = null): String {
+        val clean = prompt.trimEnd()
+        val p = (path ?: modelPath ?: "").lowercase()
+        return when {
+            p.contains("gemma") -> {
+                if (clean.endsWith("<end_of_turn>") || clean.endsWith("<start_of_turn>user")) clean
+                else "$clean\n<end_of_turn>\n<start_of_turn>user\n"
+            }
+            p.contains("bitnet") -> {
+                if (clean.endsWith("<|im_end|>") || clean.endsWith("<|im_start|>user") || clean.endsWith("<|eot_id|>")) clean
+                else "$clean\n<|im_end|>\n<|im_start|>user\n"
+            }
+            else -> {
+                if (clean.endsWith("<|im_end|>") || clean.endsWith("<|im_start|>user") || clean.endsWith("<end_of_turn>")) clean
+                else "$clean\n<|im_end|>\n<|im_start|>user\n"
+            }
+        }
+    }
+
     fun generateCompletionStream(prompt: String, systemPrompt: String = ""): Flow<String> = generateStream(prompt, systemPrompt)
 
     fun generateStream(prompt: String, systemPrompt: String = ""): Flow<String> = flow {
@@ -738,20 +800,13 @@ class GGUFModelClient {
         val trimmed = line.trim()
         if (trimmed.length < 3) return true
         val syntaxChars = setOf(
-            '{', '}', '[', ']', '(', ')', ';', ',', ':', '"', '\'', '`',
-            '<', '>', '/', '\\', '|', '-', '=', '*', '+', '~', '!', '?',
-            '.', '_', ' ', '\t', '\r', '\n'
+            '{', '}', '(', ')', '[', ']', ';', ',', ':', '"', '\'', '`',
+            '=', '+', '-', '*', '/', '\\', '|', '&', '^', '%', '$', '#', '@', '!', '?'
         )
-        if (trimmed.all { it in syntaxChars }) return true
-
-        val trivialKeywords = setOf(
-            "break;", "continue;", "return;", "return", "pass", "...",
-            "```", "```json", "```javascript", "```python", "```html", "```kotlin", "```xml", "```java"
-        )
-        return trimmed.lowercase() in trivialKeywords
+        return trimmed.all { it in syntaxChars || it.isWhitespace() }
     }
 
-    fun generateStreamWithHistory(
+    suspend fun generateStreamWithHistory(
         history: List<Pair<String, String>>,
         systemPrompt: String = "",
         onSpeedUpdate: ((Float) -> Unit)? = null
@@ -773,7 +828,8 @@ class GGUFModelClient {
 
         val messages = JSONArray()
         if (systemPrompt.isNotBlank()) {
-            messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
+            val resolvedSystemPrompt = ensurePromptEos(systemPrompt, modelPath)
+            messages.put(JSONObject().put("role", "system").put("content", resolvedSystemPrompt))
         }
         for ((role, content) in history) {
             val r = if (role == "user") "user" else "assistant"
@@ -792,8 +848,11 @@ class GGUFModelClient {
             .put("<|endoftext|>")
             .put("<|eot_id|>")
             .put("<|start_header_id|>")
+            .put("<|end_header_id|>")
             .put("User:")
             .put("<start_of_turn>user")
+            .put("<start_of_turn>")
+            .put("<|im_start|>")
 
         val targetMaxTokens = if (maxTokens > 0) maxTokens else -1
         val targetTemp = if (temperature > 0f) temperature else 0.5f

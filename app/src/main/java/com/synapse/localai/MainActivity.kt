@@ -1351,8 +1351,7 @@ fun ConsolidatedMasterHeader(
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
             val isLocalMode = !isCloudMode
             val effectiveDraftPath = uiState.activeDraftModelPath
-                ?: uiState.config.draftModelPath.takeIf { it.isNotBlank() && it != "STANDALONE" }
-            val hasMtp = !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE" && File(effectiveDraftPath).exists()
+            val hasMtp = isLocalMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE" && File(effectiveDraftPath).exists()
             val draftFile = if (hasMtp) File(effectiveDraftPath!!) else null
             val draftName = draftFile?.nameWithoutExtension
             val draftTag = if (hasMtp && draftName != null) {
