@@ -93,9 +93,7 @@ fun SettingsScreenContent(
     val coroutineScope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
     var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
-    var personas by remember { mutableStateOf<List<String>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
-    var isScanningPersonas by remember { mutableStateOf(false) }
 
     // Dynamic Material 3 Color Tokens
     val primary = MaterialTheme.colorScheme.primary
@@ -118,7 +116,6 @@ fun SettingsScreenContent(
         // Zero-Overhead: Read exclusively from cached manifests (NO automatic filesystem sweep on resume)
         models = ModelScanner.getBaseModels(context, forceRescan = false)
         mtpModels = ModelScanner.getMtpModels(context, forceRescan = false)
-        personas = PersonaManager.getPersonas(context, forceRescan = false)
     }
 
     Column(
@@ -974,205 +971,57 @@ fun SettingsScreenContent(
             }
 
             // ==========================================
-            // CARD: OPERATIONAL PERSONAS (.MD MULTI-PROFILE)
+            // CARD 4: UNIFIED INTERNAL PERSONA (GOD MODE)
             // ==========================================
             SettingsCard(
-                title = "OPERATIONAL PERSONAS (.MD)",
+                title = "4. UNIFIED INTERNAL PERSONA",
                 titleColor = primary,
-                statusText = "${uiState.activePersonas.size} ACTIVE"
+                statusText = "GOD MODE ACTIVE"
             ) {
-                val activePersonas = uiState.activePersonas
-                val currentPersonas = personas.ifEmpty { listOf("coding.md", "chat.md", "android_controller.md") }
-
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // External Storage Path Badge with Inline Manual Re-Scan Button
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = surfaceContainer
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = primary, modifier = Modifier.size(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "/sdcard/Medlam-Ai/personas/",
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                Text(
-                                    text = "Public shared storage • Plain .md profiles • Multi-select composition",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 9.sp
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    isScanningPersonas = true
-                                    coroutineScope.launch {
-                                        val refreshed = withContext(Dispatchers.IO) {
-                                            viewModel.rescanPersonas(context)
-                                        }
-                                        personas = refreshed
-                                        isScanningPersonas = false
-                                        Toast.makeText(context, "Discovered ${refreshed.size} personas in storage", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                if (isScanningPersonas) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp,
-                                        color = primary
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = "Re-index Personas",
-                                        tint = primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Active Stacking Overview Banner
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = primaryContainer
-                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(10.dp),
+                                .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "ACTIVE ROLE COMPOSITION (${activePersonas.size} COMBINED):",
-                                    color = onPrimaryContainer,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                activePersonas.forEach { pName ->
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = primary.copy(alpha = 0.2f)
-                                    ) {
-                                        Text(
-                                            text = "✓ $pName",
-                                            color = onPrimaryContainer,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
+                            Text(
+                                text = "Medlam-AI Unified Core Engine",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "Autonomous AI engineer and Android OS administrator. Unified God Mode covers high-precision coding, deep OS/shell control, inline SVG graphics, and dialect-aware reasoning with zero token bloat.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp,
+                                lineHeight = 14.sp
+                            )
                         }
                     }
 
-                    // Multi-Select Checklist Matrix
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    // Monospace preview of the unified rules
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF0D1117),
+                        border = BorderStroke(1.dp, Color(0xFF30363D))
                     ) {
                         Text(
-                            text = "AVAILABLE PERSONAS (TOGGLE TO COMPOSE ROLES):",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            text = UNIFIED_CORE_PROMPT.trim(),
+                            color = Color(0xFF58A6FF),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 13.sp,
+                            modifier = Modifier.padding(10.dp)
                         )
-
-                        currentPersonas.forEach { pName ->
-                            val isChecked = activePersonas.contains(pName)
-
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        viewModel.togglePersona(pName, context)
-                                    },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isChecked) primaryContainer.copy(alpha = 0.5f) else surfaceContainer
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Checkbox(
-                                        checked = isChecked,
-                                        onCheckedChange = { viewModel.togglePersona(pName, context) },
-                                        colors = CheckboxDefaults.colors(
-                                            checkedColor = primary,
-                                            checkmarkColor = onPrimary
-                                        )
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Text(
-                                                text = pName,
-                                                color = if (isChecked) primary else MaterialTheme.colorScheme.onSurface,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                            if (isChecked) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(3.dp),
-                                                    color = primary.copy(alpha = 0.15f)
-                                                ) {
-                                                    Text(
-                                                        text = "ACTIVE",
-                                                        color = primary,
-                                                        fontSize = 8.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        Text(
-                                            text = PersonaManager.getPersonaDescription(pName),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 9.5.sp,
-                                            lineHeight = 13.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }

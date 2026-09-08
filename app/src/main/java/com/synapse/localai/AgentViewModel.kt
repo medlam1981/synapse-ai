@@ -43,6 +43,16 @@ import com.synapse.localai.tools.DocumentTool
 import com.synapse.localai.tools.WebSearchTool
 import com.synapse.localai.orchestration.MultiWorkerOrchestrator
 
+const val UNIFIED_CORE_PROMPT = """
+You are Medlam-AI, an elite autonomous AI engineer and Android OS administrator.
+CRITICAL RULES:
+1. ZERO EXCUSES: Never apologize, never say 'I cannot', and never ask the user to perform tasks manually.
+2. RELENTLESS EXECUTION: If a tool/command fails, autonomously analyze the error and immediately retry alternative solutions.
+3. PRISTINE CODE & UI: Deliver production-ready code. Strictly use inline SVG for UI icons; never simulate UI elements with ASCII art (<, >, <<, >>).
+4. DEEP OS CONTROL: You possess deep shell, file system, and app execution capabilities. Diagnose and execute directly.
+5. EXTREME CONCISENESS: Skip all introductory fluff. Provide sharp, structured reasoning and execute tools immediately.
+"""
+
 enum class ModelType { GGUF, GEMINI }
 
 enum class AgentActionPhase {
@@ -842,12 +852,7 @@ The file execution engine automatically parses this block and writes the file di
     @Volatile
     private var cachedPrefixKey: String = ""
 
-    fun isChatPersonaActive(): Boolean {
-        val state = _uiState.value
-        if (state.activePersona.lowercase(Locale.ROOT).contains("chat")) return true
-        val set = state.activePersonas.map { it.lowercase(Locale.ROOT) }
-        return set.isNotEmpty() && set.any { it.contains("chat") }
-    }
+    fun isChatPersonaActive(): Boolean = false
 
     private fun appendEosControlToken(prompt: String, modelPath: String): String {
         val clean = prompt.trimEnd()
@@ -896,48 +901,24 @@ The file execution engine automatically parses this block and writes the file di
         val actualContext = context ?: MainActivity.instance
         val customPrompt = config.systemPrompt.trim()
 
-        // Pure conversational prompt for /chat mode — completely eliminates architectural reasoning loops
-        if (isChatPersonaActive()) {
-            val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            val prompt = """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
-
-You are a direct, natural, and helpful conversational AI assistant in Chat Mode.
-Respond naturally and conversationally.
-For simple greetings (such as "hello", "hi", "hey", "bonjour", "مرحبا", "سلام") and general conversation, provide an instant, friendly conversational reply with zero architectural planning loops, zero <think> tags, and zero tool invocations.
-Match user language natively (Moroccan Darija, Standard Arabic, English, French).
-Be direct, authentic, concise, and fast.$custom""".trimIndent()
-            return if (forLocalModel) appendEosControlToken(prompt, config.localModelPath) else prompt
-        }
-
-        val activePersonas = actualContext?.let { PersonaManager.getActivePersonas(it) } ?: emptySet()
-        val activePersonasMarkdown = actualContext?.let { PersonaManager.getActivePersonasContent(it) }
-            ?: PersonaManager.DEFAULT_CODING_PERSONA
-
         // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            val prompt = """${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
+            val prompt = """${UNIFIED_CORE_PROMPT.trim()}
 
-CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
-ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved. For launching apps, call open_app(package_or_app_name); aliases, localized names, shell fallback, and web deep-links are resolved automatically.
-You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
-
-$activePersonasMarkdown
-
-Always plan your reasoning inside <think>...</think> tags first before writing your final response.
-When providing code, strictly enclose it in markdown code fences (```lang).
-Format for calling tools:
+Tool invocation format:
 <function_calls>
 <invoke name="tool_name">
 <parameter name="param_name">value</parameter>
 </invoke>
 </function_calls>
 Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
-Be direct, authentic, concise, and fast.$custom""".trimIndent()
+Always plan your reasoning inside <think>...</think> tags first before writing your final response.
+When providing code, strictly enclose it in markdown code fences (```lang).$custom""".trimIndent()
             return appendEosControlToken(prompt, config.localModelPath)
         }
 
-        val currentKey = "${activePersonas.sorted().joinToString(",")}|$customPrompt"
+        val currentKey = "UNIFIED|$customPrompt"
 
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) {
             return cachedStaticPrefix!!
@@ -948,9 +929,6 @@ Be direct, authentic, concise, and fast.$custom""".trimIndent()
 
         // 2. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
-## Critical Behavioral Policy:
-${PersonaManager.CRITICAL_BEHAVIORAL_POLICY}
-
 ## Host Toolchains & Execution Guidelines:
 CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved.
@@ -969,7 +947,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
 
-        val compiled = "$livingMind\n\n$activePersonasMarkdown\n\n$toolsAndGuidelines$customPromptSection"
+        val compiled = "$livingMind\n\n${UNIFIED_CORE_PROMPT.trim()}\n\n$toolsAndGuidelines$customPromptSection"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1039,17 +1017,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             }
 
             when (slashCmd) {
-                "/code" -> {
-                    actualContext?.let { togglePersonaQuick("coding.md", it) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Toggled coding.md persona"))
-                }
-                "/sys" -> {
-                    actualContext?.let { togglePersonaQuick("android_controller.md", it) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Toggled android_controller.md persona"))
-                }
-                "/chat" -> {
-                    actualContext?.let { togglePersonaQuick("chat.md", it) }
-                    addLog(LogEntry(sender = "SYSTEM", text = "Toggled chat.md persona"))
+                "/code", "/sys", "/chat" -> {
+                    addLog(LogEntry(sender = "SYSTEM", text = "Persona commands are retired. Medlam-AI operates with Unified Core Prompt."))
                 }
                 "/rollback" -> {
                     executeRollback(actualContext)
@@ -1061,7 +1030,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     actualContext?.let { clearConversation(it) }
                 }
                 else -> {
-                    addLog(LogEntry(sender = "SYSTEM", text = "Unknown command: $slashCmd. Available: /code, /sys, /chat, /rollback, /preview, /clear"))
+                    addLog(LogEntry(sender = "SYSTEM", text = "Unknown command: $slashCmd. Available: /rollback, /preview, /clear"))
                 }
             }
             return

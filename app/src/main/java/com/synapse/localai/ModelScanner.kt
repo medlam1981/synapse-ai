@@ -67,8 +67,6 @@ object ModelScanner {
             File(ROOT_DIR).mkdirs()
             File(MODELS_DIR).mkdirs()
             File(MTP_DIR).mkdirs()
-            File(PERSONAS_DIR).mkdirs()
-            PersonaManager.ensureDefaultPersonas()
         } catch (_: Exception) {}
     }
 

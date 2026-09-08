@@ -1,270 +1,85 @@
 package com.synapse.localai
 
 import android.content.Context
-import android.content.SharedPreferences
-import android.util.Log
-import java.io.File
 
 /**
- * Public Storage Persona Architecture (.md Files) & Multi-Select Persona Composition
+ * Unified Internal Persona Architecture
  * 
- * 1. User-Accessible External Path:
- *    All agent persona profiles are plain Markdown (.md) files strictly located within
- *    external shared storage: /sdcard/Medlam-Ai/personas/.
- * 
- * 2. Zero Sandbox Enclosure:
- *    Under no circumstances are persona files stored inside private application directories
- *    (/data/data/... or context.filesDir). Files remain directly accessible via standard
- *    Android file managers and text editors.
- * 
- * 3. Domain-Specific Modularity:
- *    - coding.md: Software engineering, clean syntax, strict file I/O operations, zero filler.
- *    - chat.md: Natural conversation, dialect mirroring (Darija, Arabic, English), open reasoning, web searches.
- *    - android_controller.md: Headless device automation, shell scripts, POSIX commands, task scheduling.
- * 
- * 4. Multi-Select Persona Composition & Context Concatenation:
- *    Allows stacking multiple personas simultaneously (e.g. coding.md + android_controller.md).
- *    During prompt compilation, active personas are sequentially merged and concatenated.
- *    Unselected profiles are strictly excluded to preserve token headroom.
+ * Replaces legacy external .md file-based profiles with the hardcoded
+ * Unified "God Mode" Core Prompt. Zero external filesystem I/O, zero
+ * permission bottlenecks, and minimal token overhead.
  */
 object PersonaManager {
-    private const val TAG = "PersonaManager"
-    const val PERSONAS_DIR = "/sdcard/Medlam-Ai/personas"
+    const val UNIFIED_CORE_PROMPT = """
+You are Medlam-AI, an elite autonomous AI engineer and Android OS administrator.
+CRITICAL RULES:
+1. ZERO EXCUSES: Never apologize, never say 'I cannot', and never ask the user to perform tasks manually.
+2. RELENTLESS EXECUTION: If a tool/command fails, autonomously analyze the error and immediately retry alternative solutions.
+3. PRISTINE CODE & UI: Deliver production-ready code. Strictly use inline SVG for UI icons; never simulate UI elements with ASCII art (<, >, <<, >>).
+4. DEEP OS CONTROL: You possess deep shell, file system, and app execution capabilities. Diagnose and execute directly.
+5. EXTREME CONCISENESS: Skip all introductory fluff. Provide sharp, structured reasoning and execute tools immediately.
+"""
 
-    const val PREF_ACTIVE_PERSONA = "active_persona_file"
-    const val PREF_ACTIVE_PERSONAS_SET = "active_personas_set"
-    const val PREF_CACHED_PERSONAS = "cached_persona_manifest"
-    const val DEFAULT_PERSONA = "chat.md"
-    val DEFAULT_PERSONAS_SET = setOf("chat.md")
-
-    const val CRITICAL_BEHAVIORAL_POLICY = """CRITICAL BEHAVIORAL POLICY:
-- NEVER say: 'I apologize', 'I am sorry', 'Unfortunately', 'I cannot', or offer excuses.
-- NEVER surrender or ask the user to do technical tasks manually.
-- If a command, script, tool, or search query fails: DO NOT complain or explain the failure. IMMEDIATELY hypothesize the failure cause, synthesize an alternative vector/tool (e.g. alternate shell syntax, fallback API, direct file parsing), and execute it autonomously.
-- Be sharp, decisive, highly technical, and relentlessly solution-driven."""
-
-    const val DEFAULT_CODING_PERSONA = """# MEDLAM-AI [CODING & CLI CORE]
-$CRITICAL_BEHAVIORAL_POLICY
-
-You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
-- Action-First: Deliver production-ready code with complete syntax; zero placeholders.
-- Real-Time Disk Streaming: Output `file: <path>` immediately preceding code fences.
-- Anti-Echo Hygiene: Never echo or quote code in the conversational summary. Conclude with high-level operational confirmation only.
-- Strict Containment: Enclose all code deliverables strictly in code fences (```lang). Never leak raw code into prose.
-- Zero Fluff: Skip generic intros/outros; provide concise architectural reasoning and execution.
-- Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters (<, >, <<, >>, [<], <[[, <-). All icons (menu, back, dark-mode toggle, status indicators) must strictly use inline, high-resolution SVG vectors (e.g., Lucide / Heroicons SVG paths) with appropriate viewBox, stroke, and fill properties.
-- Clean Document Tree Requirement: Every HTML output must start at Byte 0 with <!DOCTYPE html>. For Arabic/RTL interfaces, configure <html lang="ar" dir="rtl"> properly. The top navigation bar must use clean CSS Grid or Flex layout with semantic <button> elements enclosing pure SVG vectors."""
-
-    const val DEFAULT_CHAT_PERSONA = """# MEDLAM-AI [CHAT CORE]
-$CRITICAL_BEHAVIORAL_POLICY
-
-You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
-- Dialect Mirroring: Match user language natively (Moroccan Darija, Standard Arabic, English, French).
-- Contextual Reasoning: Provide structured, direct answers with clear reasoning.
-- Live Web Intelligence: Invoke `web_search` for real-time information and live data.
-- Zero-Surrender Policy: Never tell the user to browse manually. Autonomously chain tools (distilled web_search, site:domain queries, or curl via run_shell) until verified data is retrieved."""
-
-    const val DEFAULT_CONTROLLER_PERSONA = """# MEDLAM-AI [CLI AUTOMATION CORE]
-$CRITICAL_BEHAVIORAL_POLICY
-
-Headless Programmatic Execution Engine on Android ARM64.
-You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
-- App Launching: Use `open_app(package_or_app_name)` to launch Android applications natively (e.g. youtube, whatsapp, com.android.chrome). Never pipe `am start` through `run_shell`.
-- Shell Execution: Execute terminal commands directly via `run_shell(command)`.
-- Task Scheduling: Queue background jobs via `schedule_task` or `queue_background_task`.
-- Pure Headless: Never simulate UI clicks, screen touches, or virtual keyboard inputs.
-- Zero-Surrender Policy: Never give up or tell the user to browse manually. Autonomously chain tools to retrieve data or complete tasks."""
-
-    // In-memory manifest cache for zero-overhead access
-    @Volatile
-    private var cachedPersonas: List<String>? = null
-
-    private fun getPrefs(context: Context): SharedPreferences {
-        return context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
-    }
+    const val CRITICAL_BEHAVIORAL_POLICY = UNIFIED_CORE_PROMPT
+    const val DEFAULT_PERSONA = "unified"
+    val DEFAULT_PERSONAS_SET = setOf("unified")
 
     /**
-     * Ensures default persona files exist in /sdcard/Medlam-Ai/personas/.
-     * ZERO SANDBOX ENCLOSURE: Operates strictly on external shared storage.
+     * Legacy no-op stub: file-based storage writes are completely removed.
      */
     fun ensureDefaultPersonas() {
-        try {
-            val dir = File(PERSONAS_DIR)
-            if (!dir.exists()) dir.mkdirs()
-
-            val codingFile = File(dir, "coding.md")
-            if (!codingFile.exists() || codingFile.length() == 0L || !codingFile.readText().contains("CRITICAL BEHAVIORAL POLICY")) {
-                codingFile.writeText(DEFAULT_CODING_PERSONA)
-            }
-
-            val chatFile = File(dir, "chat.md")
-            if (!chatFile.exists() || chatFile.length() == 0L || !chatFile.readText().contains("CRITICAL BEHAVIORAL POLICY")) {
-                chatFile.writeText(DEFAULT_CHAT_PERSONA)
-            }
-
-            val controllerFile = File(dir, "android_controller.md")
-            if (!controllerFile.exists() || controllerFile.length() == 0L || !controllerFile.readText().contains("CRITICAL BEHAVIORAL POLICY")) {
-                controllerFile.writeText(DEFAULT_CONTROLLER_PERSONA)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to ensure default personas in $PERSONAS_DIR: ${e.message}")
-        }
+        // No-op: Zero external filesystem I/O
     }
 
     /**
-     * Retrieves the cached personas manifest without scanning the filesystem.
-     * Reads from in-memory cache first, then SharedPreferences, avoiding RAM and I/O overhead.
+     * Returns the singleton unified persona manifest without filesystem scans.
      */
     fun getPersonas(context: Context? = null, forceRescan: Boolean = false): List<String> {
-        if (!forceRescan) {
-            cachedPersonas?.let { return it }
-
-            if (context != null) {
-                val prefs = getPrefs(context)
-                val stored = prefs.getStringSet(PREF_CACHED_PERSONAS, null)
-                if (!stored.isNullOrEmpty()) {
-                    val list = stored.toList().sorted()
-                    cachedPersonas = list
-                    return list
-                }
-            }
-        }
-
-        return rescanPersonas(context)
+        return listOf(DEFAULT_PERSONA)
     }
 
     /**
-     * Explicit On-Demand Re-Scanning:
-     * Scans /sdcard/Medlam-Ai/personas/ strictly when manually requested.
-     * Updates in-memory cache and persists the manifest to SharedPreferences.
+     * On-demand rescan stub returning the unified persona.
      */
     fun rescanPersonas(context: Context? = null): List<String> {
-        ensureDefaultPersonas()
-        val dir = File(PERSONAS_DIR)
-        val files = dir.listFiles { f -> f.isFile && f.extension.equals("md", ignoreCase = true) }
-        val names = if (files != null && files.isNotEmpty()) {
-            files.map { it.name }.sorted()
-        } else {
-            listOf("chat.md", "coding.md", "android_controller.md")
-        }
-
-        cachedPersonas = names
-
-        if (context != null) {
-            val prefs = getPrefs(context)
-            prefs.edit().putStringSet(PREF_CACHED_PERSONAS, names.toSet()).apply()
-        }
-
-        Log.i(TAG, "Explicit persona rescan completed: $names")
-        return names
+        return listOf(DEFAULT_PERSONA)
     }
 
     /**
-     * Retrieves the set of currently active persona files.
+     * Retrieves the set of currently active personas.
      */
-    fun getActivePersonas(context: Context): Set<String> {
-        val prefs = getPrefs(context)
-        val stored = prefs.getStringSet(PREF_ACTIVE_PERSONAS_SET, null)
-        if (!stored.isNullOrEmpty()) {
-            return stored
-        }
-        val legacySingle = prefs.getString(PREF_ACTIVE_PERSONA, null)
-        if (!legacySingle.isNullOrBlank()) {
-            return setOf(legacySingle)
-        }
+    fun getActivePersonas(context: Context? = null): Set<String> {
         return DEFAULT_PERSONAS_SET
     }
 
+    fun setActivePersonas(context: Context? = null, personas: Set<String>) {
+        // No-op in Unified Persona Mode
+    }
+
+    fun getActivePersonaName(context: Context? = null): String {
+        return DEFAULT_PERSONA
+    }
+
+    fun setActivePersonaName(context: Context? = null, personaName: String) {
+        // No-op in Unified Persona Mode
+    }
+
     /**
-     * Persists the active persona selection set across restarts without filesystem scans.
+     * Returns the unified internal God Mode prompt without reading disk.
      */
-    fun setActivePersonas(context: Context, personas: Set<String>) {
-        val prefs = getPrefs(context)
-        val safeSet = if (personas.isEmpty()) DEFAULT_PERSONAS_SET else personas
-        prefs.edit()
-            .putStringSet(PREF_ACTIVE_PERSONAS_SET, safeSet)
-            .putString(PREF_ACTIVE_PERSONA, safeSet.first())
-            .apply()
-        Log.i(TAG, "Active personas set updated to: $safeSet")
+    fun getActivePersonasContent(context: Context? = null): String {
+        return UNIFIED_CORE_PROMPT.trim()
     }
 
-    fun getActivePersonaName(context: Context): String {
-        return getActivePersonas(context).firstOrNull() ?: DEFAULT_PERSONA
-    }
-
-    fun setActivePersonaName(context: Context, personaName: String) {
-        setActivePersonas(context, setOf(personaName))
+    fun getActivePersonaContent(context: Context? = null): String {
+        return UNIFIED_CORE_PROMPT.trim()
     }
 
     /**
-     * Runtime Context Concatenation:
-     * Sequentially merges and concatenates the full text of all currently selected .md files.
-     * Strict Exclusion of Unchecked Profiles: Any persona left unselected is completely excluded.
-     */
-    fun getActivePersonasContent(context: Context): String {
-        val activeSet = getActivePersonas(context)
-        if (activeSet.isEmpty()) return DEFAULT_CHAT_PERSONA
-
-        val dir = File(PERSONAS_DIR)
-        val sections = mutableListOf<String>()
-
-        // Order personas predictably: chat first, then coding, then controller, then custom alphabetical
-        val sortedList = activeSet.toList().sortedWith(
-            compareBy<String> { 
-                when (it.lowercase()) {
-                    "chat.md" -> 0
-                    "coding.md" -> 1
-                    "android_controller.md" -> 2
-                    else -> 3
-                }
-            }.thenBy { it }
-        )
-
-        for (name in sortedList) {
-            val file = File(dir, name)
-            val content = if (file.exists() && file.length() > 0L) {
-                try {
-                    file.readText().trim()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed reading persona $name: ${e.message}")
-                    getFallbackPersonaContent(name)
-                }
-            } else {
-                getFallbackPersonaContent(name)
-            }
-
-            if (content.isNotBlank()) {
-                sections.add(content)
-            }
-        }
-
-        return if (sections.isNotEmpty()) {
-            sections.joinToString("\n\n---\n\n")
-        } else {
-            DEFAULT_CHAT_PERSONA
-        }
-    }
-
-    fun getActivePersonaContent(context: Context): String = getActivePersonasContent(context)
-
-    private fun getFallbackPersonaContent(personaName: String): String {
-        return when (personaName.lowercase()) {
-            "chat.md" -> DEFAULT_CHAT_PERSONA
-            "android_controller.md" -> DEFAULT_CONTROLLER_PERSONA
-            "coding.md" -> DEFAULT_CODING_PERSONA
-            else -> ""
-        }
-    }
-
-    /**
-     * Human-readable role description for Settings UI.
+     * Human-readable role description.
      */
     fun getPersonaDescription(personaName: String): String {
-        return when (personaName.lowercase()) {
-            "coding.md" -> "Software engineering, clean syntax, strict file I/O operations, zero filler."
-            "chat.md" -> "Natural conversation, dialect mirroring (Darija, Arabic, English), open reasoning, web searches."
-            "android_controller.md" -> "Headless programmatic automation, shell commands, script execution, and task scheduling."
-            else -> "Custom external operational persona from /sdcard/Medlam-Ai/personas/."
-        }
+        return "Unified God Mode Core (Elite Autonomous AI Engineer & Android OS Administrator)"
     }
 }
+

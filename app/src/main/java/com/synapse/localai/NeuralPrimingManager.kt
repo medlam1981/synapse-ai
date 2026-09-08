@@ -85,10 +85,8 @@ object NeuralPrimingManager {
                         }
                         scope.launch {
                             try {
-                                // Compile active persona system prompt prefix
-                                val activePersonas = PersonaManager.getActivePersonasContent(appContext)
-                                val baseIdentity = "You are MEDLAM, a powerful autonomous local AI agent operating on Android."
-                                val primingPrefix = "$baseIdentity\n\n$activePersonas"
+                                // Compile active unified persona system prompt prefix
+                                val primingPrefix = PersonaManager.UNIFIED_CORE_PROMPT.trim()
                                 
                                 val warmed = client.warmupPersonaKVCache(primingPrefix)
                                 Log.d(TAG, "✅ Neural Core Primed & Persona KV Cache Active (success: $warmed)")

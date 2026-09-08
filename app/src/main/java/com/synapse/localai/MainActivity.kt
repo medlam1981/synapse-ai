@@ -422,24 +422,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val slashCommands = remember(context) {
         listOf(
             SlashCommandItem(
-                command = "/code",
-                name = "Coding Persona",
-                description = "Toggle active persona coding.md (pure headless synthesis, multi-worker staging)",
-                action = { viewModel.togglePersonaQuick("coding.md", context) }
-            ),
-            SlashCommandItem(
-                command = "/sys",
-                name = "System Controller",
-                description = "Toggle active persona android_controller.md (root/shell execution, hardware tools)",
-                action = { viewModel.togglePersonaQuick("android_controller.md", context) }
-            ),
-            SlashCommandItem(
-                command = "/chat",
-                name = "Conversational",
-                description = "Toggle active persona chat.md (natural reasoning, dialect mirroring)",
-                action = { viewModel.togglePersonaQuick("chat.md", context) }
-            ),
-            SlashCommandItem(
                 command = "/rollback",
                 name = "Instant Revert",
                 description = "Atomically swap production files with the latest local snapshot",
@@ -780,7 +762,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         }
                     }
 
-                    // MODULE 6: Persona & Action Quick-Chips Bar
+                    // MODULE 6: Action Quick-Chips Bar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -789,68 +771,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val activePersonasSet by viewModel.activePersonas.collectAsState()
-                        val isChatActive = activePersonasSet.contains("chat.md")
-                        val isCodeActive = activePersonasSet.contains("coding.md")
-                        val isSysActive = activePersonasSet.contains("android_controller.md")
-
-                        // [/chat]
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.togglePersonaQuick("chat.md", context) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isChatActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isChatActive) Color(0xFF00E5FF) else Color(0xFF30363D))
-                        ) {
-                            Text(
-                                text = "/chat",
-                                color = if (isChatActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (isChatActive) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-
-                        // [/code]
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.togglePersonaQuick("coding.md", context) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isCodeActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isCodeActive) Color(0xFF00E5FF) else Color(0xFF30363D))
-                        ) {
-                            Text(
-                                text = "/code",
-                                color = if (isCodeActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (isCodeActive) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-
-                        // [/sys]
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.togglePersonaQuick("android_controller.md", context) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isSysActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (isSysActive) Color(0xFF00E5FF) else Color(0xFF30363D))
-                        ) {
-                            Text(
-                                text = "/sys",
-                                color = if (isSysActive) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (isSysActive) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-
                         // [/rollback]
                         Surface(
                             modifier = Modifier
