@@ -201,9 +201,7 @@ class GGUFModelClient {
     }
 
     private fun clearBridgeLogs() {
-        try {
-            Runtime.getRuntime().exec(arrayOf("logcat", "-c"))
-        } catch (_: Exception) {}
+        // No-op: Preserve system logcat buffer and native crash diagnostics
     }
 
     private fun isDraftErrorLine(line: String): Boolean {
@@ -238,9 +236,15 @@ class GGUFModelClient {
 
     private fun checkRecentErrors(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "100", "-s", "LlamaBridge:V", "DEBUG:V"))
+            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "60", "-s", "LlamaBridge:V", "DEBUG:V"))
             val text = process.inputStream.bufferedReader().readText()
-            text.lines().any { isDraftErrorLine(it) }
+            for (line in text.lines()) {
+                if (isDraftErrorLine(line)) {
+                    fileLog("⚠️ Draft error line in logcat: $line")
+                    return true
+                }
+            }
+            false
         } catch (_: Exception) {
             false
         }
@@ -418,17 +422,32 @@ class GGUFModelClient {
 
             // 3. Auto detect MTP draft (strictly enforce model family matching)
             var activeDraftPath = if (draftModelPath == "STANDALONE") null else draftModelPath
-            if (draftModelPath != "STANDALONE" && activeDraftPath.isNullOrBlank()) {
-                val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
-                if (matched != null && matched.exists()) {
-                    activeDraftPath = matched.absolutePath
-                }
-            }
 
             if (!activeDraftPath.isNullOrBlank() && activeDraftPath != "STANDALONE") {
                 val draftFile = File(activeDraftPath)
                 if (!draftFile.exists()) {
                     activeDraftPath = null
+                } else {
+                    val draftName = draftFile.nameWithoutExtension.lowercase()
+                    val isFamilyMatch = when {
+                        baseName.contains("gemma") && draftName.contains("gemma") -> true
+                        baseName.contains("qwen") && draftName.contains("qwen") -> true
+                        baseName.contains("llama") && draftName.contains("llama") -> true
+                        baseName.contains("bitnet") && (draftName.contains("bitnet") || draftName.contains("mult")) -> true
+                        else -> false
+                    }
+                    if (!isFamilyMatch) {
+                        fileLog("⚠️ Configured draft ($draftName) does not match base ($baseName). Auto-resolving compatible draft...")
+                        activeDraftPath = null
+                    }
+                }
+            }
+
+            if (draftModelPath != "STANDALONE" && activeDraftPath.isNullOrBlank()) {
+                val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
+                if (matched != null && matched.exists()) {
+                    activeDraftPath = matched.absolutePath
+                    fileLog("⚡ Auto-linked compatible companion MTP draft: ${matched.name}")
                 }
             }
 
@@ -437,9 +456,7 @@ class GGUFModelClient {
 
             if (hasDraft) {
                 activeDraftModelPath = activeDraftPath
-                // NOTE: Speculative decoding graph initialization deadlocks in llama.cpp when paired with --cache-prompt.
-                // OMIT --cache-prompt entirely when MTP companion draft is active.
-                fileLog("MTP Draft Companion candidate linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap, --cache-prompt omitted for speculative graph stability)")
+                fileLog("MTP Draft Companion candidate linked: ${File(activeDraftPath!!).name} (draft mmap=$draftUseMmap)")
                 trialArgs.add("--model-draft")
                 trialArgs.add(activeDraftPath)
                 trialArgs.add("--draft-max")
@@ -449,14 +466,17 @@ class GGUFModelClient {
                 trialArgs.add("--threads-draft")
                 trialArgs.add(safeThreads.toString())
                 trialArgs.add("--ctx-size-draft")
-                // Cap draft context to lightweight window (512) to avoid double KV-cache allocation exhaustion in RAM
-                val draftCtx = minOf(resolvedCtx, 512)
-                trialArgs.add(draftCtx.toString())
+                trialArgs.add(resolvedCtx.toString())
+                trialArgs.add("--n-gpu-layers-draft")
+                trialArgs.add("0")
+                trialArgs.add("--cache-type-k-draft")
+                trialArgs.add("f16")
+                trialArgs.add("--cache-type-v-draft")
+                trialArgs.add("f16")
             } else {
                 activeDraftModelPath = null
-                // Pass --cache-prompt ONLY when running in 'Standalone Execution (No MTP)'
-                trialArgs.add("--cache-prompt")
             }
+            trialArgs.add("--cache-prompt")
 
             fileLog("Launch args: ${trialArgs.joinToString(" ")} (base mmap=$useMmap, draft mmap=$draftUseMmap)")
 
@@ -516,8 +536,8 @@ class GGUFModelClient {
                     break
                 }
 
-                if (hasDraft && (checkRecentErrors() || (!newThread.isAlive && !isServerAlive() && (System.currentTimeMillis() - startTime > 2500L)))) {
-                    fileLog("⚠️ Native draft loading error detected via logcat/thread state! Fast-failing draft and immediately falling back to STANDALONE mode.")
+                if (hasDraft && checkRecentErrors()) {
+                    fileLog("⚠️ Native draft loading error detected via logcat! Fast-failing draft and falling back to STANDALONE mode.")
                     draftFailureDetected = true
                     break
                 }
@@ -835,7 +855,7 @@ class GGUFModelClient {
             .put("stream", true)
             .put("n_predict", targetMaxTokens)
             .put("max_tokens", targetMaxTokens)
-            .put("cache_prompt", activeDraftModelPath == null)
+            .put("cache_prompt", true)
             .put("stop", stopArray)
 
         val bodyBytes = body.toString().toByteArray()

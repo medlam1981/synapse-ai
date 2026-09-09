@@ -87,7 +87,9 @@ object ZramOptimizer {
             val dirs = listOf(
                 File("/sdcard/Medlam-Ai"),
                 File("/sdcard/Medlam-Ai/models"),
+                File("/sdcard/Medlam-Ai/Models"),
                 File("/sdcard/Medlam-Ai/mtp"),
+                File("/sdcard/Medlam-Ai/Mtp"),
                 File("/sdcard/Medlam-Ai/slots")
             )
             for (d in dirs) {
