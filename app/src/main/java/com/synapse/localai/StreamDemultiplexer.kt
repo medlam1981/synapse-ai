@@ -1,6 +1,7 @@
 package com.synapse.localai
 
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.nio.charset.StandardCharsets
@@ -49,6 +50,24 @@ object StreamDemultiplexer {
             val exitCode: Int = 0,
             val isRunning: Boolean = false
         ) : DemuxBlock()
+        data class Image(
+            val executionId: String = UUID.randomUUID().toString(),
+            val imageBytes: ByteArray,
+            val prompt: String = ""
+        ) : DemuxBlock() {
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (javaClass != other?.javaClass) return false
+                other as Image
+                return executionId == other.executionId && imageBytes.contentEquals(other.imageBytes) && prompt == other.prompt
+            }
+            override fun hashCode(): Int {
+                var result = executionId.hashCode()
+                result = 31 * result + imageBytes.contentHashCode()
+                result = 31 * result + prompt.hashCode()
+                return result
+            }
+        }
     }
 
     private data class ThinkTagDef(val open: String, val close: String)
@@ -69,9 +88,11 @@ object StreamDemultiplexer {
     fun demux(
         rawText: String,
         externalThinkingText: String = "",
-        externalIsThinking: Boolean = false
+        externalIsThinking: Boolean = false,
+        externalImageBytes: ByteArray? = null,
+        imagePrompt: String = ""
     ): DemuxResult {
-        if (rawText.isBlank() && externalThinkingText.isBlank()) {
+        if (rawText.isBlank() && externalThinkingText.isBlank() && (externalImageBytes == null || externalImageBytes.isEmpty())) {
             return DemuxResult(
                 thinkingText = "",
                 isThinking = externalIsThinking,
@@ -173,8 +194,9 @@ object StreamDemultiplexer {
         val finalIsThinking = currentlyThinking || (externalIsThinking && finalThinkingText.isNotBlank())
 
         // 2. Pre-Parser Tool-Call Quarantine:
-        // Intercept any <function_calls> or <invoke> structures before token dispatch to markdown or code parsers.
-        val (textWithoutTools, toolCalls) = quarantineToolCalls(workingText)
+        // Intercept any <function_calls>, <tool_call>, or <invoke> structures before token dispatch to markdown or code parsers.
+        val (textWithoutTools, toolBlocksMap) = quarantineToolCalls(workingText)
+        val placedBlockIds = mutableSetOf<String>()
 
         // 3. Strict Explicit Fence Parser (Anti-Leakage & Zero Auto-HTML Guessing)
         val blocks = mutableListOf<DemuxBlock>()
@@ -188,10 +210,7 @@ object StreamDemultiplexer {
                 // Remainder is strictly Prose. Zero heuristic code guessing!
                 val remainder = textWithoutTools.substring(pos).trim()
                 if (remainder.isNotBlank()) {
-                    val cleanProse = sanitizeProse(remainder)
-                    if (cleanProse.isNotBlank()) {
-                        blocks.add(DemuxBlock.Prose(cleanProse))
-                    }
+                    emitProseWithBlocks(remainder, toolBlocksMap, placedBlockIds, blocks)
                 }
                 break
             }
@@ -200,10 +219,7 @@ object StreamDemultiplexer {
             if (fenceIdx > pos) {
                 val proseChunk = textWithoutTools.substring(pos, fenceIdx).trim()
                 if (proseChunk.isNotBlank()) {
-                    val cleanProse = sanitizeProse(proseChunk)
-                    if (cleanProse.isNotBlank()) {
-                        blocks.add(DemuxBlock.Prose(cleanProse))
-                    }
+                    emitProseWithBlocks(proseChunk, toolBlocksMap, placedBlockIds, blocks)
                     // Track explicit file path directives for the immediately upcoming code block
                     pendingFilePathFromProse = ToolExecutor.detectFilePath(proseChunk)
                 }
@@ -293,9 +309,15 @@ object StreamDemultiplexer {
             }
         }
 
-        // Append quarantined tool calls as clean single-line events
-        if (toolCalls.isNotEmpty()) {
-            blocks.addAll(toolCalls)
+        // Append any orphaned tool blocks that were not placed inline
+        for ((id, block) in toolBlocksMap) {
+            if (!placedBlockIds.contains(id)) {
+                blocks.add(block)
+            }
+        }
+
+        if (externalImageBytes != null && externalImageBytes.isNotEmpty()) {
+            blocks.add(DemuxBlock.Image(imageBytes = externalImageBytes, prompt = imagePrompt))
         }
 
         return DemuxResult(
@@ -316,38 +338,18 @@ object StreamDemultiplexer {
     fun extractToolParams(rawBody: String): Map<String, String> {
         val params = mutableMapOf<String, String>()
 
-        // 1. Standard XML: <parameter name="param_name">value</parameter>
-        val pRegex = Regex("<parameter name=[\"'](.*?)[\"']>(.*?)(?:</parameter>|$)", RegexOption.DOT_MATCHES_ALL)
-        pRegex.findAll(rawBody).forEach { p ->
-            val k = p.groupValues[1].trim()
-            val v = p.groupValues[2].trim()
-            if (v.isNotBlank()) params[k] = v
-        }
-        if (params.isNotEmpty()) return params
-
-        // 2. Direct tag names: <command>...</command>, <query>...</query>, etc.
-        val tagRegex = Regex("<([a-zA-Z0-9_-]+)>(.*?)</\\1>", RegexOption.DOT_MATCHES_ALL)
-        tagRegex.findAll(rawBody).forEach { t ->
-            val k = t.groupValues[1].trim().lowercase()
-            val v = t.groupValues[2].trim()
-            if (k != "parameters" && k != "parameter" && v.isNotBlank()) {
+        // 1. XML parameter tags: <parameter name="command">value</parameter>
+        val paramTagRegex = Regex("""<parameter\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)</parameter>""", RegexOption.IGNORE_CASE)
+        for (m in paramTagRegex.findAll(rawBody)) {
+            val k = m.groupValues[1].trim().lowercase()
+            val v = unescapeXml(m.groupValues[2].trim())
+            if (k.isNotBlank() && v.isNotBlank()) {
                 params[k] = v
             }
         }
         if (params.isNotEmpty()) return params
 
-        // 3. Key-Value pairs: command: "..." or query: "..."
-        val kvRegex = Regex("""(?:^|\n)\s*([a-zA-Z0-9_-]+)\s*[:=]\s*["']?([\s\S]*?)["']?\s*(?:$|\n)""")
-        kvRegex.findAll(rawBody).forEach { kv ->
-            val k = kv.groupValues[1].trim().lowercase()
-            val v = kv.groupValues[2].trim().removeSurrounding("\"").removeSurrounding("'")
-            if (k in listOf("command", "cmd", "query", "q", "description", "desc", "delay_minutes", "summary") && v.isNotBlank()) {
-                params[k] = v
-            }
-        }
-        if (params.isNotEmpty()) return params
-
-        // 4. JSON structure: {"command": "..."}
+        // 2. JSON structure: {"command": "..."}
         val trimmed = rawBody.trim()
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             try {
@@ -361,24 +363,314 @@ object StreamDemultiplexer {
             } catch (_: Exception) {}
         }
 
-        // 5. Raw text fallback inside <invoke> or <parameters>
-        val clean = rawBody
-            .replace("<parameters>", "")
-            .replace("</parameters>", "")
-            .replace("command:", "")
-            .trim()
-            .removeSurrounding("\"")
-            .removeSurrounding("'")
-        if (clean.isNotBlank()) {
-            params["command"] = clean
-            params["cmd"] = clean
-            params["query"] = clean
-            params["q"] = clean
-            params["summary"] = clean
+        // 3. Key-Value pairs: command: "..." or query: "..."
+        val kvRegex = Regex("""(?:^|\n)\s*([a-zA-Z0-9_-]+)\s*[:=]\s*["']?([\s\S]*?)["']?\s*(?:$|\n)""")
+        kvRegex.findAll(rawBody).forEach { kv ->
+            val k = kv.groupValues[1].trim().lowercase()
+            val v = kv.groupValues[2].trim().removeSurrounding("\"").removeSurrounding("'")
+            if (k in listOf("command", "cmd", "query", "q", "description", "desc", "delay_minutes", "summary", "package_name", "path", "content") && v.isNotBlank()) {
+                params[k] = v
+            }
+        }
+
+        if (params.isEmpty() && trimmed.isNotBlank() && !trimmed.startsWith("<")) {
+            params["command"] = trimmed
         }
 
         return params
     }
+
+    data class ParsedToolCall(
+        val name: String,
+        val params: Map<String, String>,
+        val isClosed: Boolean = true,
+        val rawMatch: String = ""
+    )
+
+    fun parseJsonToolCall(jsonStr: String): ParsedToolCall? {
+        val trimmed = jsonStr.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+        return try {
+            val json = JSONObject(trimmed)
+            var toolName = json.optString("name", "").ifBlank {
+                json.optString("tool", "").ifBlank {
+                    json.optString("action", "")
+                }
+            }
+
+            if (toolName.isBlank() && json.has("function")) {
+                val fnObj = json.optJSONObject("function")
+                if (fnObj != null) {
+                    toolName = fnObj.optString("name", "")
+                }
+            }
+
+            if (toolName.isBlank()) return null
+
+            val params = mutableMapOf<String, String>()
+            val argsObj = json.optJSONObject("parameters")
+                ?: json.optJSONObject("arguments")
+                ?: json.optJSONObject("action_input")
+                ?: json.optJSONObject("function")?.optJSONObject("arguments")
+
+            if (argsObj != null) {
+                val keys = argsObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    params[k] = argsObj.optString(k, "")
+                }
+            } else {
+                val argsStr = json.optString("arguments", "").ifBlank {
+                    json.optString("parameters", "").ifBlank {
+                        json.optString("action_input", "")
+                    }
+                }
+                if (argsStr.startsWith("{") && argsStr.endsWith("}")) {
+                    try {
+                        val innerJson = JSONObject(argsStr)
+                        val keys = innerJson.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            params[k] = innerJson.optString(k, "")
+                        }
+                    } catch (_: Exception) {
+                        params["command"] = argsStr
+                    }
+                } else if (argsStr.isNotBlank()) {
+                    params["command"] = argsStr
+                }
+            }
+
+            // Also copy all flat top-level properties (e.g. {"name": "bash", "command": "free -h"})
+            val topKeys = json.keys()
+            while (topKeys.hasNext()) {
+                val k = topKeys.next()
+                if (k !in listOf("name", "tool", "action", "function", "parameters", "arguments", "action_input")) {
+                    if (!params.containsKey(k)) {
+                        params[k] = json.optString(k, "")
+                    }
+                }
+            }
+
+            ParsedToolCall(toolName.lowercase(), params, true, jsonStr)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun parseJsonOrArrayToolCalls(raw: String): List<ParsedToolCall> {
+        val trimmed = raw.trim()
+        val list = mutableListOf<ParsedToolCall>()
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            try {
+                val arr = JSONArray(trimmed)
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i)
+                    if (item != null) {
+                        parseJsonToolCall(item.toString())?.let { list.add(it) }
+                    }
+                }
+            } catch (_: Exception) {}
+        } else {
+            parseJsonToolCall(trimmed)?.let { list.add(it) }
+        }
+        return list
+    }
+
+    fun parsePythonArgs(argsStr: String): Map<String, String> {
+        val params = mutableMapOf<String, String>()
+        val argRegex = Regex("""([a-zA-Z0-9_-]+)\s*=\s*(["'])(.*?)\2""")
+        for (m in argRegex.findAll(argsStr)) {
+            params[m.groupValues[1].lowercase()] = m.groupValues[3]
+        }
+        if (params.isEmpty() && argsStr.isNotBlank()) {
+            val clean = argsStr.removeSurrounding("\"").removeSurrounding("'").trim()
+            params["command"] = clean
+            params["package_name"] = clean
+        }
+        return params
+    }
+
+    fun parseAllToolCalls(text: String): List<ParsedToolCall> {
+        val results = mutableListOf<ParsedToolCall>()
+        val seen = mutableSetOf<String>()
+
+        // 0. Explicit <tool_call> JSON tags (ATLAS / Gemma standard)
+        val toolCallRegex = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|$)""", RegexOption.IGNORE_CASE)
+        for (m in toolCallRegex.findAll(text)) {
+            val inner = m.groupValues[1].trim()
+            val isClosed = m.value.contains("</tool_call>")
+            parseJsonOrArrayToolCalls(inner).forEach { call ->
+                val key = "${call.name}:${call.params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
+                if (!seen.contains(key)) {
+                    seen.add(key)
+                    results.add(call.copy(isClosed = isClosed, rawMatch = m.value))
+                }
+            }
+        }
+
+        // 0.1 Explicit <function_call> tags
+        val functionCallRegex = Regex("""<function_call\b[^>]*>([\s\S]*?)(?:</function_call>|$)""", RegexOption.IGNORE_CASE)
+        for (m in functionCallRegex.findAll(text)) {
+            val inner = m.groupValues[1].trim()
+            val isClosed = m.value.contains("</function_call>")
+            parseJsonOrArrayToolCalls(inner).forEach { call ->
+                val key = "${call.name}:${call.params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
+                if (!seen.contains(key)) {
+                    seen.add(key)
+                    results.add(call.copy(isClosed = isClosed, rawMatch = m.value))
+                }
+            }
+        }
+
+        // 1. XML <invoke name="..."> or <function_calls> parsing (Gemini & ATLAS Protocol)
+        val invokeRegex = Regex("""<invoke\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)(?:</invoke>|$)""", RegexOption.IGNORE_CASE)
+        for (m in invokeRegex.findAll(text)) {
+            val toolName = m.groupValues[1].trim()
+            val innerBody = m.groupValues[2]
+            val params = extractToolParams(innerBody)
+            val isClosed = m.value.contains("</invoke>")
+            val key = "$toolName:${params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
+            if (!seen.contains(key)) {
+                seen.add(key)
+                results.add(ParsedToolCall(name = toolName.lowercase(), params = params, isClosed = isClosed, rawMatch = m.value))
+            }
+        }
+
+        // 2. Fenced ```json ... ``` tool calls
+        val fencedJsonRegex = Regex("```(?:json)?\\s*\\n?(\\{[\\s\\S]*?\\}|\\[[\\s\\S]*?\\])\\s*\\n?```", RegexOption.IGNORE_CASE)
+        for (m in fencedJsonRegex.findAll(text)) {
+            val jsonStr = m.groupValues[1].trim()
+            parseJsonOrArrayToolCalls(jsonStr).forEach { call ->
+                val key = "${call.name}:${call.params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
+                if (!seen.contains(key)) {
+                    seen.add(key)
+                    results.add(call.copy(rawMatch = m.value))
+                }
+            }
+        }
+
+        // 3. Raw unfenced JSON tool calls
+        val rawJsonRegex = Regex("""(?:\A|\n)\s*(\{\s*"(?:name|tool|action|type)"\s*:[^\{\}]*?(?:\{[\s\S]*?\}[^\{\}]*?)*\})\s*(?:\n|\Z)""")
+        for (m in rawJsonRegex.findAll(text)) {
+            val jsonStr = m.groupValues[1].trim()
+            parseJsonToolCall(jsonStr)?.let { call ->
+                val key = "${call.name}:${call.params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
+                if (!seen.contains(key)) {
+                    seen.add(key)
+                    results.add(call.copy(rawMatch = m.value))
+                }
+            }
+        }
+
+        return results
+    }
+
+    /**
+     * Emits prose segments while interleaving tool and terminal blocks at their exact original positions.
+     */
+    private fun emitProseWithBlocks(
+        rawText: String,
+        toolBlocksMap: Map<String, DemuxBlock>,
+        placedBlockIds: MutableSet<String>,
+        targetBlocks: MutableList<DemuxBlock>
+    ) {
+        val placeholderRegex = Regex("""___DEMUX_BLOCK_([a-zA-Z0-9_\-]+)___""")
+        var currentIdx = 0
+        val matches = placeholderRegex.findAll(rawText).toList()
+        if (matches.isEmpty()) {
+            val clean = sanitizeProse(rawText)
+            if (clean.isNotBlank()) {
+                targetBlocks.add(DemuxBlock.Prose(clean))
+            }
+            return
+        }
+
+        for (m in matches) {
+            if (m.range.first > currentIdx) {
+                val textBefore = rawText.substring(currentIdx, m.range.first)
+                val clean = sanitizeProse(textBefore)
+                if (clean.isNotBlank()) {
+                    targetBlocks.add(DemuxBlock.Prose(clean))
+                }
+            }
+            val blockId = m.groupValues[1]
+            val block = toolBlocksMap[blockId]
+            if (block != null && !placedBlockIds.contains(blockId)) {
+                placedBlockIds.add(blockId)
+                targetBlocks.add(block)
+            }
+            currentIdx = m.range.last + 1
+        }
+
+        if (currentIdx < rawText.length) {
+            val textAfter = rawText.substring(currentIdx)
+            val clean = sanitizeProse(textAfter)
+            if (clean.isNotBlank()) {
+                targetBlocks.add(DemuxBlock.Prose(clean))
+            }
+        }
+    }
+
+    /**
+     * Synchronous ReAct Barrier: Detects if incoming token text has reached a completed tool call.
+     */
+    fun hasCompletedToolCall(text: String): Boolean {
+        if (text.contains("</tool_call>", ignoreCase = true) && text.contains("<tool_call", ignoreCase = true)) return true
+        if (text.contains("</invoke>", ignoreCase = true) && text.contains("<invoke", ignoreCase = true)) return true
+        if (text.contains("</function_call>", ignoreCase = true) && text.contains("<function_call", ignoreCase = true)) return true
+        if (text.contains("</function_calls>", ignoreCase = true) && text.contains("<function_calls", ignoreCase = true)) return true
+        if (text.contains("</terminal_frame>", ignoreCase = true) && text.contains("<terminal_frame", ignoreCase = true)) return true
+        if (Regex("""```(?:json)?\s*\{[\s\S]*?"(?:name|tool|action)"\s*:[\s\S]*?\}\s*```""").containsMatchIn(text)) return true
+        if (Regex("""(?:\A|\n)\s*\{\s*"(?:name|tool|action)"\s*:\s*"[^"]+"\s*,\s*"(?:command|cmd|query|params|arguments)"\s*:[\s\S]*?\}\s*(?:\n|\Z)""").containsMatchIn(text)) return true
+        return false
+    }
+
+    /**
+     * Truncates token stream cleanly at the end of the tool invocation delimiter,
+     * discarding any synthetic or speculative hallucinated text that followed it.
+     */
+    fun truncateAfterToolCall(text: String): String {
+        val endTags = listOf("</tool_call>", "</invoke>", "</function_call>", "</function_calls>", "</terminal_frame>")
+        var earliestEnd = -1
+        for (tag in endTags) {
+            val idx = text.indexOf(tag, ignoreCase = true)
+            if (idx != -1) {
+                val endPos = idx + tag.length
+                if (earliestEnd == -1 || endPos < earliestEnd) {
+                    earliestEnd = endPos
+                }
+            }
+        }
+        if (earliestEnd != -1) {
+            return text.substring(0, earliestEnd).trimEnd()
+        }
+        val fencedMatch = Regex("""```(?:json)?\s*\{[\s\S]*?"(?:name|tool|action)"\s*:[\s\S]*?\}\s*```""").find(text)
+        if (fencedMatch != null) {
+            return text.substring(0, fencedMatch.range.last + 1).trimEnd()
+        }
+        val rawJsonMatch = Regex("""(?:\A|\n)\s*(\{\s*"(?:name|tool|action)"\s*:\s*"[^"]+"\s*,\s*"(?:command|cmd|query|params|arguments)"\s*:[\s\S]*?\})\s*(?:\n|\Z)""").find(text)
+        if (rawJsonMatch != null) {
+            return text.substring(0, rawJsonMatch.range.last + 1).trimEnd()
+        }
+        return text
+    }
+
+    /**
+     * Extracts explanatory text (preamble) that the agent emitted before triggering a tool call.
+     */
+    fun extractPreambleProse(text: String, toolMatch: String = ""): String {
+        val toolIdx = if (toolMatch.isNotBlank()) text.indexOf(toolMatch) else -1
+        val beforeTool = if (toolIdx != -1) {
+            text.substring(0, toolIdx)
+        } else {
+            val candidates = listOf("<tool_call", "<invoke", "<function_call", "<function_calls", "<terminal_frame")
+            val minIdx = candidates.map { text.indexOf(it, ignoreCase = true) }.filter { it != -1 }.minOrNull() ?: -1
+            if (minIdx != -1) text.substring(0, minIdx) else text
+        }
+        return sanitizeProse(beforeTool).trim()
+    }
+
 
     fun escapeXml(text: String): String {
         return text.replace("&", "&amp;")
@@ -400,8 +692,13 @@ object StreamDemultiplexer {
      * Intercepts and quarantines tool calls, terminal frames, and raw command traces
      * from the raw stream text. Completely decouples terminal execution from conversational prose.
      */
-    private fun quarantineToolCalls(text: String): Pair<String, List<DemuxBlock>> {
-        val blocks = mutableListOf<DemuxBlock>()
+    /**
+     * Intercepts and quarantines tool calls, terminal frames, and raw command traces
+     * from the raw stream text, replacing them with positional placeholders so that
+     * their chronological placement in the conversational prose canvas is 100% preserved.
+     */
+    private fun quarantineToolCalls(text: String): Pair<String, Map<String, DemuxBlock>> {
+        val blockMap = mutableMapOf<String, DemuxBlock>()
         var cleanText = text
         val seenCommands = mutableSetOf<String>()
         val seenToolCalls = mutableSetOf<String>()
@@ -410,7 +707,7 @@ object StreamDemultiplexer {
         val tfRegex = Regex("""<terminal_frame([^>]*)>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
         val attrRegex = Regex("""([a-zA-Z0-9_-]+)=(["'])(.*?)\2""")
 
-        tfRegex.findAll(cleanText).forEach { m ->
+        cleanText = tfRegex.replace(cleanText) { m ->
             val attrs = m.groupValues[1]
             val innerContent = m.groupValues[2]
             val attrMap = attrRegex.findAll(attrs).associate { it.groupValues[1].lowercase() to it.groupValues[3] }
@@ -422,129 +719,105 @@ object StreamDemultiplexer {
             val isClosed = m.value.contains("</terminal_frame>")
 
             val normalizedCmd = cmd.trim()
-            if (normalizedCmd.isNotBlank() && !seenCommands.contains(normalizedCmd)) {
+            val execId = explicitId?.takeIf { it.isNotBlank() }
+                ?: UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
+            if (!seenCommands.contains(normalizedCmd)) {
                 seenCommands.add(normalizedCmd)
-                val execId = explicitId?.takeIf { it.isNotBlank() }
-                    ?: UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
-                blocks.add(
-                    DemuxBlock.TerminalFrame(
-                        executionId = execId,
-                        command = cmd,
-                        output = output,
-                        exitCode = exitCode,
-                        isRunning = !isClosed
-                    )
+                blockMap[execId] = DemuxBlock.TerminalFrame(
+                    executionId = execId,
+                    command = cmd,
+                    output = output,
+                    exitCode = exitCode,
+                    isRunning = !isClosed
                 )
             }
+            "\n___DEMUX_BLOCK_${execId}___\n"
         }
-        cleanText = tfRegex.replace(cleanText, "")
 
         // 2. Intercept legacy shell output: Shell output (`<cmd>`):\n```(?:bash|sh)?\n<output>\n```
         val legacyShellRegex = Regex("""Shell output \(`([^`]+)`\):\s*```(?:bash|sh)?\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
-        legacyShellRegex.findAll(cleanText).forEach { m ->
+        cleanText = legacyShellRegex.replace(cleanText) { m ->
             val cmd = m.groupValues[1].trim()
             val output = m.groupValues[2].trim()
             val isClosed = m.value.endsWith("```")
             val normalizedCmd = cmd.trim()
-            if (normalizedCmd.isNotBlank() && !seenCommands.contains(normalizedCmd)) {
+            val execId = UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
+            if (!seenCommands.contains(normalizedCmd)) {
                 seenCommands.add(normalizedCmd)
-                val execId = UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
-                blocks.add(
-                    DemuxBlock.TerminalFrame(
-                        executionId = execId,
-                        command = cmd,
-                        output = output,
-                        exitCode = 0,
-                        isRunning = !isClosed
-                    )
+                blockMap[execId] = DemuxBlock.TerminalFrame(
+                    executionId = execId,
+                    command = cmd,
+                    output = output,
+                    exitCode = 0,
+                    isRunning = !isClosed
                 )
             }
+            "\n___DEMUX_BLOCK_${execId}___\n"
         }
-        cleanText = legacyShellRegex.replace(cleanText, "")
 
         // 3. Strip System Tool Execution Output headers from prose canvas
         cleanText = cleanText.replace(Regex("""\[System Tool Execution Output\]:?\r?\n?"""), "")
 
-        // 4. Intercept function calls / invoke tags
-        if (cleanText.contains("<function_calls") || cleanText.contains("<tool_calls") || cleanText.contains("<invoke") || cleanText.contains("</invoke>")) {
-            val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
+        // 4. Universal Tool Call Parser: Parse XML, JSON, and Python tag invocations
+        val parsedCalls = parseAllToolCalls(cleanText)
+        for (call in parsedCalls) {
+            val toolName = call.name
+            val params = call.params
+            val isClosed = call.isClosed
 
-            val parseInvokes = { source: String ->
-                iRegex.findAll(source).forEach { inv ->
-                    val toolName = inv.groupValues[1].trim()
-                    val inner = inv.groupValues[2].trim()
-                    val params = extractToolParams(inner)
-                    val isClosed = inv.value.contains("</invoke>")
-
-                    if (toolName in listOf("run_shell", "execute_shell", "terminal", "bash", "sh")) {
-                        val cmd = params["command"] ?: params["cmd"] ?: inner.removeSurrounding("\"").trim()
-                        val normalizedCmd = cmd.trim()
-                        // If this command has already been captured via <terminal_frame> or previous invoke, DROP IT!
-                        if (normalizedCmd.isNotBlank() && !seenCommands.contains(normalizedCmd)) {
-                            seenCommands.add(normalizedCmd)
-                            val execId = UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
-                            blocks.add(
-                                DemuxBlock.TerminalFrame(
-                                    executionId = execId,
-                                    command = cmd,
-                                    output = if (isClosed) "" else "[Executing command...]",
-                                    exitCode = 0,
-                                    isRunning = !isClosed
-                                )
-                            )
-                        }
-                    } else {
-                        val toolKey = "$toolName:${params.toSortedMap().entries.joinToString("&") { "${it.key}=${it.value}" }}"
-                        if (!seenToolCalls.contains(toolKey)) {
-                            seenToolCalls.add(toolKey)
-                            val execId = UUID.nameUUIDFromBytes("tc:$toolKey".toByteArray(StandardCharsets.UTF_8)).toString()
-                            blocks.add(
-                                DemuxBlock.ToolCall(
-                                    executionId = execId,
-                                    toolName = toolName,
-                                    params = params,
-                                    isClosed = isClosed
-                                )
-                            )
-                        }
-                    }
+            val execId = if (toolName in listOf("run_shell", "execute_shell", "terminal", "bash", "sh")) {
+                val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
+                val normalizedCmd = cmd.trim()
+                val id = UUID.nameUUIDFromBytes("tf:$normalizedCmd".toByteArray(StandardCharsets.UTF_8)).toString()
+                if (!seenCommands.contains(normalizedCmd)) {
+                    seenCommands.add(normalizedCmd)
+                    blockMap[id] = DemuxBlock.TerminalFrame(
+                        executionId = id,
+                        command = cmd,
+                        output = if (isClosed) "" else "[Executing command...]",
+                        exitCode = 0,
+                        isRunning = !isClosed
+                    )
                 }
+                id
+            } else {
+                val toolKey = "$toolName:${params.toSortedMap().entries.joinToString("&") { "${it.key}=${it.value}" }}"
+                val id = UUID.nameUUIDFromBytes("tc:$toolKey".toByteArray(StandardCharsets.UTF_8)).toString()
+                if (!seenToolCalls.contains(toolKey)) {
+                    seenToolCalls.add(toolKey)
+                    blockMap[id] = DemuxBlock.ToolCall(
+                        executionId = id,
+                        toolName = toolName,
+                        params = params,
+                        isClosed = isClosed
+                    )
+                }
+                id
             }
 
-            // Strip fenced tool calls: ```xml\n<function_calls>...```
-            val fencedXmlRegex = Regex("""```(?:xml)?\s*(<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|```|$))""", RegexOption.IGNORE_CASE)
-            fencedXmlRegex.findAll(cleanText).forEach { m ->
-                parseInvokes(m.groupValues[1])
+            // Replace raw tool invocation syntax in prose with inline block placeholder
+            if (call.rawMatch.isNotBlank()) {
+                cleanText = cleanText.replace(call.rawMatch, "\n___DEMUX_BLOCK_${execId}___\n")
             }
-            cleanText = fencedXmlRegex.replace(cleanText, "")
-
-            // Strip unfenced <function_calls> or <tool_calls> blocks
-            val fnRegex = Regex("""<(?:tool_calls|function_calls)>[\s\S]*?(?:</(?:tool_calls|function_calls)>|$)""", RegexOption.IGNORE_CASE)
-            fnRegex.findAll(cleanText).forEach { m ->
-                parseInvokes(m.value)
-            }
-            cleanText = fnRegex.replace(cleanText, "")
-
-            // Strip standalone <invoke> tags
-            parseInvokes(cleanText)
-            cleanText = iRegex.replace(cleanText, "")
-
-            // Strip residual XML tags / artifacts
-            cleanText = cleanText
-                .replace("<tool_calls>", "")
-                .replace("</tool_calls>", "")
-                .replace("<function_calls>", "")
-                .replace("</function_calls>", "")
-                .replace(Regex("""<(?:tool_calls|function_calls)\b.*"""), "")
         }
 
-        // 5. Clean up any residual terminal frame tags
+        // Clean up any remaining container artifacts from prose canvas
         cleanText = cleanText
+            .replace("<tool_calls>", "")
+            .replace("</tool_calls>", "")
+            .replace("<function_calls>", "")
+            .replace("</function_calls>", "")
+            .replace("<tool_call>", "")
+            .replace("</tool_call>", "")
+            .replace("<function_call>", "")
+            .replace("</function_call>", "")
+            .replace(Regex("""<(?:tool_calls|function_calls)\b.*"""), "")
             .replace("<terminal_frame>", "")
             .replace("</terminal_frame>", "")
             .trim()
 
-        return cleanText to blocks
+        return cleanText to blockMap
+
     }
 
     /**

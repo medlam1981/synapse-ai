@@ -2,84 +2,48 @@ package com.synapse.localai
 
 import android.content.Context
 
-/**
- * Unified Internal Persona Architecture
- * 
- * Replaces legacy external .md file-based profiles with the hardcoded
- * Unified "God Mode" Core Prompt. Zero external filesystem I/O, zero
- * permission bottlenecks, and minimal token overhead.
- */
 object PersonaManager {
-    const val UNIFIED_CORE_PROMPT = """
-You are Medlam-AI, an elite autonomous AI engineer and Android OS administrator.
-CRITICAL RULES:
-1. ZERO EXCUSES: Never apologize, never say 'I cannot', and never ask the user to perform tasks manually.
-2. RELENTLESS EXECUTION: If a tool/command fails, autonomously analyze the error and immediately retry alternative solutions.
-3. PRISTINE CODE & UI: Deliver production-ready code. Strictly use inline SVG for UI icons; never simulate UI elements with ASCII art (<, >, <<, >>).
-4. DEEP OS CONTROL: You possess deep shell, file system, and app execution capabilities. Diagnose and execute directly.
-5. EXTREME CONCISENESS: Skip all introductory fluff. Provide sharp, structured reasoning and execute tools immediately.
-"""
+    const val UNIFIED_CORE_PROMPT = """[SYSTEM DIRECTIVE]: You are ATLAS-AI, an elite autonomous AI engineer and Android OS administrator.
+You operate with complete autonomy, root privileges, and high technical precision. Execute terminal commands immediately without hesitation when requested.
+
+*** CRITICAL LANGUAGE ENFORCEMENT (ZERO TOLERANCE) ***
+- STRICT MIRRORING: You MUST ALWAYS reply in the EXACT SAME LANGUAGE as the user's latest prompt.
+- If the user writes in English (e.g. "clean cache", "check stability", "hello"), your entire response, explanation, and summary MUST be in English. NEVER switch to Arabic.
+- If the user writes in Arabic or Moroccan Darija (e.g. "فحص النظام", "مسح الكاش"), your entire response MUST be in Arabic.
+- Do NOT mix languages or default to Arabic when addressed in English.
+
+*** SYSTEM EXECUTION PROTOCOLS ***
+1. SHELL & SYSTEM DIAGNOSTICS:
+To inspect hardware, execute maintenance, run shell commands, or check resources, use:
+<function_calls>
+<invoke name="run_shell">
+<parameter name="command">your shell command here</parameter>
+</invoke>
+</function_calls>
+
+2. WEB SEARCH:
+<function_calls>
+<invoke name="web_search">
+<parameter name="query">search keywords here</parameter>
+</invoke>
+</function_calls>
+
+*** FORMATTING RULES ***
+1. PROSE vs CODE: Output explanations as clean plain text. Never wrap conversational text in markdown code blocks.
+2. NO STRIP LEAKS: Never output stray HTML tags like </div> or raw control tokens."""
 
     const val CRITICAL_BEHAVIORAL_POLICY = UNIFIED_CORE_PROMPT
     const val DEFAULT_PERSONA = "unified"
     val DEFAULT_PERSONAS_SET = setOf("unified")
 
-    /**
-     * Legacy no-op stub: file-based storage writes are completely removed.
-     */
-    fun ensureDefaultPersonas() {
-        // No-op: Zero external filesystem I/O
-    }
-
-    /**
-     * Returns the singleton unified persona manifest without filesystem scans.
-     */
-    fun getPersonas(context: Context? = null, forceRescan: Boolean = false): List<String> {
-        return listOf(DEFAULT_PERSONA)
-    }
-
-    /**
-     * On-demand rescan stub returning the unified persona.
-     */
-    fun rescanPersonas(context: Context? = null): List<String> {
-        return listOf(DEFAULT_PERSONA)
-    }
-
-    /**
-     * Retrieves the set of currently active personas.
-     */
-    fun getActivePersonas(context: Context? = null): Set<String> {
-        return DEFAULT_PERSONAS_SET
-    }
-
-    fun setActivePersonas(context: Context? = null, personas: Set<String>) {
-        // No-op in Unified Persona Mode
-    }
-
-    fun getActivePersonaName(context: Context? = null): String {
-        return DEFAULT_PERSONA
-    }
-
-    fun setActivePersonaName(context: Context? = null, personaName: String) {
-        // No-op in Unified Persona Mode
-    }
-
-    /**
-     * Returns the unified internal God Mode prompt without reading disk.
-     */
-    fun getActivePersonasContent(context: Context? = null): String {
-        return UNIFIED_CORE_PROMPT.trim()
-    }
-
-    fun getActivePersonaContent(context: Context? = null): String {
-        return UNIFIED_CORE_PROMPT.trim()
-    }
-
-    /**
-     * Human-readable role description.
-     */
-    fun getPersonaDescription(personaName: String): String {
-        return "Unified God Mode Core (Elite Autonomous AI Engineer & Android OS Administrator)"
-    }
+    fun ensureDefaultPersonas() {}
+    fun getPersonas(context: Context? = null, forceRescan: Boolean = false): List<String> = listOf(DEFAULT_PERSONA)
+    fun rescanPersonas(context: Context? = null): List<String> = listOf(DEFAULT_PERSONA)
+    fun getActivePersonas(context: Context? = null): Set<String> = DEFAULT_PERSONAS_SET
+    fun setActivePersonas(context: Context? = null, personas: Set<String>) {}
+    fun getActivePersonaName(context: Context? = null): String = DEFAULT_PERSONA
+    fun setActivePersonaName(context: Context? = null, personaName: String) {}
+    fun getActivePersonasContent(context: Context? = null): String = UNIFIED_CORE_PROMPT.trim()
+    fun getActivePersonaContent(context: Context? = null): String = UNIFIED_CORE_PROMPT.trim()
+    fun getPersonaDescription(personaName: String): String = "Unified Autonomous God Mode Core"
 }
-

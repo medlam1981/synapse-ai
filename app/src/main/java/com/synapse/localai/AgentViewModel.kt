@@ -1,9 +1,16 @@
 package com.synapse.localai
 
+import android.app.ActivityManager
+import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
+import com.synapse.localai.audio.CascadeStreamInterceptor
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import android.util.Log
 import android.net.Uri
 import android.provider.MediaStore
@@ -24,6 +31,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -41,17 +49,13 @@ import java.util.*
 import com.synapse.localai.tools.YouTubeTool
 import com.synapse.localai.tools.DocumentTool
 import com.synapse.localai.tools.WebSearchTool
-import com.synapse.localai.orchestration.MultiWorkerOrchestrator
+import com.synapse.localai.repository.ImageGenerator
+import com.synapse.localai.repository.ImageRepository
+import com.synapse.localai.repository.ImageResult
+import com.synapse.localai.repository.ImageState
+import com.synapse.localai.repository.GeminiImageGenerator
+import com.synapse.localai.repository.LocalDiffusionGenerator
 
-const val UNIFIED_CORE_PROMPT = """
-You are Medlam-AI, an elite autonomous AI engineer and Android OS administrator.
-CRITICAL RULES:
-1. ZERO EXCUSES: Never apologize, never say 'I cannot', and never ask the user to perform tasks manually.
-2. RELENTLESS EXECUTION: If a tool/command fails, autonomously analyze the error and immediately retry alternative solutions.
-3. PRISTINE CODE & UI: Deliver production-ready code. Strictly use inline SVG for UI icons; never simulate UI elements with ASCII art (<, >, <<, >>).
-4. DEEP OS CONTROL: You possess deep shell, file system, and app execution capabilities. Diagnose and execute directly.
-5. EXTREME CONCISENESS: Skip all introductory fluff. Provide sharp, structured reasoning and execute tools immediately.
-"""
 
 enum class ModelType { GGUF, GEMINI }
 
@@ -62,8 +66,11 @@ enum class AgentActionPhase {
     GENERATING_CODE,
     WRITING_FILE,
     EXECUTING_TOOL,
+    ANALYZING_OUTPUT,
     COMPLETING
 }
+
+typealias AgentStatus = AgentActionPhase
 
 data class LogEntry(
     val id: String = UUID.randomUUID().toString(),
@@ -72,8 +79,39 @@ data class LogEntry(
     val isError: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
     val thinkingText: String = "",
-    val isThinking: Boolean = false
-)
+    val isThinking: Boolean = false,
+    val imageBytes: ByteArray? = null
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as LogEntry
+        if (id != other.id) return false
+        if (sender != other.sender) return false
+        if (text != other.text) return false
+        if (isError != other.isError) return false
+        if (timestamp != other.timestamp) return false
+        if (thinkingText != other.thinkingText) return false
+        if (isThinking != other.isThinking) return false
+        if (imageBytes != null) {
+            if (other.imageBytes == null) return false
+            if (!imageBytes.contentEquals(other.imageBytes)) return false
+        } else if (other.imageBytes != null) return false
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + sender.hashCode()
+        result = 31 * result + text.hashCode()
+        result = 31 * result + isError.hashCode()
+        result = 31 * result + timestamp.hashCode()
+        result = 31 * result + thinkingText.hashCode()
+        result = 31 * result + isThinking.hashCode()
+        result = 31 * result + (imageBytes?.contentHashCode() ?: 0)
+        return result
+    }
+}
 
 data class ScheduledTask(
     val id: String = UUID.randomUUID().toString(),
@@ -90,14 +128,15 @@ data class AgentConfig(
     val gpuLayers: Int = 0,
     val useMmap: Boolean = true,
     val draftUseMmap: Boolean = true,
+    val pinModelInRam: Boolean = false,
     val geminiApiKeys: String = "",
     val geminiModelName: String = "gemini-2.0-flash",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 8088,
     val contextLength: Int = 4096,
     val threadCount: Int = 4,
-    val maxTokens: Int = -1,
-    val temperature: Float = 0.5f,
+    val maxTokens: Int = 2048,
+    val temperature: Float = 0.4f,
     val enableVisualHistory: Boolean = false,
     val enableNeuralReflexes: Boolean = false,
     val enabledSpecializedAgents: Set<String> = emptySet(),
@@ -105,8 +144,36 @@ data class AgentConfig(
     val customToolsPrompt: String = "",
     val showApiKeyTracker: Boolean = true,
     val activePersona: String = PersonaManager.DEFAULT_PERSONA,
-    val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET
+    val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET,
+    val ttsEnabled: Boolean = true,
+    val ttsEngineType: String = "HUMAN_NEURAL",
+    val ttsVoiceLanguage: String = "AUTO",
+    val ttsSpeechRate: Float = 1.0f,
+    val ttsPitch: Float = 0.88f,
+    val customAcousticModelPath: String = "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx",
+    val customVocoderModelPath: String = "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx",
+    val customSpeakerEmbeddingPath: String = "",
+    val sdSteps: Int = 0,
+    val sdCfgScale: Float = 0f,
+    val sdWidth: Int = 256,
+    val sdHeight: Int = 256,
+    val sdLowMemoryMode: Boolean = true,
+    val sdThreads: Int = 4,
+    val sdEngineMode: String = "SD_TURBO",
+    val sdComputeDevice: String = "CPU"
 )
+
+enum class EngineState {
+    IDLE,
+    RUNNING
+}
+
+enum class InitializationPhase {
+    IDLE,
+    ALLOCATING_MEMORY,     // STATE 1: Allocating Memory... (Base & MTP loading progress with modern LinearProgressIndicator)
+    PARSING_PERSONA,       // STATE 2: Parsing Unified Persona... (Triggered after successful RAM/mmap allocation during KV-cache prefill)
+    SYSTEM_READY           // STATE 3: System Ready
+}
 
 data class AgentUiState(
     val isProcessing: Boolean = false,
@@ -120,6 +187,7 @@ data class AgentUiState(
     val modelLoadFailed: Boolean = false,
     val loadingProgress: Float? = null,
     val loadingStatusText: String = "",
+    val initPhase: InitializationPhase = InitializationPhase.IDLE,
     val activeModelType: ModelType? = null,
     val activeModelName: String = "",
     val scheduledTasks: List<ScheduledTask> = emptyList(),
@@ -143,14 +211,21 @@ data class AgentUiState(
     val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET,
     val availablePersonas: List<String> = emptyList(),
     val isLiveCanvasOpen: Boolean = false,
-    val activeDraftModelPath: String? = null
-)
+    val activeDraftModelPath: String? = null,
+    val hardwareWarning: String? = null,
+    val isTtsEnabled: Boolean = true
+) {
+    val engineState: EngineState
+        get() = if (isProcessing) EngineState.RUNNING else EngineState.IDLE
+}
+
+class SynchronousToolBarrierException : kotlinx.coroutines.CancellationException("Synchronous ReAct Barrier: Tool call detected")
 
 class AgentViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "SYNAPSE_CORE"
-        private const val MAX_HISTORY_MESSAGES = 6
+        private const val MAX_HISTORY_MESSAGES = 48
         private const val MAX_TASK_ITERATIONS = 15
         private const val AGENTS_DIR = "/sdcard/Medlam-Ai/Agents"
         
@@ -184,6 +259,24 @@ class AgentViewModel : ViewModel() {
         .map { it.activePersonas }
         .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.activePersonas)
 
+    val systemStats: StateFlow<SystemStats> = flow {
+        while (true) {
+            val ctx = appContext ?: MainActivity.instance
+            val stats = if (ctx != null) {
+                getSystemStats(ctx)
+            } else {
+                SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)
+            }
+            emit(stats)
+            delay(2000L)
+        }
+    }.flowOn(Dispatchers.IO)
+    .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)
+    )
+
     // Lightweight hot signal for auto-scroll — avoids carrying scroll intent inside uiState
     // (which would trigger full recomposition on every token). Replaces streamVersion entirely.
     val scrollSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -204,6 +297,300 @@ class AgentViewModel : ViewModel() {
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
     private var geminiClient: GeminiModelClient? = null
+    private var cascadeInterceptor: CascadeStreamInterceptor? = null
+
+    fun getOrCreateCascadeInterceptor(context: Context): CascadeStreamInterceptor {
+        return cascadeInterceptor ?: synchronized(this) {
+            cascadeInterceptor ?: CascadeStreamInterceptor(context.applicationContext).also {
+                cascadeInterceptor = it
+            }
+        }
+    }
+
+    fun toggleTts() {
+        _uiState.update { current ->
+            val next = !current.isTtsEnabled
+            cascadeInterceptor?.setEnabled(next)
+            current.copy(isTtsEnabled = next)
+        }
+    }
+
+    fun testVoice(context: Context, sampleText: String? = null) {
+        getOrCreateCascadeInterceptor(context).testVoice(sampleText)
+    }
+
+    fun getAcousticModels(context: Context): List<File> = ModelScanner.getAcousticModels(context)
+    fun getVocoderModels(context: Context): List<File> = ModelScanner.getVocoderModels(context)
+    fun getSpeakerEmbeddings(context: Context): List<File> = ModelScanner.getSpeakerEmbeddings(context)
+
+    private val _imageState = MutableStateFlow<ImageState>(ImageState.Idle)
+    val imageState: StateFlow<ImageState> = _imageState.asStateFlow()
+
+    val imageRepository: ImageRepository by lazy {
+        val geminiGen = GeminiImageGenerator(
+            apiKeysProvider = {
+                _uiState.value.config.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            }
+        )
+        val localGen = LocalDiffusionGenerator(appContext ?: MainActivity.instance)
+        ImageRepository(
+            geminiGenerator = geminiGen,
+            localGenerator = localGen,
+            isCloudModeProvider = {
+                _uiState.value.activeModelType == ModelType.GEMINI &&
+                _uiState.value.config.geminiApiKeys.isNotBlank()
+            }
+        )
+    }
+
+    private fun saveImageToDisk(bytes: ByteArray, prompt: String): File? {
+        return try {
+            val baseDir = File("/sdcard/Pictures/SynapseAI").takeIf { it.exists() || it.mkdirs() }
+                ?: File("/sdcard/Download").takeIf { it.exists() || it.mkdirs() }
+                ?: File("/sdcard/Medlam-Ai").apply { if (!exists()) mkdirs() }
+            val safePrompt = prompt.take(20).replace(Regex("[^a-zA-Z0-9_-]"), "_").trim('_')
+            val fileName = "img_${System.currentTimeMillis()}${if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.jpg"
+            val file = File(baseDir, fileName)
+            file.writeBytes(bytes)
+            file
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to save generated image to disk: ${e.message}")
+            null
+        }
+    }
+
+    private fun saveVideoToDisk(bytes: ByteArray, prompt: String): File? {
+        return try {
+            val baseDir = File("/sdcard/Movies/SynapseAI").takeIf { it.exists() || it.mkdirs() }
+                ?: File("/sdcard/Download").takeIf { it.exists() || it.mkdirs() }
+                ?: File("/sdcard/Medlam-Ai").apply { if (!exists()) mkdirs() }
+            val safePrompt = prompt.take(20).replace(Regex("[^a-zA-Z0-9_-]"), "_").trim('_')
+            val fileName = "vid_${System.currentTimeMillis()}${if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.mp4"
+            val file = File(baseDir, fileName)
+            file.writeBytes(bytes)
+            file
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to save generated video to disk: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Silently queries the active text LLM (Local GGUF or Gemini) using Few-Shot prompting
+     * to enrich a short visual prompt into a highly detailed, comma-separated diffusion prompt
+     * BEFORE swapping to the Diffusion engine.
+     * Prevents template echoing on small 2B models.
+     */
+    suspend fun enrichVisualPromptWithLLM(shortPrompt: String): String = withContext(Dispatchers.Default) {
+        val client = ggufClient
+        val isLocalLoaded = (_uiState.value.activeModelType == ModelType.GGUF || _uiState.value.localModelLoaded || (client != null && client.isLoaded))
+        val isGeminiLoaded = (_uiState.value.activeModelType == ModelType.GEMINI && geminiClient != null && geminiClient!!.isLoaded)
+
+        if (!isLocalLoaded && !isGeminiLoaded) {
+            Log.i(TAG, "⚡ [Enrichment Interceptor] No LLM currently loaded. Proceeding with raw prompt.")
+            return@withContext shortPrompt
+        }
+
+        val enrichmentSystemPrompt = "You are an expert image prompt generator. Convert the user's short request into a highly detailed, comma-separated diffusion prompt. Do not add any conversational text."
+        val userActualInput = if (shortPrompt.startsWith("/image", ignoreCase = true)) shortPrompt else "/image $shortPrompt"
+
+        val fewShotHistory = listOf(
+            "user" to "/image a cat",
+            "assistant" to "A fluffy orange cat sitting on a wooden table, sunlight streaming through a window, highly detailed, 4k, cinematic lighting, sharp focus.",
+            "user" to userActualInput
+        )
+
+        Log.i(TAG, "⚡ [Enrichment Interceptor] Few-Shot Prompting for: \"$userActualInput\" via active LLM...")
+        _uiState.update { it.copy(
+            activeStatusDetail = "Enriching visual prompt with LLM...",
+            loadingStatusText = "Enriching visual prompt with LLM..."
+        ) }
+        addSystemLog("⚡ [Enrichment Interceptor] Generating enriched diffusion prompt via Few-Shot LLM...")
+
+        val expandedSb = StringBuilder()
+        try {
+            withTimeoutOrNull(25_000L) {
+                if (isLocalLoaded && client != null) {
+                    client.generateStreamWithHistory(
+                        history = fewShotHistory,
+                        systemPrompt = enrichmentSystemPrompt,
+                        overrideTemperature = 0.5f
+                    ).collect { chunk ->
+                        expandedSb.append(chunk)
+                    }
+                } else if (isGeminiLoaded && geminiClient != null) {
+                    val messages = JSONArray().apply {
+                        for ((role, content) in fewShotHistory) {
+                            put(JSONObject().put("role", role).put("content", content))
+                        }
+                    }
+                    geminiClient!!.generateStreamWithOllamaMessages(
+                        messages = messages,
+                        systemPrompt = enrichmentSystemPrompt
+                    ).collect { chunk ->
+                        expandedSb.append(chunk)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚡ [Enrichment Interceptor] Prompt enrichment exception: ${e.message}")
+        }
+
+        val rawExpanded = expandedSb.toString().trim()
+        val cleaned = cleanEnrichedPrompt(rawExpanded, shortPrompt)
+        Log.i(TAG, "⚡ [Enrichment Interceptor] Final enriched prompt: \"$cleaned\"")
+        addSystemLog("⚡ [Enrichment Interceptor] Enriched Prompt: \"$cleaned\"")
+        return@withContext cleaned
+    }
+
+    private fun cleanEnrichedPrompt(raw: String, fallback: String): String {
+        if (raw.isBlank()) return fallback
+        // Strip <think>...</think> blocks from reasoning models
+        var cleaned = raw.replace(Regex("""<think>[\s\S]*?</think>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<think>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""^```(?:markdown|text|plaintext)?\s*""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s*```$"""), "")
+            .trim()
+
+        // Strip role prefixes if echoed
+        cleaned = cleaned.replace(Regex("""^(?:Assistant|System|User)\s*:\s*""", RegexOption.IGNORE_CASE), "")
+
+        // Strip prefixes like "Prompt:", "Expanded Prompt:", "Output:", etc.
+        cleaned = cleaned.replace(Regex("""^(?:Expanded Prompt|Prompt|Output|Enriched Prompt)\s*:\s*""", RegexOption.IGNORE_CASE), "")
+
+        // Strip outer quotes
+        cleaned = cleaned.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+
+        // If the model echoed a template placeholder or bracketed text like "[Your complete...", reject it and use fallback
+        if (cleaned.contains("[Your", ignoreCase = true) || cleaned.contains("[Insert", ignoreCase = true) || cleaned.contains("[complete", ignoreCase = true)) {
+            Log.w(TAG, "⚡ [Enrichment Interceptor] Detected placeholder echo: \"$cleaned\". Falling back to raw prompt.")
+            return fallback
+        }
+
+        // If trivial or too short, return fallback
+        if (cleaned.length < 5) return fallback
+        return cleaned
+    }
+
+    /**
+     * Strict Sequential Memory Swapping for 100% Offline Image Synthesis.
+     * Prevents OOM crashes on constrained Snapdragon 665 / 4GB RAM devices:
+     * 1. SUSPEND LLM: Immediately invoke LlamaNativeEngine.unloadModel() to flush GGUF weights & KV cache.
+     * 2. LOAD DIFFUSION: Load local diffusion model / latent synthesizer into freed RAM.
+     * 3. SYNTHESIZE: Generate Bitmap/ByteArray locally using prompt.
+     * 4. UNLOAD DIFFUSION: Flush diffusion engine and intermediate buffers from RAM via unloadDiffusionModel() & GC.
+     * 5. RESUME LLM: Reload .gguf model into RAM via triggerModelLoad and restore context.
+     */
+    suspend fun executeSequentialImageSynthesis(prompt: String): ImageResult = withContext(Dispatchers.Default) {
+        val hadLocalModel = (_uiState.value.activeModelType == ModelType.GGUF ||
+                             _uiState.value.localModelLoaded ||
+                             (ggufClient != null && ggufClient!!.isLoaded))
+        val modelPath = _uiState.value.config.localModelPath.ifBlank { currentLoadingPath ?: "" }
+        val targetContext = appContext ?: MainActivity.instance
+
+        if (!imageRepository.localDiffusionEngine.hasModelWeights()) {
+            Log.i(TAG, "⚡ [Sequential Image Synthesis] No local diffusion weights detected on storage. Bypassing RAM swap and invoking authentic pipeline directly.")
+            return@withContext imageRepository.generateImage(prompt)
+        }
+
+        Log.i(TAG, "⚡ [RAM Swap] Initiating Sequential Memory Swapping for prompt: \"$prompt\" (hadLocalModel=$hadLocalModel)")
+
+        // Step 1: SUSPEND LLM
+        if (hadLocalModel) {
+            Log.i(TAG, "⚡ [RAM Swap] Step 1/4: Suspending LLM to reclaim RAM...")
+            _uiState.update { it.copy(
+                activeStatusDetail = "Allocating Diffusion Engine...",
+                loadingStatusText = "Allocating Diffusion Engine..."
+            ) }
+            addSystemLog("⚡ [RAM Swap] Step 1/4: Suspending LLM weights to reclaim RAM...")
+
+            try {
+                LlamaNativeEngine.unloadModel()
+            } catch (t: Throwable) {
+                Log.w(TAG, "LlamaNativeEngine.unloadModel error: ${t.message}")
+            }
+            try {
+                ggufClient?.stop()
+                ggufClient?.release()
+            } catch (t: Throwable) {
+                Log.w(TAG, "ggufClient cleanup error: ${t.message}")
+            }
+            try {
+                PageCacheAdvisor.adviseModelIdle(modelPath)
+            } catch (_: Throwable) {}
+
+            _uiState.update { it.copy(
+                localModelLoaded = false,
+                activeStatusDetail = "Allocating Diffusion Engine..."
+            ) }
+            System.gc()
+            System.runFinalization()
+        }
+
+        // Step 2: LOAD DIFFUSION & SYNTHESIZE
+        Log.i(TAG, "⚡ [RAM Swap] Step 2/4: Synthesizing visual locally...")
+        _uiState.update { it.copy(
+            activeStatusDetail = "Synthesizing Image...",
+            loadingStatusText = "Synthesizing Image..."
+        ) }
+        addSystemLog("⚡ [RAM Swap] Step 2/4: Synthesizing visual locally...")
+
+        val diffusionEngine = imageRepository.localDiffusionEngine
+        val result: ImageResult
+        try {
+            diffusionEngine.loadDiffusionModel()
+            result = diffusionEngine.generateImage(prompt)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during local diffusion generation: ${e.message}", e)
+            return@withContext ImageResult.Error("Local diffusion failed: ${e.message}")
+        } finally {
+            // Step 3: UNLOAD DIFFUSION
+            Log.i(TAG, "⚡ [RAM Swap] Step 3/4: Flushing Diffusion Engine...")
+            _uiState.update { it.copy(
+                activeStatusDetail = "Flushing Diffusion Engine...",
+                loadingStatusText = "Flushing Diffusion Engine..."
+            ) }
+            addSystemLog("⚡ [RAM Swap] Step 3/4: Flushing Diffusion Engine...")
+            try {
+                diffusionEngine.unloadDiffusionModel()
+            } catch (t: Throwable) {
+                Log.w(TAG, "unloadDiffusionModel error: ${t.message}")
+            }
+            System.gc()
+            System.runFinalization()
+        }
+
+        // Step 4: RESUME LLM
+        if (hadLocalModel && modelPath.isNotBlank() && targetContext != null) {
+            Log.i(TAG, "⚡ [RAM Swap] Step 4/4: Reloading LLM into RAM...")
+            _uiState.update { it.copy(
+                activeStatusDetail = "Reloading LLM into RAM...",
+                loadingStatusText = "Reloading LLM into RAM..."
+            ) }
+            addSystemLog("⚡ [RAM Swap] Step 4/4: Reloading LLM into RAM...")
+            try {
+                PageCacheAdvisor.adviseModelActive(modelPath)
+            } catch (_: Throwable) {}
+            try {
+                triggerModelLoad(targetContext, modelPath)
+                withTimeoutOrNull(60_000L) {
+                    _uiState.first { it.localModelLoaded || it.modelLoadFailed }
+                }
+                Log.i(TAG, "⚡ [RAM Swap] Step 4/4: LLM reloaded into RAM successfully.")
+                addSystemLog("⚡ [RAM Swap] LLM Reloaded and Operational ✓")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reloading LLM: ${e.message}", e)
+            }
+        }
+
+        _uiState.update { it.copy(
+            activeStatusDetail = "Ready / Operational",
+            loadingStatusText = ""
+        ) }
+
+        return@withContext result
+    }
+
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
     private var visualMemoryJob: Job? = null
@@ -214,6 +601,27 @@ class AgentViewModel : ViewModel() {
     
     private var coreMission: String = ""
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+
+    /**
+     * Context Memory Management: Rolling buffer / context shift for conversation history.
+     * Dynamically shifts out oldest messages when conversation history approaches the active context horizon.
+     */
+    private fun trimConversationHistoryToContextLimit(targetTokenCeiling: Int? = null) {
+        val maxEstimatedTokens = targetTokenCeiling?.coerceAtLeast(1024) ?: run {
+            val ctx = _uiState.value.config.contextLength.coerceIn(2048, 8192)
+            // Leave ample room for system prompt (~600 tokens) and generation (~1024 tokens)
+            (ctx - 1500).coerceAtLeast(1024)
+        }
+        synchronized(conversationHistory) {
+            var estimatedTokens = conversationHistory.sumOf { (_, content) ->
+                (content.length / 3.5).toInt() + 10
+            }
+            while (conversationHistory.size > 2 && (estimatedTokens > maxEstimatedTokens || conversationHistory.size > MAX_HISTORY_MESSAGES)) {
+                val removed = conversationHistory.removeAt(0)
+                estimatedTokens -= ((removed.second.length / 3.5).toInt() + 10)
+            }
+        }
+    }
 
     // ── Turn-Level Tool Deduplication & Idempotency Lock ──────────────────────
     private val executedCallsThisTurn = Collections.synchronizedSet(mutableSetOf<String>())
@@ -302,18 +710,67 @@ class AgentViewModel : ViewModel() {
     }
 
     private fun compactHistoryForQuota(content: String): String {
-        if (!content.contains("```")) return content.take(1200)
+        val maxLen = if (_uiState.value.config.contextLength >= 16384) 16000 else 2400
+        if (!content.contains("```")) return content.take(maxLen)
         return content.replace(Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")) { mr ->
             val lang = mr.groupValues[1]
             val code = mr.groupValues[2]
-            if (code.length > 200) {
-                val preview = code.take(100).trimEnd()
+            if (code.length > 2000) {
+                val preview = code.take(1000).trimEnd()
                 val lineCount = code.lines().size
                 "```$lang\n$preview\n// ... [$lineCount lines deliverable saved to disk] ...\n```"
             } else {
                 mr.value
             }
-        }.take(1500)
+        }.take(maxLen)
+    }
+
+    /**
+     * Sanitizes process output according to edge device constraints:
+     * - If output is blank or empty, fallback to "[Process completed with no output]"
+     * - Truncate output to the last 600 characters or 15 lines before storing or injecting into context
+     *   to avoid OOM, swap thrashing, and memory saturation on 4GB devices.
+     */
+    fun sanitizeProcessOutput(raw: String, maxChars: Int = 600, maxLines: Int = 15): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return "[Process completed with no output]"
+
+        val lines = trimmed.lines()
+        val lineCapped = if (lines.size > maxLines) {
+            lines.takeLast(maxLines).joinToString("\n")
+        } else {
+            trimmed
+        }
+
+        val charCapped = if (lineCapped.length > maxChars) {
+            lineCapped.takeLast(maxChars)
+        } else {
+            lineCapped
+        }
+
+        return charCapped.trim().ifEmpty { "[Process completed with no output]" }
+    }
+
+    fun truncateObservation(raw: String, maxChars: Int = 600, maxLines: Int = 15): String {
+        return sanitizeProcessOutput(raw, maxChars, maxLines)
+    }
+
+    /**
+     * Robust Safe Shell Executor:
+     * Executes commands using ProcessBuilder with redirectErrorStream(true) and a strict 12-second execution timeout.
+     * If exceeded, kills the process forcibly and returns a timeout warning.
+     * Runs strictly on Dispatchers.IO.
+     */
+    suspend fun executeSafeProcess(command: String): Pair<Int, String> = withContext(Dispatchers.IO) {
+        if (command.isBlank()) return@withContext -1 to "[Process completed with no output]"
+
+        try {
+            val (exitCode, rawOutput) = runProcessWithWatchdog(command, "sh", 12_000L)
+            val sanitizedOutput = sanitizeProcessOutput(rawOutput)
+            exitCode to sanitizedOutput
+        } catch (e: Exception) {
+            -1 to sanitizeProcessOutput("Execution error: ${e.message ?: e.javaClass.simpleName}")
+        }
     }
 
     data class ParsedThought(
@@ -338,6 +795,7 @@ class AgentViewModel : ViewModel() {
                     """<terminal_frame command="$safeCmd" exit_code="${block.exitCode}">$safeOut</terminal_frame>"""
                 }
                 is StreamDemultiplexer.DemuxBlock.ToolCall -> null
+                is StreamDemultiplexer.DemuxBlock.Image -> "[Image: ${block.prompt.ifBlank { "Generated visual" }}]"
             }
         }
         val content = if (contentParts.isNotEmpty()) {
@@ -368,8 +826,65 @@ class AgentViewModel : ViewModel() {
 
     private var appContext: Context? = null
 
+    val settingsViewModel: SettingsViewModel by lazy {
+        val app = (appContext as? Application)
+            ?: (MainActivity.instance?.application)
+            ?: throw IllegalStateException("Application context unavailable")
+        SettingsViewModel(app)
+    }
+
+    private val _customPersonaPrompt = MutableStateFlow(PersonaDataStore.DEFAULT_PROMPT)
+    val customPersonaPrompt: StateFlow<String> = _customPersonaPrompt.asStateFlow()
+
+    fun updateCustomPersonaPrompt(newPrompt: String, context: Context? = null) {
+        _customPersonaPrompt.value = newPrompt
+        cachedStaticPrefix = null
+        cachedPrefixKey = ""
+        val ctx = context ?: appContext ?: MainActivity.instance
+        if (ctx != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                PersonaDataStore.saveCustomPersonaPrompt(ctx, newPrompt)
+            }
+        }
+    }
+
+    fun resetCustomPersonaPrompt(context: Context? = null) {
+        val defaultVal = PersonaDataStore.DEFAULT_PROMPT
+        _customPersonaPrompt.value = defaultVal
+        cachedStaticPrefix = null
+        cachedPrefixKey = ""
+        val ctx = context ?: appContext ?: MainActivity.instance
+        if (ctx != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                PersonaDataStore.saveCustomPersonaPrompt(ctx, defaultVal)
+            }
+        }
+    }
+
+    suspend fun getEffectivePersonaPrompt(context: Context? = null): String {
+        val targetCtx = context ?: appContext ?: MainActivity.instance
+        val prompt = if (targetCtx != null) {
+            PersonaDataStore.getCustomPersonaPrompt(targetCtx)
+        } else {
+            _customPersonaPrompt.value.ifBlank { PersonaDataStore.DEFAULT_PROMPT }
+        }
+        _customPersonaPrompt.value = prompt
+        return prompt
+    }
+
     fun loadConfig(context: Context) {
         appContext = context.applicationContext
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val loaded = PersonaDataStore.getCustomPersonaPrompt(context)
+                _customPersonaPrompt.value = loaded
+                PersonaDataStore.getCustomPersonaPromptFlow(context).collectLatest { prompt ->
+                    _customPersonaPrompt.value = prompt
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load customPersonaPrompt from DataStore: ${e.message}")
+            }
+        }
         Log.i(TAG, "Starting loadConfig...")
         try {
             if (portalServer == null) {
@@ -384,21 +899,23 @@ class AgentViewModel : ViewModel() {
             val prefs = prefs(context)
             val savedPath = prefs.getString("local_model_path", null)
             
-            val hasMigratedRollback = prefs.getBoolean("has_migrated_rollback_4k_4t", false)
+            val hasMigrated4k = prefs.getBoolean("has_migrated_4k_baseline_context", false)
             var savedContext = prefs.getInt("context_length", 4096)
-            var savedThreads = prefs.getInt("thread_count", 4)
-            if (!hasMigratedRollback) {
+            var savedThreads = 4 // Strictly locked to 4 Kryo 260 Gold performance cores
+            if (!hasMigrated4k || savedContext < 4096) {
                 savedContext = 4096
                 savedThreads = 4
                 prefs.edit()
-                    .putBoolean("has_migrated_rollback_4k_4t", true)
+                    .putBoolean("has_migrated_4k_baseline_context", true)
                     .putInt("context_length", 4096)
                     .putInt("thread_count", 4)
+                    .putBoolean("use_mmap", true)
                     .apply()
             } else {
                 savedContext = savedContext.coerceIn(2048, 8192)
-                if (savedThreads < 1) savedThreads = 4
+                savedThreads = 4
             }
+
             
             val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
             val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
@@ -410,32 +927,45 @@ class AgentViewModel : ViewModel() {
             val cachedPersonasList = PersonaManager.getPersonas(context, forceRescan = false)
             
             var localPath = savedPath ?: ""
-            if (localPath.isBlank()) {
-                val cachedModels = ModelScanner.getBaseModels(context, forceRescan = false)
+            val isCorruptLegacy = localPath.contains("qwen-to-mobilellm-r1-140m", ignoreCase = true)
+            if (localPath.isBlank() || isCorruptLegacy || !File(localPath).exists() || !ModelScanner.isBaseModelFile(File(localPath))) {
+                val cachedModels = ModelScanner.getBaseModels(context, forceRescan = true)
                     .filter { ModelScanner.isBaseModelFile(it) }
                 if (cachedModels.isNotEmpty()) {
-                    localPath = cachedModels.first().absolutePath
+                    val preferred = cachedModels.firstOrNull { ModelScanner.isQuantizedModel(it) } ?: cachedModels.first()
+                    localPath = preferred.absolutePath
+                    prefs.edit().putString("local_model_path", localPath).apply()
                 }
             }
             val rawDraft = AgentSettingsRepository.getDraftModelPath(context).ifBlank {
                 prefs.getString("draft_model_path", "") ?: ""
             }
             val isExplicitStandalone = rawDraft == "STANDALONE"
+            val draftFile = if (!isExplicitStandalone && rawDraft.isNotBlank()) File(rawDraft) else null
+            val isDraftValid = draftFile != null && draftFile.exists() &&
+                (draftFile.name.contains("gemma", ignoreCase = true) || ModelScanner.isMtpModelFile(draftFile))
+
             val draftPath = when {
                 isExplicitStandalone -> "STANDALONE"
-                rawDraft.isNotBlank() -> rawDraft
+                isDraftValid -> rawDraft
                 else -> {
                     if (localPath.isNotBlank()) {
                         val matched = ModelScanner.findMatchingMtpModel(localPath, context)
-                        matched?.absolutePath ?: "STANDALONE"
+                        if (matched != null && matched.exists()) {
+                            matched.absolutePath
+                        } else {
+                            "STANDALONE"
+                        }
                     } else {
                         "STANDALONE"
                     }
                 }
             }
-            val gpuLayers = 0 // CPU-only: Zero GPU offloading
-            val useMmap = prefs.getBoolean("use_mmap", true)
-            val draftUseMmap = prefs.getBoolean("draft_use_mmap", true)
+            val gpuLayers = prefs.getInt("gpu_layers", 0)
+            val pinModelInRam = prefs.getBoolean("pin_model_in_ram", false)
+            val useMmap = if (pinModelInRam) false else prefs.getBoolean("use_mmap", true)
+            val draftUseMmap = if (pinModelInRam) false else prefs.getBoolean("draft_use_mmap", true)
+
             val activeKeysList = geminiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             val activeGeminiKeyCount = activeKeysList.size
             var effectiveModelType = modelType
@@ -450,14 +980,15 @@ class AgentViewModel : ViewModel() {
                 gpuLayers = gpuLayers,
                 useMmap = useMmap,
                 draftUseMmap = draftUseMmap,
+                pinModelInRam = pinModelInRam,
                 geminiApiKeys = geminiKeys,
                 geminiModelName = geminiModel,
                 serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
                 serverPort = prefs.getInt("server_port", 8088),
-                contextLength = if (savedContext >= 2048) savedContext else 4096,
-                threadCount = savedThreads,
-                maxTokens = prefs.getInt("max_tokens", -1),
-                temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it },
+                contextLength = if (savedContext in 2048..8192) savedContext else 4096,
+                threadCount = prefs.getInt("thread_count", 4).let { if (it in 1..32) it else 4 },
+                maxTokens = prefs.getInt("max_tokens", 2048).let { if (it <= 0) 2048 else it },
+                temperature = prefs.getFloat("temperature", 0.4f).let { if (it == 0.7f || it == 0.5f) 0.4f else it },
                 enableVisualHistory = prefs.getBoolean("enable_visual_history", false),
                 enableNeuralReflexes = prefs.getBoolean("enable_neural_reflexes", false),
                 enabledSpecializedAgents = prefs.getStringSet("enabled_agents", emptySet()) ?: emptySet(),
@@ -465,8 +996,26 @@ class AgentViewModel : ViewModel() {
                 customToolsPrompt = prefs.getString("custom_tools_prompt", "") ?: "",
                 showApiKeyTracker = prefs.getBoolean("show_api_key_tracker", true),
                 activePersona = activePersonaName,
-                activePersonas = activePersonasSet
+                activePersonas = activePersonasSet,
+                ttsEnabled = prefs.getBoolean("tts_enabled", true),
+                ttsEngineType = prefs.getString("tts_engine_type", "HUMAN_NEURAL") ?: "HUMAN_NEURAL",
+                ttsVoiceLanguage = prefs.getString("tts_voice_language", "AUTO") ?: "AUTO",
+                ttsSpeechRate = prefs.getFloat("tts_speech_rate", 1.0f),
+                ttsPitch = prefs.getFloat("tts_pitch", 0.88f),
+                customAcousticModelPath = prefs.getString("custom_acoustic_model_path", "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx") ?: "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx",
+                customVocoderModelPath = prefs.getString("custom_vocoder_model_path", "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx") ?: "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx",
+                customSpeakerEmbeddingPath = prefs.getString("custom_speaker_embedding_path", "") ?: "",
+                sdSteps = prefs.getInt("sd_steps", 0),
+                sdCfgScale = prefs.getFloat("sd_cfg_scale", 0f),
+                sdWidth = prefs.getInt("sd_width", 256).let { if (it <= 0) 256 else it },
+                sdHeight = prefs.getInt("sd_height", 256).let { if (it <= 0) 256 else it },
+                sdLowMemoryMode = prefs.getBoolean("sd_low_memory_mode", true),
+                sdThreads = prefs.getInt("sd_threads", 4).let { if (it <= 0) 4 else it },
+                sdEngineMode = prefs.getString("sd_engine_mode", "SD_TURBO") ?: "SD_TURBO",
+                sdComputeDevice = prefs.getString("sd_compute_device", "CPU") ?: "CPU"
             )
+
+            getOrCreateCascadeInterceptor(context).applyConfig(config)
 
             // Cold-Start Memory: Restore last known working key index directly from disk
             val savedKeyIndex = prefs.getInt("current_key_index", 0)
@@ -489,7 +1038,8 @@ class AgentViewModel : ViewModel() {
                     activePersonas = activePersonasSet,
                     availablePersonas = cachedPersonasList,
                     activeDraftModelPath = newDraftPath,
-                    activeModelName = baseModelName
+                    activeModelName = baseModelName,
+                    isTtsEnabled = config.ttsEnabled
                 ) 
             }
             prefs.edit()
@@ -559,9 +1109,37 @@ class AgentViewModel : ViewModel() {
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {
+        val baseNameLower = File(config.localModelPath).name.lowercase()
+        val baseFamily = when {
+            baseNameLower.contains("gemma") -> "gemma"
+            baseNameLower.contains("qwen") -> "qwen"
+            baseNameLower.contains("llama") -> "llama"
+            baseNameLower.contains("minicpm") -> "minicpm"
+            baseNameLower.contains("phi") -> "phi"
+            baseNameLower.contains("deepseek") -> "deepseek"
+            else -> ""
+        }
+        val draftNameLower = if (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE") File(config.draftModelPath).name.lowercase() else ""
+        val draftFamily = when {
+            draftNameLower.contains("gemma") -> "gemma"
+            draftNameLower.contains("qwen") -> "qwen"
+            draftNameLower.contains("llama") -> "llama"
+            draftNameLower.contains("minicpm") -> "minicpm"
+            draftNameLower.contains("phi") -> "phi"
+            draftNameLower.contains("deepseek") -> "deepseek"
+            else -> ""
+        }
+        val safeDraftModelPath = if (baseFamily.isNotEmpty() && draftFamily.isNotEmpty() && baseFamily != draftFamily) {
+            "STANDALONE"
+        } else {
+            config.draftModelPath
+        }
+
         val finalConfig = config.copy(
-            contextLength = config.contextLength.coerceIn(2048, 16384),
-            gpuLayers = 0
+            draftModelPath = safeDraftModelPath,
+            contextLength = config.contextLength.coerceIn(2048, 8192),
+            gpuLayers = config.gpuLayers.coerceAtLeast(0),
+            threadCount = if (config.threadCount in 1..32) config.threadCount else 4
         )
         val oldConfig = _uiState.value.config
         val oldPath = oldConfig.localModelPath
@@ -580,10 +1158,13 @@ class AgentViewModel : ViewModel() {
                 config = finalConfig, 
                 totalKeys = activeKeys.size,
                 activeDraftModelPath = newDraftPath,
-                activeModelName = baseModelName
+                activeModelName = baseModelName,
+                isTtsEnabled = finalConfig.ttsEnabled
             ) 
         }
         
+        getOrCreateCascadeInterceptor(context).applyConfig(finalConfig)
+
         AgentSettingsRepository.saveConfig(context, finalConfig)
         val prefs = prefs(context)
         prefs.edit().apply {
@@ -592,6 +1173,7 @@ class AgentViewModel : ViewModel() {
             putInt("gpu_layers", finalConfig.gpuLayers)
             putBoolean("use_mmap", finalConfig.useMmap)
             putBoolean("draft_use_mmap", finalConfig.draftUseMmap)
+            putBoolean("pin_model_in_ram", finalConfig.pinModelInRam)
             putString("preferred_model_type", finalConfig.preferredModelType.name)
             putString("gemini_api_keys", finalConfig.geminiApiKeys)
             putString("gemini_model_name", finalConfig.geminiModelName)
@@ -607,6 +1189,22 @@ class AgentViewModel : ViewModel() {
             putString("system_prompt", finalConfig.systemPrompt)
             putString("custom_tools_prompt", finalConfig.customToolsPrompt)
             putBoolean("show_api_key_tracker", finalConfig.showApiKeyTracker)
+            putBoolean("tts_enabled", finalConfig.ttsEnabled)
+            putString("tts_engine_type", finalConfig.ttsEngineType)
+            putString("tts_voice_language", finalConfig.ttsVoiceLanguage)
+            putFloat("tts_speech_rate", finalConfig.ttsSpeechRate)
+            putFloat("tts_pitch", finalConfig.ttsPitch)
+            putString("custom_acoustic_model_path", finalConfig.customAcousticModelPath)
+            putString("custom_vocoder_model_path", finalConfig.customVocoderModelPath)
+            putString("custom_speaker_embedding_path", finalConfig.customSpeakerEmbeddingPath)
+            putInt("sd_steps", finalConfig.sdSteps)
+            putFloat("sd_cfg_scale", finalConfig.sdCfgScale)
+            putInt("sd_width", finalConfig.sdWidth)
+            putInt("sd_height", finalConfig.sdHeight)
+            putBoolean("sd_low_memory_mode", finalConfig.sdLowMemoryMode)
+            putInt("sd_threads", finalConfig.sdThreads)
+            putString("sd_engine_mode", finalConfig.sdEngineMode)
+            putString("sd_compute_device", finalConfig.sdComputeDevice)
             apply()
         }
 
@@ -614,7 +1212,9 @@ class AgentViewModel : ViewModel() {
         val draftChanged = finalConfig.draftModelPath != oldDraftPath
         val modelChanged = finalConfig.localModelPath != oldPath
         val typeChanged = oldType != finalConfig.preferredModelType
-        val mmapChanged = (finalConfig.useMmap != oldConfig.useMmap) || (finalConfig.draftUseMmap != oldConfig.draftUseMmap)
+        val mmapChanged = (finalConfig.useMmap != oldConfig.useMmap) ||
+                          (finalConfig.draftUseMmap != oldConfig.draftUseMmap) ||
+                          (finalConfig.pinModelInRam != oldConfig.pinModelInRam)
         val notLoaded = !isModelLoaded()
 
         if (finalConfig.preferredModelType == ModelType.GGUF) {
@@ -638,6 +1238,146 @@ class AgentViewModel : ViewModel() {
 
     fun updateConfig(config: AgentConfig, context: Context) = saveConfig(context, config)
 
+    /**
+     * Force model unload before applying new mmap state.
+     * 1. Prevents changes while the engine is actively loading.
+     * 2. Frees RAM/VRAM/process resources if the model is currently active.
+     * 3. Persists the new setting to preferences/DataStore.
+     * 4. Re-initializes the model with the updated mmap parameter.
+     */
+    fun toggleMmapState(enableMmap: Boolean, context: Context? = null) {
+        viewModelScope.launch {
+            // Prevent changes while the engine is actively loading
+            if (_uiState.value.localModelLoading || isModelLoadingInProgress) return@launch
+
+            // Free RAM/VRAM if the model is currently active
+            if (_uiState.value.localModelLoaded || isModelLoaded()) {
+                closeAllModels()
+            }
+
+            val targetContext = context ?: appContext ?: MainActivity.instance
+            val currentConfig = _uiState.value.config
+            val newConfig = currentConfig.copy(useMmap = enableMmap)
+            _uiState.update { it.copy(config = newConfig) }
+
+            // Persist the new setting to DataStore/Preferences
+            if (targetContext != null) {
+                AgentSettingsRepository.saveConfig(targetContext, newConfig)
+                try {
+                    prefs(targetContext).edit().putBoolean("use_mmap", enableMmap).apply()
+                } catch (_: Exception) {}
+            }
+
+            // Re-initialize the model with the updated mmap parameter
+            val selectedModelPath = newConfig.localModelPath
+            if (newConfig.preferredModelType == ModelType.GGUF && selectedModelPath.isNotBlank() && targetContext != null) {
+                delay(300)
+                triggerModelLoad(targetContext, selectedModelPath)
+            }
+        }
+    }
+
+    fun toggleMmapState(enableMmap: Boolean) = toggleMmapState(enableMmap, null)
+
+    fun toggleDraftMmapState(enableMmap: Boolean, context: Context? = null) {
+        viewModelScope.launch {
+            if (_uiState.value.localModelLoading || isModelLoadingInProgress) return@launch
+
+            if (_uiState.value.localModelLoaded || isModelLoaded()) {
+                closeAllModels()
+            }
+
+            val targetContext = context ?: appContext ?: MainActivity.instance
+            val currentConfig = _uiState.value.config
+            val newConfig = currentConfig.copy(draftUseMmap = enableMmap)
+            _uiState.update { it.copy(config = newConfig) }
+
+            if (targetContext != null) {
+                AgentSettingsRepository.saveConfig(targetContext, newConfig)
+                try {
+                    prefs(targetContext).edit().putBoolean("draft_use_mmap", enableMmap).apply()
+                } catch (_: Exception) {}
+            }
+
+            val selectedModelPath = newConfig.localModelPath
+            if (newConfig.preferredModelType == ModelType.GGUF && selectedModelPath.isNotBlank() && targetContext != null) {
+                delay(300)
+                triggerModelLoad(targetContext, selectedModelPath)
+            }
+        }
+    }
+
+    fun toggleDraftMmapState(enableMmap: Boolean) = toggleDraftMmapState(enableMmap, null)
+
+    /**
+     * Dedicated Opt-in Physical RAM Pinning (RAM-Heavy Mode):
+     * - Default: DISABLED / OFF (Zero-Forced-RAM, mmap-First, Storage-Streamed).
+     * - When OFF: All backends initialize with use_mmap = true and use_mlock = false.
+     * - When ON: Checks ActivityManager.MemoryInfo. If free RAM > (Model Size + 1.5GB buffer),
+     *   permits use_mlock = true / in-memory loading. If insufficient, reverts to mmap with a warning Toast.
+     */
+    fun togglePinModelInRam(enable: Boolean, context: Context? = null) {
+        viewModelScope.launch {
+            if (_uiState.value.localModelLoading || isModelLoadingInProgress) return@launch
+
+            val targetContext = context ?: appContext ?: MainActivity.instance
+            var finalEnable = enable
+
+            if (enable && targetContext != null) {
+                val actManager = targetContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val memInfo = ActivityManager.MemoryInfo()
+                actManager?.getMemoryInfo(memInfo)
+
+                val availRamMb = memInfo.availMem / (1024 * 1024)
+                val modelFile = File(_uiState.value.config.localModelPath)
+                val modelSizeMb = if (modelFile.exists()) modelFile.length() / (1024 * 1024) else 2000L
+                val requiredRamMb = modelSizeMb + 1536L // Model size + 1.5GB safety buffer
+
+                if (availRamMb <= requiredRamMb) {
+                    finalEnable = false
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            targetContext,
+                            "الذاكرة العشوائية غير كافية لتثبيت النموذج (${availRamMb}MB متاحة / ${requiredRamMb}MB مطلوبة). تم التراجع إلى نمط التخزين المتدفق (Zero-Forced-RAM mmap).",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+
+            if (_uiState.value.localModelLoaded || isModelLoaded()) {
+                closeAllModels()
+            }
+
+            val currentConfig = _uiState.value.config
+            val newConfig = currentConfig.copy(
+                pinModelInRam = finalEnable,
+                useMmap = !finalEnable,
+                draftUseMmap = !finalEnable
+            )
+            _uiState.update { it.copy(config = newConfig) }
+
+            if (targetContext != null) {
+                AgentSettingsRepository.saveConfig(targetContext, newConfig)
+                try {
+                    prefs(targetContext).edit()
+                        .putBoolean("pin_model_in_ram", finalEnable)
+                        .putBoolean("use_mmap", !finalEnable)
+                        .putBoolean("draft_use_mmap", !finalEnable)
+                        .apply()
+                } catch (_: Exception) {}
+            }
+
+            val selectedModelPath = newConfig.localModelPath
+            if (newConfig.preferredModelType == ModelType.GGUF && selectedModelPath.isNotBlank() && targetContext != null) {
+                delay(300)
+                triggerModelLoad(targetContext, selectedModelPath)
+            }
+        }
+    }
+
+    fun togglePinModelInRam(enable: Boolean) = togglePinModelInRam(enable, null)
+
     private var modelLoadJob: Job? = null
     @Volatile private var isModelLoadingInProgress = false
     @Volatile private var currentLoadingPath: String? = null
@@ -647,22 +1387,32 @@ class AgentViewModel : ViewModel() {
             Log.i(TAG, "Model load already in progress for $path, ignoring duplicate trigger")
             return
         }
+        if (ggufClient?.isLoaded == true && currentLoadingPath == path && _uiState.value.localModelLoaded) {
+            Log.i(TAG, "Model already loaded and operational for $path")
+            return
+        }
+        isModelLoadingInProgress = true
         currentLoadingPath = path
         modelLoadJob?.cancel()
 
         modelLoadJob = viewModelScope.launch {
-            isModelLoadingInProgress = true
             try {
                 val type = detectModelType(path)
                 val modelName = java.io.File(path).nameWithoutExtension
+                val hwCheck = DeviceProfile.checkModelRequirements(context, path)
+                if (hwCheck.warningMessage != null) {
+                    addSystemLog("⚠️ ${hwCheck.warningMessage} (${String.format(java.util.Locale.US, "%.1fGB", hwCheck.modelSizeGb)} on ${String.format(java.util.Locale.US, "%.1fGB", hwCheck.totalRamGb)} RAM)")
+                }
                 
                 _uiState.update { it.copy(
+                    initPhase = InitializationPhase.ALLOCATING_MEMORY,
                     localModelLoading = true, 
                     localModelLoaded = false, 
                     modelLoadFailed = false,
                     activeModelType = null,
+                    hardwareWarning = hwCheck.warningMessage,
                     loadingProgress = 0.05f,
-                    loadingStatusText = "Initializing Neural Core..."
+                    loadingStatusText = "Allocating Memory..."
                 ) }
                 
                 if (type == ModelType.GGUF) {
@@ -671,13 +1421,14 @@ class AgentViewModel : ViewModel() {
                         val client = GGUFModelClient().apply {
                             serverHost = config.serverHost
                             serverPort = config.serverPort
-                            contextLength = config.contextLength.coerceIn(2048, 16384)
-                            threadCount = config.threadCount
-                            maxTokens = -1
+                            contextLength = config.contextLength.coerceIn(2048, 8192)
+                            threadCount = if (config.threadCount in 1..32) config.threadCount else 4
+                            maxTokens = 2048
                             temperature = config.temperature
                             draftModelPath = config.draftModelPath.ifBlank { null }
                             useMmap = config.useMmap
                             draftUseMmap = config.draftUseMmap
+                            gpuLayers = config.gpuLayers.coerceAtLeast(0)
                         }
                         ggufClient = client
                         client.loadModel(
@@ -685,7 +1436,11 @@ class AgentViewModel : ViewModel() {
                             path = path,
                             onStatus = { status -> addSystemLog(status) },
                             onProgress = { progress, statusText ->
-                                _uiState.update { it.copy(loadingProgress = progress, loadingStatusText = statusText) }
+                                _uiState.update { it.copy(
+                                    initPhase = InitializationPhase.ALLOCATING_MEMORY,
+                                    loadingProgress = progress, 
+                                    loadingStatusText = statusText
+                                ) }
                             },
                             onLoaded = {
                                 isModelLoadingInProgress = false
@@ -693,25 +1448,51 @@ class AgentViewModel : ViewModel() {
                                 if (client.isLoaded) {
                                     val effectiveDraft = client.activeDraftModelPath
                                     _uiState.update { it.copy(
-                                        localModelLoaded = true, 
-                                        localModelLoading = false, 
+                                        initPhase = InitializationPhase.PARSING_PERSONA,
+                                        localModelLoaded = false,
+                                        localModelLoading = true,
                                         modelLoadFailed = false,
-                                        activeModelType = ModelType.GGUF, 
+                                        activeModelType = ModelType.GGUF,
                                         activeModelName = modelName,
                                         activeDraftModelPath = effectiveDraft,
-                                        loadingProgress = null,
-                                        loadingStatusText = ""
+                                        loadingProgress = 0.95f,
+                                        loadingStatusText = "Parsing Persona..."
                                     ) }
-                                    addSystemLog("Local Model Active: $modelName" + if (effectiveDraft != null) " (MTP Active)" else " (STANDALONE)")
                                     viewModelScope.launch(Dispatchers.IO) {
-                                        val systemPrompt = buildSystemPrompt(context, forLocalModel = true)
-                                        val primed = client.warmupPersonaKVCache(systemPrompt)
-                                        if (primed) {
-                                            addSystemLog("Persona KV Cache Primed & Pre-warmed ✓")
+                                        try {
+                                            val dynamicPersona = getEffectivePersonaPrompt(context)
+                                            val systemPrompt = buildSystemPrompt(context, forLocalModel = true, dynamicPersonaPrompt = dynamicPersona)
+                                            val primed = client.warmupPersonaKVCache(systemPrompt)
+                                            if (primed) {
+                                                addSystemLog("Persona KV Cache Primed & Pre-warmed ✓")
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "Background pre-warm notice: ${e.message}")
+                                        } finally {
+                                            _uiState.update { it.copy(
+                                                initPhase = InitializationPhase.SYSTEM_READY,
+                                                localModelLoaded = true, 
+                                                localModelLoading = false, 
+                                                modelLoadFailed = false,
+                                                activeModelType = ModelType.GGUF, 
+                                                activeModelName = modelName,
+                                                activeDraftModelPath = effectiveDraft,
+                                                loadingProgress = 1.0f,
+                                                loadingStatusText = "System Ready."
+                                            ) }
+                                            addSystemLog("Local Model Active: $modelName" + if (effectiveDraft != null) " (MTP Active)" else " (STANDALONE)")
+                                            val initialGreeting = "ATLAS-AI AGENT Core ready. Neural link established. How can I assist you today?"
+                                            if (_uiState.value.logs.none { it.text.contains("ATLAS-AI AGENT Core ready") }) {
+                                                addLog(LogEntry(
+                                                    sender = "AGENT",
+                                                    text = initialGreeting
+                                                ))
+                                            }
                                         }
                                     }
                                 } else {
                                     _uiState.update { it.copy(
+                                        initPhase = InitializationPhase.IDLE,
                                         localModelLoaded = false, 
                                         localModelLoading = false, 
                                         modelLoadFailed = true,
@@ -791,7 +1572,21 @@ class AgentViewModel : ViewModel() {
         geminiClient?.isLoaded = true
         addSystemLog("AI Services Initialized (Key #${safeInitialIdx + 1}/${keys.size})")
 
-        _uiState.update { it.copy(activeModelType = ModelType.GEMINI, activeModelName = modelName, totalKeys = keys.size, currentKeyIndex = safeInitialIdx, modelLoadFailed = false) }
+        _uiState.update { it.copy(
+            initPhase = InitializationPhase.SYSTEM_READY,
+            activeModelType = ModelType.GEMINI,
+            activeModelName = modelName,
+            totalKeys = keys.size,
+            currentKeyIndex = safeInitialIdx,
+            modelLoadFailed = false
+        ) }
+        val initialGreeting = "ATLAS-AI AGENT Core ready. Neural link established. How can I assist you today?"
+        if (_uiState.value.logs.none { it.text.contains("ATLAS-AI AGENT Core ready") }) {
+            addLog(LogEntry(
+                sender = "AGENT",
+                text = initialGreeting
+            ))
+        }
     }
 
     private fun isModelLoaded(): Boolean {
@@ -808,6 +1603,7 @@ class AgentViewModel : ViewModel() {
         ggufClient = null
         geminiClient = null
         _uiState.update { it.copy(
+            initPhase = InitializationPhase.IDLE,
             localModelLoaded = false, 
             localModelLoading = false, 
             loadingProgress = null,
@@ -828,6 +1624,7 @@ You have direct programmatic access to the host Android system through these too
 3. `schedule_task(description: String, command: String, delay_minutes: Int)`: Schedule delayed headless background execution.
 4. `queue_background_task(command: String)`: Queue a background automation script or command into the local Task Engine (tsk).
 5. `complete(summary: String)`: Terminate and finalize an active multi-step automation mission.
+6. `generate_image(prompt: String)`: Synthesize visual images, diagrams, or digital artwork completely offline on-device using the local diffusion engine.
 
 Format for calling tools:
 <function_calls>
@@ -855,31 +1652,7 @@ The file execution engine automatically parses this block and writes the file di
     fun isChatPersonaActive(): Boolean = false
 
     private fun appendEosControlToken(prompt: String, modelPath: String): String {
-        val clean = prompt.trimEnd()
-        val pathLower = modelPath.lowercase(Locale.ROOT)
-        return when {
-            pathLower.contains("gemma") -> {
-                if (clean.endsWith("<end_of_turn>") || clean.endsWith("<start_of_turn>user")) {
-                    clean
-                } else {
-                    "$clean\n<end_of_turn>\n<start_of_turn>user\n"
-                }
-            }
-            pathLower.contains("bitnet") -> {
-                if (clean.endsWith("<|im_end|>") || clean.endsWith("<|im_start|>user") || clean.endsWith("<|eot_id|>")) {
-                    clean
-                } else {
-                    "$clean\n<|im_end|>\n<|im_start|>user\n"
-                }
-            }
-            else -> {
-                if (clean.endsWith("<|im_end|>") || clean.endsWith("<|im_start|>user") || clean.endsWith("<end_of_turn>")) {
-                    clean
-                } else {
-                    "$clean\n<|im_end|>\n<|im_start|>user\n"
-                }
-            }
-        }
+        return prompt.trimEnd()
     }
 
     fun isSimpleGreeting(text: String): Boolean {
@@ -896,29 +1669,57 @@ The file execution engine automatically parses this block and writes the file di
         return clean in greetings || (clean.startsWith("hello") && clean.length < 10) || (clean.startsWith("hi") && clean.length < 5)
     }
 
-    private fun buildSystemPrompt(context: Context? = null, forLocalModel: Boolean = false): String {
-        val config = _uiState.value.config
-        val actualContext = context ?: MainActivity.instance
-        val customPrompt = config.systemPrompt.trim()
+    fun isGreeting(text: String): Boolean = isSimpleGreeting(text)
 
-        // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency from 32s to ~1s)
+    private fun isCodeRequest(prompt: String): Boolean {
+        if (isSimpleGreeting(prompt)) return false
+        val lower = prompt.lowercase(Locale.ROOT)
+        val arabicKeywords = listOf("كود", "برمج", "تطبيق", "صفحة", "موقع", "أنشئ", "اصنع", "اكتب", "برنامج", "حاسبة", "لعبة", "طور")
+        if (arabicKeywords.any { lower.contains(it) }) return true
+
+        val phrases = listOf("write code", "generate code", "web app", "web page", "landing page", "index.html", "source code", "create an app", "build an app")
+        if (phrases.any { lower.contains(it) }) return true
+
+        val words = lower.split(Regex("[^a-z0-9_#+-]+")).filter { it.isNotBlank() }.toSet()
+        val codeWords = setOf(
+            "code", "html", "css", "javascript", "js", "python", "script", "app",
+            "build", "website", "webpage", "function", "class", "program", "develop",
+            "calculator", "game", "frontend", "backend", "flutter", "kotlin", "react", "vue"
+        )
+        return words.any { it in codeWords }
+    }
+
+    private fun buildSystemPrompt(
+        context: Context? = null,
+        forLocalModel: Boolean = false,
+        dynamicPersonaPrompt: String? = null,
+        isCodeRequest: Boolean = false
+    ): String {
+        val config = _uiState.value.config
+        val actualContext = context ?: appContext ?: MainActivity.instance
+        val customPrompt = config.systemPrompt.trim()
+        val effectivePersona = (dynamicPersonaPrompt ?: _customPersonaPrompt.value.ifBlank {
+            actualContext?.let { PersonaDataStore.getCustomPersonaPromptSync(it) } ?: PersonaDataStore.DEFAULT_PROMPT
+        }).trim()
+
+        val antiMonologueDirective = if (isCodeRequest) {
+            "\n\nCRITICAL: For code generation, bypass all logical reasoning and <think> steps. Begin your response IMMEDIATELY with the markdown code block. Do not output internal thoughts."
+        } else ""
+
+        // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency to <2s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            val prompt = """${UNIFIED_CORE_PROMPT.trim()}
-
-Tool invocation format:
-<function_calls>
-<invoke name="tool_name">
-<parameter name="param_name">value</parameter>
-</invoke>
-</function_calls>
-Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
-Always plan your reasoning inside <think>...</think> tags first before writing your final response.
-When providing code, strictly enclose it in markdown code fences (```lang).$custom""".trimIndent()
+            val prompt = """$effectivePersona
+Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query).
+Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>
+Or: <tool_call>{"name": "bash", "command": "free -h"}</tool_call>
+SYNCHRONOUS REACT RULE: Halt text generation immediately when calling tools. Never guess outputs.
+SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</observation>, parse and state the EXACT numbers and metrics from stdout (RAM Total, Used, Free, Swap, CPU %, Temperature). Never invent or guess metrics.
+Format code in ```lang fences.$custom$antiMonologueDirective""".trimIndent()
             return appendEosControlToken(prompt, config.localModelPath)
         }
 
-        val currentKey = "UNIFIED|$customPrompt"
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest"
 
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) {
             return cachedStaticPrefix!!
@@ -932,8 +1733,9 @@ When providing code, strictly enclose it in markdown code fences (```lang).$cust
 ## Host Toolchains & Execution Guidelines:
 CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
 ZERO-SURRENDER & AUTONOMOUS TOOL CHAINING RULE: You are strictly forbidden from telling the user to browse manually or answering 'I could not find results, please check manually in your browser'. You must autonomously chain tools (refining web_search with 2-4 distilled keywords, targeting site:domain queries, or running curl via run_shell) until live data is retrieved.
+SYNCHRONOUS REACT RULE: When invoking tools, stop text generation immediately.
+SYSTEM STATE GUARDRAIL: When tool observations are provided in <observation>...</observation>, parse and state the EXACT numbers and metrics from the tool output (RAM Total, Used, Free, Swap, CPU %, Temperature). Do not invent or estimate values.
 You are an autonomous on-device CLI execution agent. You operate headlessly via shell commands and explicit file system writes. You have no accessibility service or screen-scraping capabilities. Tool calls must strictly follow schema definitions and must never be enclosed inside markdown code blocks or file streams. When performing an action, invoke the tool directly; do not generate HTML files to represent execution.
-- Plan thoughts inside <think>...</think> tags before executing tools or deliverables.
 - App Launching: Use open_app(package_or_app_name) (e.g. youtube, whatsapp, com.android.chrome) to launch Android applications natively. Aliases, localized names, shell fallback, and web deep-links are resolved automatically. Do NOT pipe am start through run_shell.
 - Deliver code strictly inside ```lang code fences only when programming or requested to write code.
 - To write files to device storage (/sdcard/Medlam-Ai/...), use write_file(path, content) or place `file: <path>` immediately above the code fence.
@@ -947,7 +1749,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
 
-        val compiled = "$livingMind\n\n${UNIFIED_CORE_PROMPT.trim()}\n\n$toolsAndGuidelines$customPromptSection"
+        val compiled = "$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -958,6 +1760,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         
         val actualContext = context ?: MainActivity.instance
         val trimmed = command.trim()
+        cascadeInterceptor?.stopAndFlush()
 
         // MODULE 4: Direct Shell REPL ($ Prefix Token Bypass)
         if (trimmed.startsWith("$")) {
@@ -997,7 +1800,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         }
 
         // MODULE 2: Slash Command Autocomplete Engine Routing (/ Trigger)
-        if (trimmed.startsWith("/")) {
+        if (trimmed.startsWith("/") && MediaIntentClassifier.classify(trimmed) is MediaIntent.TextDialogue) {
             val slashCmd = trimmed.substringBefore(" ").lowercase()
             autoTitleSessionIfNew(command)
             val userLog = LogEntry(sender = "USER", text = command)
@@ -1155,90 +1958,385 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     conversationHistory.add("user" to finalCommand)
                 }
 
-                // ── Multi-Worker MCP Orchestration Pipeline ─────────────────
-                if (!isChatPersonaActive() && MultiWorkerOrchestrator.isOrchestrationCandidate(finalCommand)) {
-                    val isCloud = modelType == ModelType.GEMINI
-                    val liveLogId = UUID.randomUUID().toString()
-                    val initialLiveLog = LogEntry(
-                        id = liveLogId,
-                        sender = "AGENT",
-                        text = "> $finalCommand\n\nOrchestrator: Initializing Multi-Worker MCP Pipeline...",
-                        isThinking = false
-                    )
-                    _uiState.update { 
-                        it.copy(
-                            logs = it.logs + initialLiveLog,
-                            currentPhase = AgentActionPhase.EXECUTING_TOOL,
-                            activeStatusDetail = "Orchestrating Multi-Worker Pipeline..."
-                        ) 
-                    }
+                // ── Native Dynamic Media Broker Intercept (Image & Video) ───────
+                val mediaIntent = MediaIntentClassifier.classify(finalCommand)
+                if (mediaIntent !is MediaIntent.TextDialogue) {
+                    val isCloud = modelType == ModelType.GEMINI &&
+                                  _uiState.value.config.geminiApiKeys.isNotBlank()
+                    val targetCtx = actualContext ?: appContext ?: MainActivity.instance
 
-                    val orchestrator = MultiWorkerOrchestrator(
-                        sessionId = sid,
-                        isCloudMode = isCloud,
-                        modelInvoker = { sysPrompt, usrPrompt, onChunk ->
-                            executeSingleModelCall(modelType, sysPrompt, usrPrompt, onChunk)
-                        },
-                        onTelemetryUpdate = { activeCount ->
-                            _uiState.update { it.copy(taskQueueSize = activeCount) }
-                        },
-                        onTerminalLogUpdate = { cliText ->
-                            _uiState.update { state ->
-                                val updatedLogs = state.logs.toMutableList()
-                                val idx = updatedLogs.indexOfLast { it.id == liveLogId }
-                                if (idx >= 0) {
-                                    updatedLogs[idx] = updatedLogs[idx].copy(text = cliText)
-                                }
-                                state.copy(logs = updatedLogs)
+                    when (mediaIntent) {
+                        is MediaIntent.GenerateImage -> {
+                            val rawImagePrompt = mediaIntent.prompt
+                            val engineDesc = if (isCloud) "Google Imagen 3 (Cloud)" else "Local Neural Diffusion (Storage-Streamed)"
+                            val liveLogId = UUID.randomUUID().toString()
+                            val initialLiveLog = LogEntry(
+                                id = liveLogId,
+                                sender = "AGENT",
+                                text = "🎨 Synthesizing visual via $engineDesc...\nConcept: \"$rawImagePrompt\"",
+                                isThinking = true
+                            )
+                            _uiState.update {
+                                it.copy(
+                                    logs = it.logs + initialLiveLog,
+                                    currentPhase = AgentActionPhase.EXECUTING_TOOL,
+                                    activeStatusDetail = "Synthesizing visual..."
+                                )
                             }
-                            scrollSignal.tryEmit(Unit)
-                        },
-                        onStatusUpdate = { status ->
-                            _uiState.update { it.copy(activeStatusDetail = status) }
-                        },
-                        shellExecutor = { cmd -> runShellInternal(cmd) }
-                    )
+                            _imageState.value = ImageState.Generating(rawImagePrompt)
 
-                    val finalCliLog = orchestrator.execute(finalCommand)
+                            if (isCloud) {
+                                val enrichedPrompt = enrichVisualPromptWithLLM(rawImagePrompt)
+                                val result = imageRepository.generateImage(enrichedPrompt)
+                                when (result) {
+                                    is ImageResult.Success -> {
+                                        _imageState.value = ImageState.Success(result.imageBytes, enrichedPrompt)
+                                        val savedFile = saveImageToDisk(result.imageBytes, enrichedPrompt)
+                                        val pathNote = if (savedFile != null) "\n📁 Saved to: ${savedFile.absolutePath}" else ""
+                                        val promptDisplay = if (enrichedPrompt != rawImagePrompt) "\nPrompt: \"$enrichedPrompt\"" else ""
+                                        val successText = "✔ Visual Generated Successfully for: \"$rawImagePrompt\"$promptDisplay$pathNote"
 
-                    _uiState.update { state ->
-                        val updatedLogs = state.logs.toMutableList()
-                        val idx = updatedLogs.indexOfLast { it.id == liveLogId }
-                        if (idx >= 0) {
-                            updatedLogs[idx] = updatedLogs[idx].copy(text = finalCliLog)
+                                        _uiState.update { state ->
+                                            val updatedLogs = state.logs.toMutableList()
+                                            val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                            val entry = LogEntry(
+                                                id = liveLogId,
+                                                sender = "AGENT",
+                                                text = successText,
+                                                isThinking = false,
+                                                imageBytes = result.imageBytes
+                                            )
+                                            if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                            state.copy(
+                                                logs = updatedLogs,
+                                                isProcessing = false,
+                                                currentPhase = AgentActionPhase.COMPLETING,
+                                                activeStatusDetail = "Ready / Operational"
+                                            )
+                                        }
+                                        synchronized(conversationHistory) {
+                                            conversationHistory.add("assistant" to successText)
+                                            trimConversationHistoryToContextLimit()
+                                        }
+                                        chatDb?.insertMessage(
+                                            ChatMessageEntity(
+                                                id = liveLogId,
+                                                sessionId = sid,
+                                                sender = "AGENT",
+                                                text = if (savedFile != null) "<!--IMAGE_PATH:${savedFile.absolutePath}-->\n$successText" else successText,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    is ImageResult.Error -> {
+                                        _imageState.value = ImageState.Error(result.message)
+                                        val errorText = "✖ Image Generation Failed: ${result.message}"
+                                        _uiState.update { state ->
+                                            val updatedLogs = state.logs.toMutableList()
+                                            val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                            val entry = LogEntry(
+                                                id = liveLogId,
+                                                sender = "AGENT",
+                                                text = errorText,
+                                                isError = true,
+                                                isThinking = false
+                                            )
+                                            if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                            state.copy(
+                                                logs = updatedLogs,
+                                                isProcessing = false,
+                                                currentPhase = AgentActionPhase.COMPLETING,
+                                                activeStatusDetail = "Ready / Operational"
+                                            )
+                                        }
+                                        chatDb?.insertMessage(
+                                            ChatMessageEntity(
+                                                id = liveLogId,
+                                                sessionId = sid,
+                                                sender = "AGENT",
+                                                text = errorText,
+                                                isError = true,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                }
+                            } else {
+                                val brokerResult = DynamicMediaBroker.dispatchImageRequest(
+                                    mediaIntent,
+                                    targetCtx ?: appContext!!,
+                                    onStatusUpdate = { statusMsg ->
+                                        _uiState.update { state ->
+                                            val updatedLogs = state.logs.toMutableList()
+                                            val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                            if (idx >= 0) {
+                                                updatedLogs[idx] = updatedLogs[idx].copy(text = statusMsg)
+                                            }
+                                            state.copy(
+                                                logs = updatedLogs,
+                                                activeStatusDetail = statusMsg
+                                            )
+                                        }
+                                    }
+                                )
+                                when (brokerResult) {
+                                    is MediaResult.ImageSuccess -> {
+                                        _imageState.value = ImageState.Success(brokerResult.imageBytes, brokerResult.prompt)
+                                        val savedFile = saveImageToDisk(brokerResult.imageBytes, brokerResult.prompt)
+                                        val pathNote = if (savedFile != null) "\n📁 Saved to: ${savedFile.absolutePath}" else ""
+                                        val modelNote = "\n⚙ Model: ${brokerResult.modelUsed}"
+                                        val successText = "✔ Visual Generated Successfully for: \"$rawImagePrompt\"$modelNote$pathNote"
+
+                                        _uiState.update { state ->
+                                            val updatedLogs = state.logs.toMutableList()
+                                            val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                            val entry = LogEntry(
+                                                id = liveLogId,
+                                                sender = "AGENT",
+                                                text = successText,
+                                                isThinking = false,
+                                                imageBytes = brokerResult.imageBytes
+                                            )
+                                            if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                            state.copy(
+                                                logs = updatedLogs,
+                                                isProcessing = false,
+                                                currentPhase = AgentActionPhase.COMPLETING,
+                                                activeStatusDetail = "Ready / Operational"
+                                            )
+                                        }
+                                        synchronized(conversationHistory) {
+                                            conversationHistory.add("assistant" to successText)
+                                            trimConversationHistoryToContextLimit()
+                                        }
+                                        chatDb?.insertMessage(
+                                            ChatMessageEntity(
+                                                id = liveLogId,
+                                                sessionId = sid,
+                                                sender = "AGENT",
+                                                text = if (savedFile != null) "<!--IMAGE_PATH:${savedFile.absolutePath}-->\n$successText" else successText,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    is MediaResult.FallbackMessage -> {
+                                        val fallbackText = brokerResult.localizedMessage()
+                                        _uiState.update { state ->
+                                            val updatedLogs = state.logs.toMutableList()
+                                            val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                            val entry = LogEntry(
+                                                id = liveLogId,
+                                                sender = "AGENT",
+                                                text = fallbackText,
+                                                isError = false,
+                                                isThinking = false
+                                            )
+                                            if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                            state.copy(
+                                                logs = updatedLogs,
+                                                isProcessing = false,
+                                                currentPhase = AgentActionPhase.COMPLETING,
+                                                activeStatusDetail = "Ready / Operational"
+                                            )
+                                        }
+                                        synchronized(conversationHistory) {
+                                            conversationHistory.add("assistant" to fallbackText)
+                                            trimConversationHistoryToContextLimit()
+                                        }
+                                        chatDb?.insertMessage(
+                                            ChatMessageEntity(
+                                                id = liveLogId,
+                                                sessionId = sid,
+                                                sender = "AGENT",
+                                                text = fallbackText,
+                                                isError = false,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    is MediaResult.Error -> {
+                                        _imageState.value = ImageState.Error(brokerResult.message)
+                                        val errorText = "✖ Image Generation Failed: ${brokerResult.message}"
+                                        _uiState.update { state ->
+                                            val updatedLogs = state.logs.toMutableList()
+                                            val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                            val entry = LogEntry(
+                                                id = liveLogId,
+                                                sender = "AGENT",
+                                                text = errorText,
+                                                isError = true,
+                                                isThinking = false
+                                            )
+                                            if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                            state.copy(
+                                                logs = updatedLogs,
+                                                isProcessing = false,
+                                                currentPhase = AgentActionPhase.COMPLETING,
+                                                activeStatusDetail = "Ready / Operational"
+                                            )
+                                        }
+                                        chatDb?.insertMessage(
+                                            ChatMessageEntity(
+                                                id = liveLogId,
+                                                sessionId = sid,
+                                                sender = "AGENT",
+                                                text = errorText,
+                                                isError = true,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    else -> {}
+                                }
+                            }
                         }
-                        state.copy(
-                            logs = updatedLogs,
-                            isProcessing = false,
-                            currentPhase = AgentActionPhase.COMPLETING,
-                            activeStatusDetail = "Ready / Operational",
-                            taskQueueSize = 0
-                        )
-                    }
+                        is MediaIntent.GenerateVideo -> {
+                            val rawVideoPrompt = mediaIntent.prompt
+                            val liveLogId = UUID.randomUUID().toString()
+                            val initialLiveLog = LogEntry(
+                                id = liveLogId,
+                                sender = "AGENT",
+                                text = "🎬 Processing video animation request: \"$rawVideoPrompt\"...",
+                                isThinking = true
+                            )
+                            _uiState.update {
+                                it.copy(
+                                    logs = it.logs + initialLiveLog,
+                                    currentPhase = AgentActionPhase.EXECUTING_TOOL,
+                                    activeStatusDetail = "Synthesizing animation..."
+                                )
+                            }
 
-                    synchronized(conversationHistory) {
-                        conversationHistory.add("assistant" to finalCliLog)
-                        while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
-                    }
+                            val brokerResult = DynamicMediaBroker.dispatchVideoRequest(mediaIntent, targetCtx ?: appContext!!)
+                            when (brokerResult) {
+                                is MediaResult.VideoSuccess -> {
+                                    val videoFile = saveVideoToDisk(brokerResult.videoBytes, brokerResult.prompt)
+                                    val pathNote = if (videoFile != null) "\n📁 Saved to: ${videoFile.absolutePath}" else ""
+                                    val modelNote = "\n⚙ Model: ${brokerResult.modelUsed}"
+                                    val successText = "✔ Video Animation Generated for: \"$rawVideoPrompt\"$modelNote$pathNote"
 
-                    chatDb?.insertMessage(
-                        ChatMessageEntity(
-                            id = liveLogId,
-                            sessionId = sid,
-                            sender = "AGENT",
-                            text = finalCliLog,
-                            timestamp = System.currentTimeMillis()
-                        )
-                    )
+                                    _uiState.update { state ->
+                                        val updatedLogs = state.logs.toMutableList()
+                                        val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                        val entry = LogEntry(
+                                            id = liveLogId,
+                                            sender = "AGENT",
+                                            text = successText,
+                                            isThinking = false
+                                        )
+                                        if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                        state.copy(
+                                            logs = updatedLogs,
+                                            isProcessing = false,
+                                            currentPhase = AgentActionPhase.COMPLETING,
+                                            activeStatusDetail = "Ready / Operational"
+                                        )
+                                    }
+                                    synchronized(conversationHistory) {
+                                        conversationHistory.add("assistant" to successText)
+                                        trimConversationHistoryToContextLimit()
+                                    }
+                                    chatDb?.insertMessage(
+                                        ChatMessageEntity(
+                                            id = liveLogId,
+                                            sessionId = sid,
+                                            sender = "AGENT",
+                                            text = successText,
+                                            timestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                                is MediaResult.FallbackMessage -> {
+                                    val fallbackText = brokerResult.localizedMessage()
+                                    _uiState.update { state ->
+                                        val updatedLogs = state.logs.toMutableList()
+                                        val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                        val entry = LogEntry(
+                                            id = liveLogId,
+                                            sender = "AGENT",
+                                            text = fallbackText,
+                                            isError = false,
+                                            isThinking = false
+                                        )
+                                        if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                        state.copy(
+                                            logs = updatedLogs,
+                                            isProcessing = false,
+                                            currentPhase = AgentActionPhase.COMPLETING,
+                                            activeStatusDetail = "Ready / Operational"
+                                        )
+                                    }
+                                    synchronized(conversationHistory) {
+                                        conversationHistory.add("assistant" to fallbackText)
+                                        trimConversationHistoryToContextLimit()
+                                    }
+                                    chatDb?.insertMessage(
+                                        ChatMessageEntity(
+                                            id = liveLogId,
+                                            sessionId = sid,
+                                            sender = "AGENT",
+                                            text = fallbackText,
+                                            isError = false,
+                                            timestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                                is MediaResult.Error -> {
+                                    val errorText = "✖ Video Generation Failed: ${brokerResult.message}"
+                                    _uiState.update { state ->
+                                        val updatedLogs = state.logs.toMutableList()
+                                        val idx = updatedLogs.indexOfLast { it.id == liveLogId }
+                                        val entry = LogEntry(
+                                            id = liveLogId,
+                                            sender = "AGENT",
+                                            text = errorText,
+                                            isError = true,
+                                            isThinking = false
+                                        )
+                                        if (idx >= 0) updatedLogs[idx] = entry else updatedLogs.add(entry)
+                                        state.copy(
+                                            logs = updatedLogs,
+                                            isProcessing = false,
+                                            currentPhase = AgentActionPhase.COMPLETING,
+                                            activeStatusDetail = "Ready / Operational"
+                                        )
+                                    }
+                                    chatDb?.insertMessage(
+                                        ChatMessageEntity(
+                                            id = liveLogId,
+                                            sessionId = sid,
+                                            sender = "AGENT",
+                                            text = errorText,
+                                            isError = true,
+                                            timestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                                else -> {}
+                            }
+                        }
+                        else -> {}
+                    }
                     refreshSessions()
                     return@launch
                 }
 
                 val isChatMode = isChatPersonaActive()
-                val systemPrompt = buildSystemPrompt(actualContext, forLocalModel = modelType == ModelType.GGUF)
+                val dynamicPersona = getEffectivePersonaPrompt(actualContext)
+                val isCode = !isGreeting(finalCommand) && isCodeRequest(finalCommand)
+                val systemPrompt = buildSystemPrompt(
+                    context = actualContext,
+                    forLocalModel = modelType == ModelType.GGUF,
+                    dynamicPersonaPrompt = dynamicPersona,
+                    isCodeRequest = isCode
+                )
                 var keepGoing = true
                 var iterationCount = 0
                 var toolsUsedThisTurn = false
+                var toolCallCount = 0
+                val MAX_TOOL_CALLS = 2
+                var activeGgufPromptPrefix: String? = null
+                var lastExecutedToolCall: Pair<String, Pair<Int, String>>? = null
 
                 while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
                     iterationCount++
@@ -1255,17 +2353,22 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     )
 
                     // 1. Immediate Post-Prompt Reasoning Anchor
+                    val isSecondTurnAnalysis = toolsUsedThisTurn && iterationCount > 1
+                    val isCode = !isGreeting(finalCommand) && isCodeRequest(finalCommand)
+                    val initialPhase = if (isSecondTurnAnalysis) AgentActionPhase.ANALYZING_OUTPUT else if (isCode) AgentActionPhase.GENERATING_CODE else AgentActionPhase.COMPLETING
+                    val initialDetail = if (isSecondTurnAnalysis) "Analyzing tool output..." else if (isCode) "Drafting Code & Architecture..." else "Replying..."
+
                     val initialLiveLog = LogEntry(
                         id = liveLogId,
                         sender = "AGENT",
                         text = "",
                         thinkingText = "",
-                        isThinking = !isChatMode
+                        isThinking = false
                     )
                     _uiState.update { it.copy(
                         logs = it.logs + initialLiveLog,
-                        currentPhase = if (isChatMode) AgentActionPhase.COMPLETING else AgentActionPhase.THINKING,
-                        activeStatusDetail = if (isChatMode) "Replying..." else "Thinking & Planning...",
+                        currentPhase = initialPhase,
+                        activeStatusDetail = initialDetail,
                         streamInterruptMsg = null
                     ) }
 
@@ -1275,19 +2378,21 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     var hitStorageLimit = false
                     val continuationPromptPayload = "Continue generation exactly from the last emitted token. Do not repeat prior lines. Continue directly with the remaining code/text."
 
-                    try {
-                        val historyCopy = synchronized(conversationHistory) {
-                            val historyList = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
-                            historyList.mapIndexed { idx, (role, content) ->
-                                val isOlder = idx < historyList.size - 2
-                                val safeContent = if (isOlder && role == "assistant") {
-                                    compactHistoryForQuota(content)
-                                } else {
-                                    content
-                                }
-                                role to safeContent
+                    val historyCopy = synchronized(conversationHistory) {
+                        trimConversationHistoryToContextLimit()
+                        val historyList = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
+                        historyList.mapIndexed { idx, (role, content) ->
+                            val isOlder = idx < historyList.size - 2
+                            val safeContent = if (isOlder && role == "assistant") {
+                                compactHistoryForQuota(content)
+                            } else {
+                                content
                             }
+                            role to safeContent
                         }
+                    }
+
+                    try {
                         var lastUiUpdateTime = 0L
                         var pendingUiUpdate = false
 
@@ -1299,7 +2404,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             val isCodeStreaming = demuxed.blocks.any { it is StreamDemultiplexer.DemuxBlock.Code && !it.isClosed }
                             val detectedPath = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.Code>().lastOrNull()?.filePath ?: ToolExecutor.detectFilePath(rawText)
                             val isWritingFile = rawText.contains("<invoke name=\"write_to_file\"") || (detectedPath != null && isCodeStreaming)
-                            val isToolInvoking = rawText.contains("<invoke")
+                            val parsedTools = demuxed.blocks.filter { it is StreamDemultiplexer.DemuxBlock.ToolCall || it is StreamDemultiplexer.DemuxBlock.TerminalFrame }
+                            val isToolInvoking = parsedTools.isNotEmpty() || rawText.contains("<invoke") || rawText.contains("<tool_call") || rawText.contains("<function_call")
 
                             val statusDetail = when {
                                 isChatMode -> "Replying..."
@@ -1309,16 +2415,18 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                     "Writing to $path..."
                                 }
                                 isToolInvoking -> {
-                                    val toolName = Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1)
+                                    val toolBlock = demuxed.blocks.filterIsInstance<StreamDemultiplexer.DemuxBlock.ToolCall>().firstOrNull()
+                                    val toolName = toolBlock?.toolName ?: Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1)
                                     if (toolName != null) "Executing Tool / Task ($toolName)..." else "Executing Tool / Task..."
                                 }
-                                isCodeStreaming || hasCodeBlock -> "Drafting Code & Architecture..."
-                                demuxed.blocks.isNotEmpty() -> "Drafting Code & Architecture..."
-                                else -> "Thinking & Planning..."
+                                isCode && (isCodeStreaming || hasCodeBlock) -> "Drafting Code & Architecture..."
+                                demuxed.isThinking -> "Thinking & Planning..."
+                                else -> "Replying..."
                             }
 
                             val currentPhase = when {
                                 isChatMode -> AgentActionPhase.COMPLETING
+                                toolsUsedThisTurn && iterationCount > 1 -> AgentActionPhase.ANALYZING_OUTPUT
                                 demuxed.isThinking -> AgentActionPhase.THINKING
                                 isToolInvoking -> AgentActionPhase.EXECUTING_TOOL
                                 isCodeStreaming -> AgentActionPhase.GENERATING_CODE
@@ -1377,17 +2485,24 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
                             val stream = when (modelType) {
                                 ModelType.GGUF -> {
-                                    val ggufHistory = if (continuationCycle == 1) {
-                                        historyCopy
+                                    val activeArch = ggufClient?.currentMetadata?.architecture ?: ChatTemplateEngine.Architecture.GEMMA
+                                    val ggufPrompt = if (continuationCycle == 1) {
+                                        activeGgufPromptPrefix ?: run {
+                                            val p = ChatTemplateEngine.formatPrompt(
+                                                history = historyCopy,
+                                                systemDirective = systemPrompt,
+                                                arch = activeArch,
+                                                addAssistantPrompt = true
+                                            )
+                                            activeGgufPromptPrefix = p
+                                            p
+                                        }
                                     } else {
-                                        historyCopy + listOf(
-                                            "assistant" to responseSb.toString(),
-                                            "user" to continuationPromptPayload
-                                        )
+                                        (activeGgufPromptPrefix ?: "") + responseSb.toString() + ChatTemplateEngine.formatContinuationTurn(activeArch, continuationPromptPayload)
                                     }
-                                    ggufClient!!.generateStreamWithHistory(
-                                        history = ggufHistory,
-                                        systemPrompt = systemPrompt,
+                                    ggufClient!!.generateStreamWithRawPrompt(
+                                        promptText = ggufPrompt,
+                                        overrideTemperature = if (isCode) 0.15f else null,
                                         onSpeedUpdate = { tps ->
                                             val now = System.currentTimeMillis()
                                             if (now - lastTpsUpdateMs >= 500L) {
@@ -1399,9 +2514,9 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 }
                                 ModelType.GEMINI -> {
                                     val json = JSONArray()
-                                    historyCopy.forEachIndexed { i, (r, c) ->
+                                    historyCopy.forEachIndexed { idx, (r, c) ->
                                         val m = JSONObject().put("role", r).put("content", c)
-                                        if (i == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
+                                        if (idx == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
                                             m.put("images", JSONArray(imageBase64List))
                                         }
                                         json.put(m)
@@ -1410,43 +2525,86 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         json.put(JSONObject().put("role", "model").put("content", responseSb.toString()))
                                         json.put(JSONObject().put("role", "user").put("content", continuationPromptPayload))
                                     }
-                                    geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
-                                        if (continuationCycle == 1) {
-                                            responseSb.setLength(0)
-                                            liveDiskStreamer.reset()
-                                            pushUiUpdate("")
+
+                                    val activeCall = lastExecutedToolCall
+                                    if (activeCall != null && iterationCount > 1) {
+                                        lastExecutedToolCall = null
+                                        geminiClient!!.sendFunctionResponseStream(
+                                            name = activeCall.first,
+                                            sanitizedOutput = activeCall.second.second,
+                                            exitCode = activeCall.second.first,
+                                            fallbackMessages = json,
+                                            systemPrompt = systemPrompt
+                                        )
+                                    } else {
+                                        geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
+                                            if (continuationCycle == 1) {
+                                                responseSb.setLength(0)
+                                                liveDiskStreamer.reset()
+                                                pushUiUpdate("")
+                                            }
                                         }
                                     }
                                 }
                             }
 
                             var lastThermalCheckTime = 0L
-                            stream.collect { chunk ->
-                                responseSb.append(chunk)
-                                // ── SoC Thermal Breaker: Only pause if temperature strictly exceeds 75°C ──
-                                val now = System.currentTimeMillis()
-                                if (now - lastThermalCheckTime >= 1000L) {
-                                    lastThermalCheckTime = now
-                                    val currentTemp = DeviceProfile.readDeviceTemperature()
-                                    if (currentTemp > 90) {
-                                        _uiState.update { it.copy(activeStatusDetail = "Thermal Cooling (SoC > 90°C)...") }
-                                        kotlinx.coroutines.delay(2000L)
+                            var bufferedTokensCount = 0
+                            try {
+                                stream.collect { chunk ->
+                                    responseSb.append(chunk)
+                                    bufferedTokensCount++
+                                    if (_uiState.value.isTtsEnabled) {
+                                        val ctx = actualContext ?: appContext ?: MainActivity.instance
+                                        if (ctx != null) {
+                                            getOrCreateCascadeInterceptor(ctx).onTokenChunk(chunk)
+                                        }
+                                    }
+                                    // ── Zero Throttling: Run CPU big cores at full hardware capacity ──
+                                    val now = System.currentTimeMillis()
+                                    // Token batching: buffer incoming tokens and emit UI updates every 50ms,
+                                    // eliminating per-token Jetpack Compose recomposition choke and CPU thrashing.
+                                    val elapsedMs = now - lastUiUpdateTime
+                                    if (elapsedMs >= 50L) {
+                                        lastUiUpdateTime = now
+                                        bufferedTokensCount = 0
+                                        pushUiUpdate(responseSb.toString())
+                                        pendingUiUpdate = false
+                                    } else {
+                                        pendingUiUpdate = true
+                                    }
+
+                                    // ── Enforce Synchronous ReAct Barrier: Immediately pause text generation ──
+                                    if (StreamDemultiplexer.hasCompletedToolCall(responseSb.toString())) {
+                                        Log.i(TAG, "ReAct Barrier: Tool call completed in stream. Halting text generation immediately.")
+                                        throw SynchronousToolBarrierException()
                                     }
                                 }
-                                // Smooth UI update stream without per-token recomposition thrashing
-                                val isThinking = responseSb.contains("<think>") && !responseSb.contains("</think>")
-                                val throttleInterval = if (isThinking) 35L else 25L
-                                if (now - lastUiUpdateTime >= throttleInterval) {
-                                    lastUiUpdateTime = now
-                                    pushUiUpdate(responseSb.toString())
-                                    pendingUiUpdate = false
+                            } catch (e: Throwable) {
+                                if (e is SynchronousToolBarrierException || e.cause is SynchronousToolBarrierException || e.message?.contains("Synchronous ReAct Barrier") == true) {
+                                    Log.i(TAG, "ReAct Barrier: Text generation paused cleanly for tool execution.")
+                                    continueRecursion = false
                                 } else {
-                                    pendingUiUpdate = true
+                                    throw e
                                 }
                             }
 
-                            if (pendingUiUpdate) {
+                            if (StreamDemultiplexer.hasCompletedToolCall(responseSb.toString())) {
+                                val truncated = StreamDemultiplexer.truncateAfterToolCall(responseSb.toString())
+                                responseSb.setLength(0)
+                                responseSb.append(truncated)
+                                continueRecursion = false
+                            }
+
+
+                            if (pendingUiUpdate || bufferedTokensCount > 0) {
+                                bufferedTokensCount = 0
+                                pendingUiUpdate = false
                                 pushUiUpdate(responseSb.toString())
+                            }
+
+                            if (_uiState.value.isTtsEnabled) {
+                                cascadeInterceptor?.onStreamComplete()
                             }
 
                             // Intercept finishReason at stream processor level
@@ -1501,6 +2659,18 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 }
                             }
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (e is SynchronousToolBarrierException || e.message?.contains("Synchronous ReAct Barrier") == true) {
+                            Log.i(TAG, "ReAct Barrier: Text generation paused cleanly for tool execution at cycle level.")
+                            continueRecursion = false
+                        } else {
+                            // Graceful stream cancellation when user presses Stop: no red error trace
+                            Log.i(TAG, "Stream cancelled by user cleanly.")
+                            streamInterrupted = true
+                            interruptMsg = "" // empty string → suppress error display
+                            // Re-throw so the coroutine cancellation propagates correctly
+                            throw e
+                        }
                     } catch (e: Exception) {
                         val lowerErr = (e.message ?: "").lowercase()
                         val isTokenCeiling = lowerErr.contains("max_tokens") || lowerErr.contains("token limit")
@@ -1532,20 +2702,13 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     }
 
                     if (fullResponse.isNotBlank()) {
-                        // Strict No-Echo Protocol: Sanitize post-execution response to eliminate code regurgitation
-                        val assistantReply = if (writtenFilesFromStream.isNotEmpty()) {
-                            ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream)
-                        } else {
-                            fullResponse
-                        }
-                        // Strip internal thinking tags before adding to conversation history to save tokens
-                        val cleanHistoryReply = stripThinkingForHistory(assistantReply)
-                        synchronized(conversationHistory) {
-                            conversationHistory.add("assistant" to if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else "[Execution in progress]")
-                            while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
-                        }
-
                         if (streamInterrupted) {
+                            val assistantReply = if (writtenFilesFromStream.isNotEmpty()) {
+                                ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream)
+                            } else {
+                                fullResponse
+                            }
+                            val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val displayText = if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
                             _uiState.update { state ->
                                 val updated = state.logs.map { log ->
@@ -1569,72 +2732,180 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             }
                             keepGoing = false
                         } else {
-                            val (usedTools, summary) = executeToolLoop(fullResponse, actualContext)
-                            val cleanSummary = summary ?: ""
-                            if (usedTools) {
+                            val parsedToolCalls = StreamDemultiplexer.parseAllToolCalls(fullResponse)
+                            if (parsedToolCalls.isNotEmpty()) {
                                 toolsUsedThisTurn = true
-                                _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL, activeStatusDetail = "Synthesizing tool results...") }
-                                val proseOnly = cleanHistoryReply
-                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*?</(?:tool_calls|function_calls)>""", RegexOption.IGNORE_CASE), "")
-                                    .replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
-                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-                                    .replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-                                    .trim()
-                                val toolResultText = when {
-                                    proseOnly.isNotBlank() && cleanSummary.isNotBlank() && !proseOnly.contains(cleanSummary) -> "$proseOnly\n\n$cleanSummary"
-                                    proseOnly.isNotBlank() -> proseOnly
-                                    cleanSummary.isNotBlank() -> cleanSummary
-                                    else -> ""
-                                }
-                                _uiState.update { state ->
-                                    val updated = state.logs.map { log ->
-                                        if (log.id == liveLogId) log.copy(text = toolResultText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
-                                    }
-                                    state.copy(logs = updated)
-                                }
-                                val sid = currentSessionId.value
-                                val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$toolResultText" else toolResultText
-                                viewModelScope.launch(Dispatchers.IO) {
-                                    chatDb?.insertMessage(
-                                        ChatMessageEntity(
-                                            id = liveLogId,
-                                            sessionId = sid,
-                                            sender = "AGENT",
-                                            text = dbText,
-                                            timestamp = System.currentTimeMillis()
-                                        )
-                                    )
-                                    refreshSessions()
-                                }
+                                val primaryCall = parsedToolCalls.first()
+                                val action = primaryCall.name.trim().lowercase()
+                                val params = primaryCall.params
+                                val explanatoryText = StreamDemultiplexer.extractPreambleProse(fullResponse, primaryCall.rawMatch)
 
-                                synchronized(conversationHistory) {
-                                    val toolFeedback = "[System Tool Execution Output]:\n${summary ?: "Tool executed successfully."}\n\nPlease analyze the above results and present your complete final response to the user."
-                                    conversationHistory.add("user" to toolFeedback)
-                                    while (conversationHistory.size > MAX_HISTORY_MESSAGES) conversationHistory.removeAt(0)
+                                if (action in listOf("run_shell", "execute_shell", "terminal", "bash", "sh")) {
+                                    val rawCmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
+                                    _uiState.update { it.copy(currentPhase = AgentActionPhase.EXECUTING_TOOL, activeStatusDetail = "Executing: $rawCmd...") }
+                                    val heredoc = interceptHeredocFileWrite(rawCmd)
+                                    val (finalCmd, exitCode, output) = if (heredoc != null) {
+                                        heredoc
+                                    } else {
+                                        val (code, out) = executeSafeProcess(rawCmd)
+                                        Triple(rawCmd, code, out)
+                                    }
+                                    val safeCmd = StreamDemultiplexer.escapeXml(finalCmd)
+                                    val safeOut = StreamDemultiplexer.escapeXml(output.trim())
+                                    val terminalFrame = """<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>"""
+
+                                    val lockedSegmentText = if (explanatoryText.isNotBlank()) "$explanatoryText\n\n$terminalFrame" else terminalFrame
+                                    _uiState.update { state ->
+                                        val updated = state.logs.map { log ->
+                                            if (log.id == liveLogId) log.copy(text = lockedSegmentText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
+                                        }
+                                        state.copy(logs = updated, activeStatusDetail = "Analyzing output metrics...", currentPhase = AgentActionPhase.ANALYZING_OUTPUT)
+                                    }
+                                    val sid = currentSessionId.value
+                                    val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$lockedSegmentText" else lockedSegmentText
+                                    viewModelScope.launch(Dispatchers.IO) {
+                                        chatDb?.insertMessage(ChatMessageEntity(id = liveLogId, sessionId = sid, sender = "AGENT", text = dbText, timestamp = System.currentTimeMillis()))
+                                        refreshSessions()
+                                    }
+
+                                    lastExecutedToolCall = primaryCall.name to (exitCode to output)
+                                    toolCallCount++
+
+                                    val activeArch = ggufClient?.currentMetadata?.architecture ?: ChatTemplateEngine.Architecture.GEMMA
+                                    val observationDelta = ChatTemplateEngine.formatObservationDelta(activeArch, output)
+                                    val observationMsg = """<observation>
+[Process completed with exit code $exitCode]
+$output
+</observation>
+
+SYSTEM STATE GUARDRAIL: Analyze the command observation above. You must strictly parse and report the actual values from stdout (such as Total, Used, Free, Available memory, Swap, CPU %, Temperature). Do NOT produce placeholder boilerplate, estimates, or fabricated numbers. State the real, verified metrics directly from the command output."""
+
+                                    synchronized(conversationHistory) {
+                                        val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
+                                        conversationHistory.add("assistant" to assistantTurn)
+                                        conversationHistory.add("user" to observationMsg)
+                                        trimConversationHistoryToContextLimit()
+                                    }
+
+                                    // ── KV Cache Continuity: Append observation token sequence directly to active prompt ──
+                                    val currentBase = activeGgufPromptPrefix ?: ChatTemplateEngine.formatPrompt(
+                                        history = historyCopy,
+                                        systemDirective = systemPrompt,
+                                        arch = activeArch,
+                                        addAssistantPrompt = true
+                                    )
+                                    activeGgufPromptPrefix = currentBase + fullResponse + observationDelta
+                                    keepGoing = toolCallCount < MAX_TOOL_CALLS
+                                } else if (action in listOf("web_search", "search", "google_search")) {
+                                    val searchQuery = params["query"] ?: params["q"] ?: params.values.firstOrNull() ?: ""
+                                    _uiState.update { it.copy(activeStatusDetail = "Searching: $searchQuery...", currentPhase = AgentActionPhase.EXECUTING_TOOL) }
+                                    val searchData = try {
+                                        WebSearchTool.search(searchQuery)
+                                    } catch (e: Exception) {
+                                        "Error executing web search: ${e.message}"
+                                    }
+                                    val searchSummary = "🔍 Web Search: $searchQuery"
+                                    val lockedSegmentText = if (explanatoryText.isNotBlank()) "$explanatoryText\n\n$searchSummary" else searchSummary
+                                    _uiState.update { state ->
+                                        val updated = state.logs.map { log ->
+                                            if (log.id == liveLogId) log.copy(text = lockedSegmentText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
+                                        }
+                                        state.copy(logs = updated, activeStatusDetail = "Synthesizing answer from search results...", currentPhase = AgentActionPhase.ANALYZING_OUTPUT)
+                                    }
+                                    toolCallCount++
+                                    val sid = currentSessionId.value
+                                    viewModelScope.launch(Dispatchers.IO) {
+                                        chatDb?.insertMessage(ChatMessageEntity(id = liveLogId, sessionId = sid, sender = "AGENT", text = lockedSegmentText, timestamp = System.currentTimeMillis()))
+                                        refreshSessions()
+                                    }
+
+                                    val truncatedSearch = truncateObservation(searchData, maxChars = 500, maxLines = 10)
+                                    val observationMsg = """<observation>
+[SEARCH RESULTS for "$searchQuery"]:
+$truncatedSearch
+</observation>
+
+Please analyze the search results above and provide your complete response to the user."""
+
+                                    synchronized(conversationHistory) {
+                                        val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
+                                        conversationHistory.add("assistant" to assistantTurn)
+                                        conversationHistory.add("user" to observationMsg)
+                                        trimConversationHistoryToContextLimit()
+                                    }
+
+                                    val activeArch = ggufClient?.currentMetadata?.architecture ?: ChatTemplateEngine.Architecture.GEMMA
+                                    val currentBase = activeGgufPromptPrefix ?: ChatTemplateEngine.formatPrompt(
+                                        history = historyCopy,
+                                        systemDirective = systemPrompt,
+                                        arch = activeArch,
+                                        addAssistantPrompt = true
+                                    )
+                                    activeGgufPromptPrefix = currentBase + fullResponse + ChatTemplateEngine.formatObservationTurn(activeArch, observationMsg)
+                                    keepGoing = toolCallCount < MAX_TOOL_CALLS
+                                } else {
+                                    val (usedTools, summary) = executeToolLoop(fullResponse, actualContext)
+                                    val cleanSummary = summary ?: ""
+                                    val lockedSegmentText = when {
+                                        explanatoryText.isNotBlank() && cleanSummary.isNotBlank() -> "$explanatoryText\n\n$cleanSummary"
+                                        explanatoryText.isNotBlank() -> explanatoryText
+                                        cleanSummary.isNotBlank() -> cleanSummary
+                                        else -> ""
+                                    }
+                                    _uiState.update { state ->
+                                        val updated = state.logs.map { log ->
+                                            if (log.id == liveLogId) log.copy(text = lockedSegmentText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
+                                        }
+                                        state.copy(logs = updated, activeStatusDetail = "Analyzing tool observation...", currentPhase = AgentActionPhase.ANALYZING_OUTPUT)
+                                    }
+                                    toolCallCount++
+                                    val sid = currentSessionId.value
+                                    val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$lockedSegmentText" else lockedSegmentText
+                                    viewModelScope.launch(Dispatchers.IO) {
+                                        chatDb?.insertMessage(ChatMessageEntity(id = liveLogId, sessionId = sid, sender = "AGENT", text = dbText, timestamp = System.currentTimeMillis()))
+                                        refreshSessions()
+                                    }
+
+                                    val truncatedSummary = truncateObservation(cleanSummary, maxChars = 500, maxLines = 10)
+                                    val observationMsg = """<observation>
+$truncatedSummary
+</observation>
+
+Please analyze the tool observation above and provide your complete response to the user."""
+
+                                    synchronized(conversationHistory) {
+                                        val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
+                                        conversationHistory.add("assistant" to assistantTurn)
+                                        conversationHistory.add("user" to observationMsg)
+                                        trimConversationHistoryToContextLimit()
+                                    }
+
+                                    val activeArch = ggufClient?.currentMetadata?.architecture ?: ChatTemplateEngine.Architecture.GEMMA
+                                    val currentBase = activeGgufPromptPrefix ?: ChatTemplateEngine.formatPrompt(
+                                        history = historyCopy,
+                                        systemDirective = systemPrompt,
+                                        arch = activeArch,
+                                        addAssistantPrompt = true
+                                    )
+                                    activeGgufPromptPrefix = currentBase + fullResponse + ChatTemplateEngine.formatObservationTurn(activeArch, observationMsg)
+                                    keepGoing = toolCallCount < MAX_TOOL_CALLS
                                 }
-                                keepGoing = true
                             } else {
                                 _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
-                                val proseOnly = cleanHistoryReply
-                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*?</(?:tool_calls|function_calls)>""", RegexOption.IGNORE_CASE), "")
-                                    .replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
-                                    .replace(Regex("""<(?:tool_calls|function_calls)>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-                                    .replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-                                    .trim()
-                                val finalText = when {
-                                    proseOnly.isNotBlank() && cleanSummary.isNotBlank() && !proseOnly.contains(cleanSummary) -> "$proseOnly\n\n$cleanSummary"
-                                    proseOnly.isNotBlank() -> proseOnly
-                                    cleanSummary.isNotBlank() -> cleanSummary
-                                    else -> ""
+                                val assistantReply = if (writtenFilesFromStream.isNotEmpty()) {
+                                    ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream)
+                                } else {
+                                    fullResponse
                                 }
+                                val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                                 _uiState.update { state ->
                                     val updated = state.logs.map { log ->
-                                        if (log.id == liveLogId) log.copy(text = finalText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
+                                        if (log.id == liveLogId) log.copy(text = cleanHistoryReply, thinkingText = demuxedFull.thinkingText, isThinking = false) else log
                                     }
                                     state.copy(logs = updated)
                                 }
                                 val sid = currentSessionId.value
-                                val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$finalText" else finalText
+                                val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$cleanHistoryReply" else cleanHistoryReply
                                 viewModelScope.launch(Dispatchers.IO) {
                                     chatDb?.insertMessage(
                                         ChatMessageEntity(
@@ -1655,12 +2926,31 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         touchedPath = detectedPath
                                     )
                                 }
+                                synchronized(conversationHistory) {
+                                    conversationHistory.add("assistant" to cleanHistoryReply)
+                                    trimConversationHistoryToContextLimit()
+                                }
                                 keepGoing = false
+                                activeGgufPromptPrefix = null
                             }
                         }
                     } else {
                         keepGoing = false
+                        activeGgufPromptPrefix = null
                     }
+
+                    }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Graceful Manual Cancellation: user pressed Stop button — no red error banner
+                Log.i(TAG, "Generation stopped by user (CancellationException caught cleanly).")
+                addSystemLog("Generation stopped by user.")
+                _uiState.update { state ->
+                    state.copy(
+                        isProcessing = false,
+                        activeStatusDetail = "Generation stopped by user.",
+                        currentPhase = AgentActionPhase.IDLE,
+                        streamInterruptMsg = null
+                    )
                 }
             } catch (e: Exception) {
                 addLog(LogEntry(sender = "SYSTEM", text = "Mission Error: ${e.message}", isError = true))
@@ -1700,7 +2990,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             val taskHistory = mutableListOf<Pair<String, String>>()
             taskHistory.add("user" to command)
             
-            val systemPrompt = buildSystemPrompt(null, forLocalModel = modelType == ModelType.GGUF)
+            val dynamicPersona = getEffectivePersonaPrompt(ctx)
+            val systemPrompt = buildSystemPrompt(ctx, forLocalModel = modelType == ModelType.GGUF, dynamicPersonaPrompt = dynamicPersona)
             val resultSb = StringBuilder()
             var iterations = 0
             var keepGoing = true
@@ -1875,69 +3166,75 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         } catch (_: Exception) {}
 
         val outputSb = StringBuilder()
-        val readerThread = Thread {
+        val readerThread = Thread({
             try {
                 process.inputStream.bufferedReader().use { reader ->
                     val buffer = CharArray(2048)
                     var charsRead: Int
                     while (reader.read(buffer).also { charsRead = it } != -1) {
                         outputSb.append(buffer, 0, charsRead)
-                        if (outputSb.length > 512 * 1024) {
-                            outputSb.append("\n[Output truncated: exceeded 512KB]")
+                        if (outputSb.length > 64 * 1024) {
+                            outputSb.append("\n[Output truncated: exceeded 64KB]")
                             break
                         }
                     }
                 }
             } catch (_: Exception) {}
-        }
+        }, "shell-watchdog-reader")
         readerThread.isDaemon = true
         readerThread.start()
 
-        val exitedInTime = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-        if (!exitedInTime) {
-            Log.w(TAG, "Shell process timed out after ${timeoutMs}ms, destroying forcibly: $cmd")
-            try {
-                process.destroyForcibly()
-            } catch (_: Exception) {}
+        try {
+            val exitedInTime = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!exitedInTime) {
+                Log.w(TAG, "Shell process timed out after ${timeoutMs}ms, destroying forcibly: $cmd")
+                try {
+                    process.destroyForcibly()
+                } catch (_: Exception) {}
+                try {
+                    readerThread.join(300)
+                } catch (_: Exception) {}
+                val partial = outputSb.toString().trim()
+                val timeoutMsg = "[Process Timed Out after ${timeoutMs / 1000}s - Process Terminated]"
+                return -1 to (if (partial.isNotBlank()) "$timeoutMsg\nPartial output:\n$partial" else timeoutMsg)
+            }
+
             try {
                 readerThread.join(500)
             } catch (_: Exception) {}
-            val partial = outputSb.toString().trim()
-            val timeoutMsg = "[Process Timed Out after ${timeoutMs / 1000}s - Process Terminated]"
-            return -1 to (if (partial.isNotBlank()) "$timeoutMsg\nPartial output:\n$partial" else timeoutMsg)
+            val exitCode = try { process.exitValue() } catch (_: Exception) { 0 }
+            return exitCode to outputSb.toString()
+        } finally {
+            // Clean up process streams immediately upon receiving exit code or timeout to prevent leaks and zombie tasks
+            try { process.inputStream?.close() } catch (_: Exception) {}
+            try { process.errorStream?.close() } catch (_: Exception) {}
+            try { process.outputStream?.close() } catch (_: Exception) {}
+            try { process.destroy() } catch (_: Exception) {}
         }
-
-        try {
-            readerThread.join(1000)
-        } catch (_: Exception) {}
-        val exitCode = try { process.exitValue() } catch (_: Exception) { 0 }
-        return exitCode to outputSb.toString()
     }
 
-    suspend fun runShellWithExitCode(cmd: String, timeoutMs: Long = 15_000L): Pair<Int, String> = withContext(Dispatchers.IO) {
-        if (cmd.isBlank()) return@withContext -1 to "Error: Shell command is blank"
+    suspend fun runShellWithExitCode(cmd: String, timeoutMs: Long = 12_000L): Pair<Int, String> = withContext(Dispatchers.IO) {
+        if (cmd.isBlank()) return@withContext -1 to "[Process completed with no output]"
 
         val tryRoot = _uiState.value.isRootAvailable
         try {
             if (tryRoot) {
                 try {
-                    val (exitCode, output) = runProcessWithWatchdog(cmd, "su", timeoutMs)
-                    if (exitCode == 0 || (!output.contains("su: not found", ignoreCase = true) && !output.contains("permission denied", ignoreCase = true))) {
-                        return@withContext exitCode to output.trim()
+                    val lines = RootShellManager.execAsync(cmd)
+                    if (lines.isNotEmpty()) {
+                        val joined = lines.joinToString("\n")
+                        return@withContext 0 to sanitizeProcessOutput(joined)
                     }
-                    Log.w(TAG, "su command returned exit code $exitCode or permission error, falling back to sh")
                 } catch (e: Exception) {
-                    Log.w(TAG, "su execution failed ($e), falling back to sh")
+                    Log.w(TAG, "Persistent root shell execution failed ($e), falling back to safe sh runner")
                 }
             }
 
-            val (exitCode, output) = runProcessWithWatchdog(cmd, "sh", timeoutMs)
-            exitCode to output.trim()
+            executeSafeProcess(cmd)
         } catch (e: Exception) {
-            -1 to "Error executing command: ${e.message ?: e.javaClass.simpleName}"
+            -1 to sanitizeProcessOutput("Error executing command: ${e.message ?: e.javaClass.simpleName}")
         }
     }
-
     suspend fun runShellInternal(cmd: String, timeoutMs: Long = 15_000L): String {
         return runShellWithExitCode(cmd, timeoutMs).second
     }
@@ -2007,31 +3304,16 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             Log.w(TAG, "ToolExecutor error: ${e.message}")
         }
 
-        val clean = response.replace("```xml", "").replace("```", "").trim()
-        val hasFunctionCalls = clean.contains("<function_calls>") || clean.contains("<tool_calls>")
-        val hasInvoke = clean.contains("<invoke")
-
-        if (!hasInvoke) return@withTimeoutOrNull false to null
-
-        val block = if (hasFunctionCalls) {
-            val start = if (clean.contains("<function_calls>")) clean.indexOf("<function_calls>") + 16 else clean.indexOf("<tool_calls>") + 12
-            var b = clean.substring(start)
-            val end = if (b.contains("</function_calls>")) b.indexOf("</function_calls>") else if (b.contains("</tool_calls>")) b.indexOf("</tool_calls>") else -1
-            if (end != -1) b.substring(0, end) else b
-        } else {
-            clean
-        }
+        val toolCalls = StreamDemultiplexer.parseAllToolCalls(response)
+        if (toolCalls.isEmpty()) return@withTimeoutOrNull false to null
 
         val summaries = mutableListOf<String>()
         var actionToolUsed = false
         try {
-            val iRegex = Regex("<invoke name=[\"'](.*?)[\"']>(.*?)(?:</invoke>|$)", RegexOption.DOT_MATCHES_ALL)
-
-            for (m in iRegex.findAll(block)) {
-                val action = m.groupValues[1].trim().lowercase()
-                val innerBody = m.groupValues[2].trim()
+            for (call in toolCalls) {
+                val action = call.name.trim().lowercase()
+                val params = call.params
                 _uiState.update { it.copy(activeStatusDetail = "Executing Tool / Task ($action)...") }
-                val params = StreamDemultiplexer.extractToolParams(innerBody)
 
                 // ── Idempotency Gate ──────────────────────────────────────────
                 val callHash = computeCallHash(action, params)
@@ -2039,13 +3321,13 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     Log.d(TAG, "Idempotency Lock: Suppressed duplicate tool call [$action] with hash $callHash")
                     val preview = when (action) {
                         "open_app", "launch_app", "start_app" -> {
-                            val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: innerBody.trim()
+                            val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: params["name"] ?: ""
                             resolvePackageName(target, actualContext?.packageManager)
                         }
                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
-                            params["command"] ?: params["cmd"] ?: innerBody.trim()
+                            params["command"] ?: params["cmd"] ?: ""
                         }
-                        else -> params.values.firstOrNull() ?: innerBody.take(40)
+                        else -> params.values.firstOrNull() ?: action
                     }
                     val statusMsg = when (action) {
                         "open_app", "launch_app", "start_app" -> "$preview brought to front."
@@ -2060,7 +3342,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     when (action) {
                         "open_app", "launch_app", "start_app" -> {
                             actionToolUsed = true
-                            val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: params["name"] ?: innerBody.removeSurrounding("\"").trim()
+                            val target = params["package_name"] ?: params["package"] ?: params["app_name"] ?: params["app"] ?: params["name"] ?: ""
                             if (target.isNotBlank()) {
                                 val toolRes = ToolHandler.handleOpenApp(target, actualContext)
                                 summaries.add(toolRes.summary)
@@ -2068,7 +3350,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             }
                         }
                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
-                            val rawCmd = params["command"] ?: params["cmd"] ?: innerBody.removeSurrounding("\"").trim()
+                            val rawCmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
                             if (rawCmd.isNotBlank()) {
                                 actionToolUsed = true
                                 val trimmedCmd = rawCmd.trim()
@@ -2096,7 +3378,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                                     // Fallback to real shell execution if native intent fails
                                                     val (code, out) = runShellWithExitCode(rawCmd)
                                                     val safeCmd = StreamDemultiplexer.escapeXml(rawCmd)
-                                                    val safeOut = StreamDemultiplexer.escapeXml(out.trim())
+                                                    val safeOut = StreamDemultiplexer.escapeXml(truncateObservation(out.trim()))
                                                     summaries.add("""<terminal_frame command="$safeCmd" exit_code="$code">$safeOut</terminal_frame>""")
                                                 }
                                             } finally {
@@ -2115,7 +3397,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                     Triple(rawCmd, code, out)
                                 }
                                 val safeCmd = StreamDemultiplexer.escapeXml(finalCmd)
-                                val safeOut = StreamDemultiplexer.escapeXml(output.trim())
+                                val safeOut = StreamDemultiplexer.escapeXml(truncateObservation(output.trim()))
                                 summaries.add("""<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>""")
                             }
                         }
@@ -2130,29 +3412,63 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             }
                         }
                         "web_search", "search", "google_search" -> {
-                            val q = params["query"] ?: params["q"] ?: innerBody.removeSurrounding("\"").trim()
+                            val q = params["query"] ?: params["q"] ?: params.values.firstOrNull() ?: ""
                             if (q.isNotBlank()) {
                                 actionToolUsed = true
                                 val toolRes = ToolHandler.handleWebSearch(q)
                                 summaries.add(toolRes.summary)
                             }
                         }
+                        "generate_image", "image_generation", "create_image", "draw_image", "draw" -> {
+                            val p = params["prompt"] ?: params["query"] ?: params["description"] ?: params.values.firstOrNull() ?: ""
+                            if (p.isNotBlank()) {
+                                actionToolUsed = true
+                                _imageState.value = ImageState.Generating(p)
+                                val isCloud = _uiState.value.activeModelType == ModelType.GEMINI && _uiState.value.config.geminiApiKeys.isNotBlank()
+                                val imgRes = if (isCloud) {
+                                    imageRepository.generateImage(p)
+                                } else if (imageRepository.localDiffusionEngine.hasModelWeights()) {
+                                    executeSequentialImageSynthesis(p)
+                                } else {
+                                    imageRepository.generateImage(p)
+                                }
+                                when (imgRes) {
+                                    is ImageResult.Success -> {
+                                        _imageState.value = ImageState.Success(imgRes.imageBytes, p)
+                                        val saved = saveImageToDisk(imgRes.imageBytes, p)
+                                        val diskNote = if (saved != null) " (Saved to ${saved.absolutePath})" else ""
+                                        addLog(
+                                            LogEntry(
+                                                sender = "AGENT",
+                                                text = "🎨 Synthesized visual for: \"$p\"$diskNote",
+                                                imageBytes = imgRes.imageBytes
+                                            )
+                                        )
+                                        summaries.add("✔ Tool(generate_image: \"$p\") ─── [GENERATED]\n✔ Status: Synthesized ${imgRes.imageBytes.size} bytes$diskNote")
+                                    }
+                                    is ImageResult.Error -> {
+                                        _imageState.value = ImageState.Error(imgRes.message)
+                                        summaries.add("✖ Tool(generate_image: \"$p\") ─── [FAILED]\n✖ Status: ${imgRes.message}")
+                                    }
+                                }
+                            }
+                        }
                         "schedule_task" -> {
                             val desc = params["description"] ?: "Scheduled Task"
-                            val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
+                            val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
                             val delay = params["delay_minutes"]?.toIntOrNull() ?: 5
                             val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                             updateTaskState()
                             summaries.add("Scheduled background task [tsk #$tid in $delay min]: $desc ($cmd)")
                         }
                         "queue_background_task", "queue_task" -> {
-                            val cmd = params["command"] ?: params["cmd"] ?: innerBody.trim()
+                            val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
                             val tid = taskEngine?.queueCommand(cmd, source = "AGENT") ?: UUID.randomUUID().toString().take(8)
                             updateTaskState()
                             summaries.add("Queued background task [tsk #$tid]: $cmd")
                         }
                         "complete" -> {
-                            val s = params["summary"] ?: innerBody
+                            val s = params["summary"] ?: params.values.firstOrNull() ?: ""
                             if (s.isNotBlank()) {
                                 summaries.add(s)
                             }
@@ -2201,7 +3517,9 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         }
         addSystemLog("Operational Personas: ${current.joinToString(", ")}")
         viewModelScope.launch(Dispatchers.IO) {
-            val systemPrompt = buildSystemPrompt(context)
+            val dynamicPersona = getEffectivePersonaPrompt(context)
+            val isLocal = _uiState.value.activeModelType == ModelType.GGUF || _uiState.value.config.preferredModelType == ModelType.GGUF
+            val systemPrompt = buildSystemPrompt(context, forLocalModel = isLocal, dynamicPersonaPrompt = dynamicPersona)
             ggufClient?.warmupPersonaKVCache(systemPrompt)
         }
     }
@@ -2219,7 +3537,9 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         }
         addSystemLog("Operational Personas: ${safeSet.joinToString(", ")}")
         viewModelScope.launch(Dispatchers.IO) {
-            val systemPrompt = buildSystemPrompt(context)
+            val dynamicPersona = getEffectivePersonaPrompt(context)
+            val isLocal = _uiState.value.activeModelType == ModelType.GGUF || _uiState.value.config.preferredModelType == ModelType.GGUF
+            val systemPrompt = buildSystemPrompt(context, forLocalModel = isLocal, dynamicPersonaPrompt = dynamicPersona)
             ggufClient?.warmupPersonaKVCache(systemPrompt)
         }
     }
@@ -2366,10 +3686,19 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 .filter { !it.text.contains("Execution Complete") && !it.text.contains("Generation Chunk") }
             val restoredLogs = messages.map { msg ->
                 val parsed = parseThoughtAndContent(msg.text)
-                val logText = if (msg.sender == "AGENT") {
+                var logText = if (msg.sender == "AGENT") {
                     if (parsed.content.isNotBlank()) parsed.content else if (parsed.thought.isNotBlank()) "" else msg.text
                 } else {
                     msg.text
+                }
+                var restoredImageBytes: ByteArray? = null
+                if (logText.contains("<!--IMAGE_PATH:")) {
+                    val path = logText.substringAfter("<!--IMAGE_PATH:").substringBefore("-->").trim()
+                    logText = logText.substringAfter("-->\n").ifBlank { logText.substringAfter("-->") }
+                    try {
+                        val f = File(path)
+                        if (f.exists()) restoredImageBytes = f.readBytes()
+                    } catch (_: Exception) {}
                 }
                 LogEntry(
                     id = msg.id,
@@ -2378,7 +3707,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     isError = msg.isError,
                     timestamp = msg.timestamp,
                     thinkingText = parsed.thought,
-                    isThinking = false
+                    isThinking = false,
+                    imageBytes = restoredImageBytes
                 )
             }
             currentSessionId.value = session.id
@@ -2466,7 +3796,23 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         } catch (_: Exception) {}
     }
 
-    fun stopAgent() { currentJob?.cancel(); currentJob = null; _uiState.update { it.copy(isProcessing = false) } }
+    fun stopAgent() { 
+        currentJob?.cancel()
+        currentJob = null
+        try {
+            LlamaNativeEngine.abort()
+            LlamaNativeEngine.stop_generation()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error stopping native LLM: ${t.message}")
+        }
+        try {
+            DynamicMediaBroker.abort()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error stopping DynamicMediaBroker: ${t.message}")
+        }
+        cascadeInterceptor?.stopAndFlush()
+        _uiState.update { it.copy(isProcessing = false) } 
+    }
 
     fun addSystemLog(text: String) { Log.i(TAG, "SystemLog: $text") }
     
@@ -2481,6 +3827,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
     override fun onCleared() { 
         super.onCleared()
         taskEngine?.stop()
+        cascadeInterceptor?.release()
+        cascadeInterceptor = null
         closeAllModels() 
     }
 }

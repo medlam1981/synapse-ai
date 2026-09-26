@@ -27,6 +27,11 @@ object NeuralPrimingManager {
 
     fun primeNeuralCore(context: Context, forceReload: Boolean = false) {
         if (isPriming) return
+        // If UI / AgentViewModel is already active, it owns model lifecycle and UI updates
+        if (AgentViewModel.instance != null && !forceReload) {
+            Log.d(TAG, "AgentViewModel is active; skipping background Neural Priming to prevent parallel server conflict.")
+            return
+        }
         isPriming = true
 
         scope.launch {
@@ -65,12 +70,13 @@ object NeuralPrimingManager {
                     serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0"
                     serverPort = prefs.getInt("server_port", 8088)
                     contextLength = prefs.getInt("context_length", 4096)
-                    threadCount = prefs.getInt("thread_count", 4)
-                    maxTokens = -1
-                    temperature = prefs.getFloat("temperature", 0.5f).let { if (it == 0.7f) 0.5f else it }
+                    threadCount = 4
+                    maxTokens = 2048
+                    temperature = 0.4f
                     draftModelPath = prefs.getString("draft_model_path", null)?.ifBlank { null }
                     useMmap = prefs.getBoolean("use_mmap", true)
-                    draftUseMmap = prefs.getBoolean("draft_use_mmap", true)
+                    draftUseMmap = prefs.getBoolean("draft_use_mmap", false)
+
                 }
 
                 client.loadModel(
@@ -85,10 +91,8 @@ object NeuralPrimingManager {
                         }
                         scope.launch {
                             try {
-                                // Compile active unified persona system prompt prefix
-                                val primingPrefix = PersonaManager.UNIFIED_CORE_PROMPT.trim()
-                                
-                                val warmed = client.warmupPersonaKVCache(primingPrefix)
+                                val distilledPrompt = ChatTemplateEngine.ATLAS_SYSTEM_DIRECTIVE
+                                val warmed = client.warmupPersonaKVCache(distilledPrompt)
                                 Log.d(TAG, "✅ Neural Core Primed & Persona KV Cache Active (success: $warmed)")
                             } catch (e: Exception) {
                                 Log.e(TAG, "KV cache priming error: ${e.message}")

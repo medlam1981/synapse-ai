@@ -31,11 +31,12 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="MEDLAM AI"
+        android:label="ATLAS-AI AGENT"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:largeHeap="true"
+        android:extractNativeLibs="false"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:requestLegacyExternalStorage="true">
 

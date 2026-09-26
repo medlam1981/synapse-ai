@@ -46,7 +46,7 @@ object EpistemicMemoryManager {
     )
 
     data class AgentMind(
-        val name: String = "MEDLAM-AI AGENT",
+        val name: String = "ATLAS-AI AGENT",
         val role: String = "Autonomous On-Device Neural Core & System Controller",
         val runtime: String = "Android ARM64 native JNI / llama.cpp + Gemini Cloud",
         val workspaceRoot: String = "/sdcard/Medlam-Ai/",
@@ -149,7 +149,7 @@ object EpistemicMemoryManager {
             for (i in 0 until factsArr.length()) facts.add(factsArr.getString(i))
 
             val mind = AgentMind(
-                name = idObj.optString("name", "MEDLAM-AI AGENT"),
+                name = idObj.optString("name", "ATLAS-AI AGENT"),
                 role = idObj.optString("role", "Autonomous On-Device Neural Core & System Controller"),
                 runtime = idObj.optString("runtime", "Android ARM64 native JNI / llama.cpp + Gemini Cloud"),
                 workspaceRoot = idObj.optString("workspace_root", "/sdcard/Medlam-Ai/"),
@@ -234,7 +234,7 @@ object EpistemicMemoryManager {
         val mind = loadMind(context)
         val sb = StringBuilder()
 
-        sb.append("## MEDLAM-AI On-Device Core\n")
+        sb.append("## ATLAS-AI AGENT On-Device Core\n")
         sb.append("- Environment: Android ARM64 native JNI / llama.cpp.\n")
         sb.append("- Capabilities: Headless CLI, root shell (`run_shell`), web search (`web_search`), background task engine, file I/O.\n")
         sb.append("- Languages: ${mind.preferredLanguages.joinToString(", ")}. Direct tone.\n")

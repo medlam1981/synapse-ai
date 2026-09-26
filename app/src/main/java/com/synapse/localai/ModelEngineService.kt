@@ -4,10 +4,12 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -29,10 +31,37 @@ class ModelEngineService : Service() {
     }
 
     private var serverThread: Thread? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
+        acquireWakeLock()
         startEngineForeground()
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "MedlamAI::EngineWakeLock"
+            )
+            wakeLock?.acquire()
+            Log.d(TAG, "WakeLock acquired: CPU will stay awake for the Neural Engine.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release WakeLock: ${e.message}")
+        }
     }
 
     private fun startEngineForeground() {
@@ -52,7 +81,7 @@ class ModelEngineService : Service() {
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MEDLAM AI Engine")
-            .setContentText("Neural Core active on localhost:8088")
+            .setContentText("Neural Core is active in background")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -96,6 +125,11 @@ class ModelEngineService : Service() {
             }
         }
         return START_STICKY
+    }
+    
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "App swiped away, but Engine Service remains active.")
     }
 
     private fun launchServerProcess(args: Array<String>) {
@@ -146,6 +180,7 @@ class ModelEngineService : Service() {
 
     override fun onDestroy() {
         stopLlamaServer()
+        releaseWakeLock()
         super.onDestroy()
     }
 }

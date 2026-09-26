@@ -18,19 +18,26 @@ using TokenCallback = std::function<bool(const std::string& token_piece)>;
 using CompletionCallback = std::function<void(int tokens_generated, double tokens_per_second)>;
 using ErrorCallback = std::function<void(const std::string& error_message)>;
 
+// Pins calling thread to Snapdragon Kryo Gold BIG cores (Cores 4, 5, 6, 7) via pthread_setaffinity_np
+void pin_to_big_cores();
+
 struct EngineConfig {
     std::string model_path;
     std::string draft_model_path;
     int thread_count = 4;
     int gpu_layers = 0;
-    int context_size = 4096;
-    int batch_size = 256;
-    int ubatch_size = 128;
-    int speculative_k = 4;      // Lookahead draft sequence length (K=4 for 3x-4x speedup)
-    float temperature = 0.7f;
-    bool use_mmap = true;
-    bool draft_use_mmap = true;
+    int context_size = 4096;   // Standard 4096 context window
+    int batch_size = 512;       // Logical batch size
+    int ubatch_size = 256;      // Physical micro-batch (chunked prefill)
+    int speculative_k = 3;      // Strict maximum of 2 or 3 for speculative draft tokens
+    float temperature = 0.4f;
+    bool use_mmap = true;       // Base Model strictly uses mmap to avoid OOM crashes
+    bool use_mlock = false;     // Opt-in physical RAM pinning only (never mlock by default)
+    bool draft_use_mmap = true; // Draft Model strictly uses mmap (Zero Forced RAM footprint)
+    bool draft_use_mlock = false;// Never mlock draft by default
     bool enable_performance_affinity = true;
+    float rope_freq_scale = 0.25f; // RoPE scaling for 32K context horizon
+    int yarn_orig_ctx = 8192;      // YaRN base context length
 };
 
 class MedlamInferenceEngine {
@@ -73,13 +80,18 @@ public:
     bool is_initialized() const;
     bool is_generating() const;
     std::string get_model_info() const;
+    bool setup_thread_affinity();
+    void pin_to_big_cores();
+    void clear_kv_cache();
 
 private:
     // Core internal methods
     bool load_target_model(const EngineConfig& config);
     bool load_draft_model(const EngineConfig& config);
-    void setup_thread_affinity();
     void check_thermal_status();
+    static int read_soc_temperature();
+
+    bool is_eog_or_special_stop(const struct llama_vocab* vocab, llama_token token, const std::string& piece);
 
     // Speculative decoding execution loop
     int run_speculative_decoding(
@@ -120,6 +132,8 @@ private:
     std::atomic<bool> m_abort_requested{false};
 
     std::vector<int> m_perf_cores;
+    std::vector<llama_token> m_prev_tokens;
+    int m_current_threads = 4;
 };
 
 } // namespace medlam

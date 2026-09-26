@@ -12,32 +12,13 @@ import kotlinx.coroutines.withContext
  * Interface matching the C++ native JNI callback contract.
  */
 interface NativeInferenceCallback {
-    /**
-     * Called for each generated token piece.
-     * @return true to continue generation, false to cancel.
-     */
     fun onToken(piece: String): Boolean
-
-    /**
-     * Called when generation finishes.
-     */
     fun onComplete(tokensGenerated: Int, tokensPerSecond: Double)
-
-    /**
-     * Called if a native error occurs during generation.
-     */
     fun onError(message: String)
 }
 
 /**
- * High-Performance Native LLM Inference Engine Bridge using llama.cpp.
- *
- * Implements:
- * 1. Zero-copy memory-mapped GGUF loading (mmap).
- * 2. Speculative Decoding Pipeline (Dual-Model: Target 7B/13B + Draft ~0.5B for 3x-4x speedup).
- * 3. Performance core affinity binding (ARM big.LITTLE) and thermal throttling protection.
- * 4. Ultra-quantization support (Q2_K, IQ2_XXS, Q3_K_M).
- * 5. Exception-safe JNI streaming interface.
+ * High-Performance Native LLM Inference Engine Bridge using llama.cpp & Vulkan.
  */
 object LlamaNativeEngine {
 
@@ -51,15 +32,40 @@ object LlamaNativeEngine {
     fun load(): Boolean {
         if (isLoaded) return true
         return try {
-            System.loadLibrary("libc++")
+            // 1. Core C++ runtime
+            try { System.loadLibrary("c++_shared") } catch (e: Throwable) {
+                Log.w(TAG, "c++_shared load skipped: ${e.message}")
+            }
+            
+            // 2. OpenMP (if present)
+            try { System.loadLibrary("omp") } catch (e: Throwable) {
+                Log.w(TAG, "omp load skipped: ${e.message}")
+            }
+
+            // 3. GGML Core Architecture
             System.loadLibrary("ggml-base")
-            System.loadLibrary("omp")
-            System.loadLibrary("ggml-cpu")
             System.loadLibrary("ggml")
+
+            // 4. Hardware Accelerators: Vulkan (GPU) then CPU fallback
+            try { 
+                System.loadLibrary("ggml-vulkan") 
+                Log.i(TAG, "Vulkan acceleration backend loaded successfully")
+            } catch (e: Throwable) {
+                Log.w(TAG, "Vulkan backend not available, falling back to CPU: ${e.message}")
+            }
+            System.loadLibrary("ggml-cpu")
+
+            // 5. High-Level Engine & Multi-Modal Tensors
+            try { System.loadLibrary("mtmd") } catch (_: Throwable) {}
             System.loadLibrary("llama")
-            System.loadLibrary("medlam_engine")
+            try { System.loadLibrary("stable-diffusion") } catch (_: Throwable) {}
+            try { System.loadLibrary("sd-cli") } catch (_: Throwable) {}
+
+            // 6. JNI Bridge (FIXED: loads synapse_bridge instead of medlam_engine)
+            System.loadLibrary("synapse_bridge")
+
             isLoaded = true
-            Log.i(TAG, "Native MedlamEngine libraries loaded successfully")
+            Log.i(TAG, "All Synapse Native Libraries loaded successfully!")
             true
         } catch (e: UnsatisfiedLinkError) {
             Log.e(TAG, "Failed to load native libraries: ${e.message}", e)
@@ -69,50 +75,6 @@ object LlamaNativeEngine {
 
     // =========================================================================
     // Core Specification JNI Functions
-    // =========================================================================
-
-    /**
-     * Initializes the target model and optional draft model with zero-copy mmap.
-     *
-     * @param model_path Absolute path to the Target GGUF model (e.g. 7B/13B Q2_K/Q3_K/Q4_K).
-     * @param draft_model_path Optional path to the Draft GGUF model (~0.5B parameters) for speculative decoding. Pass null/empty to disable.
-     * @param thread_count Number of compute threads (defaults to physical performance core count).
-     * @return true if initialized successfully, false otherwise.
-     */
-    @JvmStatic
-    external fun init_engine(
-        model_path: String,
-        draft_model_path: String?,
-        thread_count: Int
-    ): Boolean
-
-    /**
-     * Executes streaming inference using the speculative decoding pipeline.
-     *
-     * @param prompt The tokenized prompt text.
-     * @param callback_handler Callback receiver for streaming tokens and completion metrics.
-     * @return Total tokens generated, or -1 on error.
-     */
-    @JvmStatic
-    external fun generate_stream(
-        prompt: String,
-        callback_handler: NativeInferenceCallback
-    ): Int
-
-    /**
-     * Signals the active native generation loop to immediately stop.
-     */
-    @JvmStatic
-    external fun stop_generation()
-
-    /**
-     * Releases all native memory, models, contexts, and samplers.
-     */
-    @JvmStatic
-    external fun free_engine()
-
-    // =========================================================================
-    // Extended CamelCase Aliases & Diagnostics
     // =========================================================================
 
     @JvmStatic
@@ -125,17 +87,56 @@ object LlamaNativeEngine {
         use_mmap: Boolean = true
     ): Boolean
 
+    // Legacy overload mapping to unified initEngine
     @JvmStatic
-    external fun generateStream(
+    fun init_engine(
+        model_path: String,
+        draft_model_path: String?,
+        thread_count: Int
+    ): Boolean {
+        // Automatically default to Vulkan GPU layers if hardware is present
+        return initEngine(
+            model_path = model_path,
+            draft_model_path = draft_model_path,
+            thread_count = thread_count,
+            gpu_layers = 33, // Offload layers to Vulkan GPU
+            context_size = 4096,
+            use_mmap = true
+        )
+    }
+
+    @JvmStatic
+    external fun generate_stream(
         prompt: String,
         callback_handler: NativeInferenceCallback
     ): Int
 
     @JvmStatic
-    external fun stopGeneration()
+    external fun stop_generation()
 
     @JvmStatic
-    external fun freeEngine()
+    external fun abort()
+
+    @JvmStatic
+    external fun isAborted(): Boolean
+
+    @JvmStatic
+    external fun resetAbort()
+
+    @JvmStatic
+    external fun free_engine()
+
+    @JvmStatic
+    external fun pinToBigCores(): Boolean
+
+    @JvmStatic
+    external fun bindToPerformanceCores(): Boolean
+
+    @JvmStatic
+    external fun bindAllThreadsToPerformanceCores(): Boolean
+
+    @JvmStatic
+    external fun clearKvCache()
 
     @JvmStatic
     external fun getModelInfo(): String
@@ -143,22 +144,76 @@ object LlamaNativeEngine {
     @JvmStatic
     external fun isInitialized(): Boolean
 
+    @JvmStatic
+    @Synchronized
+    fun unloadModel() {
+        Log.i(TAG, "Unloading native LLM engine to flush RAM/VRAM...")
+        try {
+            abort()
+            stop_generation()
+            free_engine()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Exception in free_engine: ${t.message}", t)
+        }
+        try {
+            GGUFModelClient.stopGlobalServer()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Exception in stopGlobalServer: ${t.message}", t)
+        }
+        try {
+            PageCacheAdvisor.adviseModelIdle()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Exception in adviseModelIdle: ${t.message}", t)
+        }
+        System.gc()
+        System.runFinalization()
+        Log.i(TAG, "Native LLM completely flushed from memory.")
+    }
+
     // =========================================================================
-    // Reactive Kotlin Flow API for Jetpack Compose Integration
+    // Reactive Kotlin Flow with Hardware Pinning & Robust Token Stripping
     // =========================================================================
 
-    /**
-     * High-level reactive Flow that emits generated token pieces in real time,
-     * handling background thread dispatching, cancellation, and metrics logging.
-     */
+    private val STOP_SEQUENCES = setOf(
+        "<end_of_turn>",
+        "<start_of_turn>",
+        "<eos>",
+        "<|end_of_turn|>",
+        "<|im_end|>",
+        "end_of_turn"
+    )
+
     fun stream(
         prompt: String,
         onMetrics: ((tokens: Int, tokensPerSec: Double) -> Unit)? = null
     ): Flow<String> = callbackFlow {
+        // 1. Force hardware binding strictly to Big Cores (Cores 4-7) before generation starts
+        try {
+            pinToBigCores()
+            bindToPerformanceCores()
+        } catch (e: Throwable) {
+            Log.w(TAG, "CPU Core binding warning: ${e.message}")
+        }
+
+        resetAbort()
+
         val callback = object : NativeInferenceCallback {
             override fun onToken(piece: String): Boolean {
-                val sent = trySend(piece).isSuccess
-                return sent
+                // Check for stop tokens anywhere in the piece
+                for (stop in STOP_SEQUENCES) {
+                    if (piece.contains(stop)) {
+                        // Strip out the stop token to keep output clean
+                        val cleanPiece = piece.replace(stop, "").replace("<", "").replace(">", "").replace("/", "")
+                        if (cleanPiece.isNotEmpty()) {
+                            trySend(cleanPiece)
+                        }
+                        // Instantly abort native compute loop
+                        abort()
+                        stop_generation()
+                        return false
+                    }
+                }
+                return trySend(piece).isSuccess
             }
 
             override fun onComplete(tokensGenerated: Int, tokensPerSecond: Double) {
@@ -173,13 +228,15 @@ object LlamaNativeEngine {
             }
         }
 
-        // Execute on Dispatchers.IO background thread
         withContext(Dispatchers.IO) {
             generate_stream(prompt, callback)
         }
 
         awaitClose {
+            abort()
             stop_generation()
         }
     }.flowOn(Dispatchers.IO)
 }
+
+val llamaNativeEngine = LlamaNativeEngine

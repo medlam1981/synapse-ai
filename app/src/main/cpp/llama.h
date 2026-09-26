@@ -113,7 +113,12 @@ int32_t                    llama_tokenize(const struct llama_vocab * vocab, cons
 int32_t                    llama_token_to_piece(const struct llama_vocab * vocab, llama_token token, char * buf, int32_t length, int32_t lstrip, bool special);
 bool                       llama_vocab_is_eog(const struct llama_vocab * vocab, llama_token token);
 bool                       llama_token_is_eog(const struct llama_model * model, llama_token token);
+llama_token                llama_vocab_eos(const struct llama_vocab * vocab);
+llama_token                llama_vocab_eot(const struct llama_vocab * vocab);
+bool                       llama_vocab_is_control(const struct llama_vocab * vocab, llama_token token);
 int32_t                    llama_vocab_n_tokens(const struct llama_vocab * vocab);
+void                       llama_set_n_threads(struct llama_context * ctx, int32_t n_threads, int32_t n_threads_batch);
+int32_t                    llama_n_threads(struct llama_context * ctx);
 
 // Batch & Decoding
 struct llama_batch llama_batch_init(int32_t n_tokens, int32_t embd, int32_t n_seq_max);

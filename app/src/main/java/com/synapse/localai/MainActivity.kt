@@ -20,9 +20,17 @@ import androidx.compose.foundation.*
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.synapse.localai.ui.SyntaxHighlighter
 import com.synapse.localai.ui.tactileGlassGlow
 import com.synapse.localai.ui.tactileCardElevation
+import com.synapse.localai.latex.MathRenderer
+import com.synapse.localai.latex.CliMathFormattedText
+import com.synapse.localai.latex.CliBlockMathFormula
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -42,6 +50,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -55,10 +65,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.synapse.localai.ui.theme.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -88,6 +100,28 @@ data class SystemStats(
 
 private var lastCpuTotal: Long = 0
 private var lastCpuIdle: Long = 0
+private var cachedCpuUsage: String = "0%"
+
+private fun readCpuStatLine(): String? {
+    try {
+        val statFile = File("/proc/stat")
+        if (statFile.canRead()) {
+            val line = statFile.bufferedReader().use { it.readLine() }
+            if (line != null && line.startsWith("cpu")) {
+                return line
+            }
+        }
+    } catch (_: Exception) {}
+
+    try {
+        val line = RootShellManager.execSingleLine("cat /proc/stat")
+        if (line != null && line.startsWith("cpu")) {
+            return line
+        }
+    } catch (_: Exception) {}
+
+    return null
+}
 
 fun getSystemStats(context: Context): SystemStats {
     val bm = context.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
@@ -110,36 +144,34 @@ fun getSystemStats(context: Context): SystemStats {
 
     val maxTemp = DeviceProfile.readDeviceTemperature()
 
-    var cpuUsage = "0%"
+    var cpuUsage = cachedCpuUsage
     try {
-        val statFile = File("/proc/stat")
-        if (statFile.exists()) {
-            val line = statFile.bufferedReader().use { it.readLine() }
-            if (line != null && line.startsWith("cpu")) {
-                val parts = line.split(Regex("\\s+")).filter { it.isNotBlank() }
-                if (parts.size >= 5) {
-                    val user = parts[1].toLong()
-                    val nice = parts[2].toLong()
-                    val system = parts[3].toLong()
-                    val idle = parts[4].toLong()
-                    val iowait = parts.getOrNull(5)?.toLong() ?: 0L
-                    val irq = parts.getOrNull(6)?.toLong() ?: 0L
-                    val softirq = parts.getOrNull(7)?.toLong() ?: 0L
-                    
-                    val currentTotal = user + nice + system + idle + iowait + irq + softirq
-                    val currentIdle = idle + iowait
-                    
-                    if (lastCpuTotal > 0) {
-                        val deltaTotal = currentTotal - lastCpuTotal
-                        val deltaIdle = currentIdle - lastCpuIdle
-                        if (deltaTotal > 0) {
-                            val pct = (100 * (deltaTotal - deltaIdle) / deltaTotal).toInt().coerceIn(0, 100)
-                            cpuUsage = "$pct%"
-                        }
+        val line = readCpuStatLine()
+        if (line != null && line.startsWith("cpu")) {
+            val parts = line.split(Regex("\\s+")).filter { it.isNotBlank() }
+            if (parts.size >= 5) {
+                val user = parts[1].toLong()
+                val nice = parts[2].toLong()
+                val system = parts[3].toLong()
+                val idle = parts[4].toLong()
+                val iowait = parts.getOrNull(5)?.toLong() ?: 0L
+                val irq = parts.getOrNull(6)?.toLong() ?: 0L
+                val softirq = parts.getOrNull(7)?.toLong() ?: 0L
+                
+                val currentTotal = user + nice + system + idle + iowait + irq + softirq
+                val currentIdle = idle + iowait
+                
+                if (lastCpuTotal > 0) {
+                    val deltaTotal = currentTotal - lastCpuTotal
+                    val deltaIdle = currentIdle - lastCpuIdle
+                    if (deltaTotal > 0) {
+                        val pct = (100 * (deltaTotal - deltaIdle) / deltaTotal).toInt().coerceIn(0, 100)
+                        cpuUsage = "$pct%"
+                        cachedCpuUsage = cpuUsage
                     }
-                    lastCpuTotal = currentTotal
-                    lastCpuIdle = currentIdle
                 }
+                lastCpuTotal = currentTotal
+                lastCpuIdle = currentIdle
             }
         }
     } catch (_: Exception) {}
@@ -157,10 +189,6 @@ fun getSystemStats(context: Context): SystemStats {
     )
 }
 
-/**
- * MODULE 1: First Strong Directional Character Detection
- * Dynamically determines if text flow should be RTL based on the first strong letter.
- */
 fun isRtlText(text: String): Boolean {
     val arabicRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]")
     val firstChar = text.trim().firstOrNull { it.isLetter() } ?: return false
@@ -169,33 +197,24 @@ fun isRtlText(text: String): Boolean {
 
 fun isArabic(text: String): Boolean = isRtlText(text)
 
-/**
- * MODULE 2.2: BiDi Isolation for Mixed Content (English/Latin inside Arabic)
- * Wraps embedded Latin technical terms and parenthesized text in Unicode Bidi isolation
- * markers (\u2068...\u2069) and ensures colons anchor correctly to Arabic phrases.
- */
 fun applyBidiIsolation(text: String): String {
     if (text.isBlank()) return text
 
-    // 1. Anchor colons immediately following Arabic phrases (\u200F RLM right after colon)
     val arabicColonRegex = Regex("([\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF])(:|：)(\\s*)")
     var processed = arabicColonRegex.replace(text) { m ->
         "${m.groupValues[1]}${m.groupValues[2]}\u200F${m.groupValues[3]}"
     }
 
-    // 2. Wrap parenthesized Latin/ASCII terms: e.g. (Shell & Terminal), (File I/O)
     val parenLatinRegex = Regex("(\\([A-Za-z0-9_\\-&/.,\\s+]+\\))")
     processed = parenLatinRegex.replace(processed) { m ->
         "\u2068${m.value}\u2069"
     }
 
-    // 3. Wrap bracketed Latin terms: e.g. [Shell & Terminal]
     val bracketLatinRegex = Regex("(\\[[A-Za-z0-9_\\-&/.,\\s+]+\\])")
     processed = bracketLatinRegex.replace(processed) { m ->
         "\u2068${m.value}\u2069"
     }
 
-    // 4. Wrap standalone Latin words/phrases not already inside an isolate (\u2068...\u2069)
     val sb = StringBuilder()
     var inIsolate = false
     var i = 0
@@ -240,21 +259,25 @@ class MainActivity : ComponentActivity() {
 
         setupGlobalCrashHandler()
 
-        // Initialize Native MedlamEngine (mmap, speculative decoding, ARM NEON acceleration)
         try {
-            LlamaNativeEngine.load()
+            LlamaServerJNI.load()
         } catch (t: Throwable) {
-            Log.e("MainActivity", "LlamaNativeEngine load error: ${t.message}")
+            Log.e("MainActivity", "LlamaServerJNI load error: ${t.message}")
         }
 
-        // Prevent activity destruction/restart on back press: move task to back cleanly
+        RootShellManager.initGlobalShell()
+        try {
+            MathRenderer.init(this)
+        } catch (t: Throwable) {
+            Log.w("MainActivity", "MathRenderer init notice: ${t.message}")
+        }
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 moveTaskToBack(true)
             }
         })
 
-        // Start Foreground Service in the app process to prevent OS background eviction
         try {
             val serviceIntent = Intent(this, ModelEngineService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -265,8 +288,6 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             Log.w("MainActivity", "ModelEngineService launch note: ${e.message}")
         }
-
-        // Early App Process Permissions Initialization
 
         lifecycleScope.launch {
             try {
@@ -281,8 +302,8 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            SynapseAITheme {
-                val bgColor = MaterialTheme.colorScheme.surface
+            AtlasAiTheme {
+                val bgColor = MaterialTheme.colorScheme.background
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -349,42 +370,17 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun checkAndRequestRootAccess() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
-            val pb = ProcessBuilder("su", "-c", "id")
-            pb.redirectErrorStream(true)
-            val process = pb.start()
-            try { process.outputStream.close() } catch (_: Exception) {}
-            val outputSb = StringBuilder()
-            val reader = Thread {
-                try {
-                    outputSb.append(process.inputStream.bufferedReader().use { it.readText() })
-                } catch (_: Exception) {}
-            }
-            reader.isDaemon = true
-            reader.start()
-
-            val finished = process.waitFor(3000, java.util.concurrent.TimeUnit.MILLISECONDS)
-            if (!finished) {
-                try { process.destroyForcibly() } catch (_: Exception) {}
-                try { reader.join(300) } catch (_: Exception) {}
-                Log.w("MainActivity", "Root check timed out after 3s")
-                viewModel.setRootAvailable(false)
-                return@withContext
-            }
-
-            try { reader.join(500) } catch (_: Exception) {}
-            val exitCode = try { process.exitValue() } catch (_: Exception) { -1 }
-            val output = outputSb.toString()
-            val isRoot = exitCode == 0 && output.contains("uid=0")
+            val isRoot = RootShellManager.isRootAvailable()
             viewModel.setRootAvailable(isRoot)
             if (isRoot) {
-                Log.i("MainActivity", "Superuser privileges verified (root active): $output")
+                Log.i("MainActivity", "Superuser privileges verified via persistent libsu shell (root active)")
                 ZramOptimizer.optimizeMemoryAndZram(this@MainActivity)
                 ZramOptimizer.disableOomKiller()
             } else {
                 Log.i("MainActivity", "Standard user execution (non-root)")
             }
         } catch (e: Exception) {
-            Log.i("MainActivity", "Superuser elevation not available: ${e.message}")
+            Log.i("MainActivity", "Superuser elevation check note: ${e.message}")
             viewModel.setRootAvailable(false)
         }
     }
@@ -411,16 +407,32 @@ private data class SlashCommandItem(
 fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val isDark = isSystemInDarkTheme()
     val uiState by viewModel.uiState.collectAsState()
+    val systemStats by viewModel.systemStats.collectAsState()
     val listState = rememberLazyListState()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var isRecording by remember { mutableStateOf(false) }
     var textInput by remember { mutableStateOf("") }
+    var viewingImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     val focusManager = LocalFocusManager.current
 
     val slashCommands = remember(context) {
         listOf(
+            SlashCommandItem(
+                command = "/syscheck",
+                name = "System Stability Check",
+                description = "Execute immediate kernel, CPU, and memory diagnostic via shell",
+                action = { 
+                    viewModel.sendCommand("$ uptime && top -n 1 -b | head -n 15 && free -m && df -h", null, context)
+                }
+            ),
+            SlashCommandItem(
+                command = "/image",
+                name = "Synthesize Visual",
+                description = "Generate native AI images in-memory via Google Imagen 3",
+                action = { textInput = "/image " }
+            ),
             SlashCommandItem(
                 command = "/rollback",
                 name = "Instant Revert",
@@ -493,7 +505,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
     var userScrolledAway by remember { mutableStateOf(false) }
 
-    // User-Aware Scroll State: release auto-scroll lock on manual scroll up, re-engage on scroll to bottom
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) {
             if (!isAtBottom) {
@@ -506,7 +517,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         }
     }
 
-    // New prompt sent -> re-engage lock and scroll smoothly to newest message bottom
     LaunchedEffect(uiState.logs.size) {
         userScrolledAway = false
         if (uiState.logs.isNotEmpty()) {
@@ -514,8 +524,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         }
     }
 
-    // Kinetic Stream-Tracking: collect the lightweight scrollSignal SharedFlow instead of
-    // re-keying on streamVersion (which triggered a full LaunchedEffect relaunch per token).
     LaunchedEffect(viewModel.scrollSignal) {
         viewModel.scrollSignal.collect {
             if (!userScrolledAway && !listState.isScrollInProgress && uiState.logs.isNotEmpty()) {
@@ -544,19 +552,17 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
 
-            // Consolidated Master Header Frame (Single Structured Container)
             ConsolidatedMasterHeader(
                 context = context,
                 uiState = uiState,
+                stats = systemStats,
                 isDark = isDark,
                 onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
                 onOpenSettings = { showSettings = true }
             )
 
-            // Fixed Central Workspace Chassis (Outer Frame Geometry)
-            // Dedicated structural frame wrapping the entire dynamic interaction zone
-            val chassisBg = if (isDark) Color(0xFF0B0F17) else Color(0xFFFFFFFF)
-            val chassisBorder = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+            val chassisBg = MaterialTheme.colorScheme.surface
+            val chassisBorder = MaterialTheme.colorScheme.outline
 
             Surface(
                 modifier = Modifier
@@ -575,12 +581,9 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 ) {
                     if (uiState.logs.isEmpty() && !uiState.isProcessing) {
                         CliWelcomeScreen(
-                            onSelectPrompt = { p ->
-                                viewModel.sendCommand(p, context = context)
-                            }
+                            uiState = uiState
                         )
                     } else {
-                        // Isolated Internal Scroll Engine (Strict Boundary Clipping)
                         LazyColumn(
                             state = listState,
                             modifier = Modifier
@@ -590,11 +593,14 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             items(uiState.logs, key = { it.id }) { log ->
-                                CliLogMessageView(log = log, isDark = isDark)
+                                CliLogMessageView(
+                                    log = log,
+                                    isDark = isDark,
+                                    onImageClick = { viewingImageBytes = it }
+                                )
                             }
                         }
 
-                        // Floating Jump to Latest Button inside the Chassis Viewport
                         if (userScrolledAway && uiState.logs.isNotEmpty()) {
                             Surface(
                                 onClick = {
@@ -630,7 +636,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 }
             }
 
-            // Bottom Dock: Docked Real-Time Activity Monitor + Floating Message Input Capsule
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -642,18 +647,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         .fillMaxWidth()
                         .navigationBarsPadding()
                 ) {
-                    // 2. Containerless Dynamic Activity Indicator (Pure Typographic Indicator)
-                    val infiniteTransition = rememberInfiniteTransition(label = "docked_activity_pulse")
-                    val pulseAlpha by infiniteTransition.animateFloat(
-                        initialValue = 0.35f,
-                        targetValue = 1.0f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(750, easing = LinearEasing),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "docked_pulse_alpha"
-                    )
-
                     val isBusy = uiState.isProcessing
                     val statusText = if (isBusy) {
                         uiState.activeStatusDetail.ifBlank { "Thinking & Planning..." }
@@ -664,7 +657,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     val dotColor = if (isBusy) primaryAccent else MaterialTheme.colorScheme.primary
                     val textColor = if (isBusy) primaryAccent else textDim
 
-                    // Raw Inline Status: Completely unboxed, zero card, zero elevation, plain floating text
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -693,7 +685,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         )
                     }
 
-                    // MODULE 2: Slash Command Autocomplete Drop-Up Card (/ Trigger)
                     if (textInput.startsWith("/")) {
                         val query = textInput.lowercase().trim()
                         val matchingCommands = slashCommands.filter { 
@@ -706,8 +697,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     .padding(start = 5.dp, end = 5.dp, bottom = 8.dp)
                                     .heightIn(max = 200.dp),
                                 shape = RoundedCornerShape(14.dp),
-                                color = Color(0xFF111827),
-                                border = BorderStroke(1.dp, Color(0xFF00D2FF).copy(alpha = 0.3f)),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                                 shadowElevation = 8.dp
                             ) {
                                 LazyColumn(
@@ -734,21 +725,21 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                                 ) {
                                                     Text(
                                                         text = item.command,
-                                                        color = Color(0xFF00D2FF),
+                                                        color = MaterialTheme.colorScheme.primary,
                                                         fontSize = 12.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         fontFamily = FontFamily.Monospace
                                                     )
                                                     Text(
                                                         text = "— ${item.name}",
-                                                        color = Color(0xFFE2E8F0),
+                                                        color = MaterialTheme.colorScheme.onSurface,
                                                         fontSize = 11.5.sp,
                                                         fontWeight = FontWeight.SemiBold
                                                     )
                                                 }
                                                 Text(
                                                     text = item.description,
-                                                    color = Color(0xFF94A3B8),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     fontSize = 10.sp,
                                                     fontFamily = FontFamily.Monospace,
                                                     maxLines = 1,
@@ -762,57 +753,9 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         }
                     }
 
-                    // MODULE 6: Action Quick-Chips Bar
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 5.dp, end = 5.dp, bottom = 4.dp)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // [/rollback]
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.executeRollback(context) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF161B22),
-                            border = BorderStroke(1.dp, Color(0xFF30363D))
-                        ) {
-                            Text(
-                                text = "/rollback",
-                                color = Color(0xFFF59E0B),
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-
-                        // [/preview]
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { viewModel.toggleLiveCanvas() },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (uiState.isLiveCanvasOpen) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFF161B22),
-                            border = BorderStroke(1.dp, if (uiState.isLiveCanvasOpen) Color(0xFF10B981) else Color(0xFF30363D))
-                        ) {
-                            Text(
-                                text = "/preview",
-                                color = if (uiState.isLiveCanvasOpen) Color(0xFF10B981) else Color(0xFF94A3B8),
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (uiState.isLiveCanvasOpen) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    // Unified Slim Input Capsule (Internalized Inline Actions)
                     val inputIsArabic = isArabic(textInput)
-                    val canSend = textInput.isNotBlank() || selectedFileUri != null
+                    val isInputReady = uiState.initPhase == InitializationPhase.SYSTEM_READY && !uiState.localModelLoading && !uiState.isProcessing
+                    val canSend = isInputReady && (textInput.isNotBlank() || selectedFileUri != null)
 
                     CompositionLocalProvider(
                         LocalLayoutDirection provides if (inputIsArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -833,7 +776,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Left: Expandable Text Field Area
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -843,6 +785,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     BasicTextField(
                                         value = textInput,
                                         onValueChange = { textInput = it },
+                                        enabled = isInputReady,
                                         textStyle = TextStyle(
                                             color = textBright,
                                             fontSize = 12.5.sp,
@@ -854,8 +797,22 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         modifier = Modifier.fillMaxWidth(),
                                         decorationBox = { inner ->
                                             if (textInput.isEmpty()) {
+                                                val placeholderText = when {
+                                                    uiState.initPhase == InitializationPhase.ALLOCATING_MEMORY || uiState.localModelLoading -> {
+                                                        if (inputIsArabic) "جارٍ تخصيص الذاكرة وتحميل النموذج..." else "Allocating Memory..."
+                                                    }
+                                                    uiState.initPhase == InitializationPhase.PARSING_PERSONA -> {
+                                                        if (inputIsArabic) "جارٍ تهيئة الشخصية والذاكرة المؤقتة..." else "Parsing Persona..."
+                                                    }
+                                                    uiState.isProcessing -> {
+                                                        if (inputIsArabic) "الوكيل يقوم بالتفكير والتنفيذ..." else "Agent is thinking / executing..."
+                                                    }
+                                                    else -> {
+                                                        if (inputIsArabic) "رسالة إلى وكيل ATLAS-AI..." else "Message ATLAS-AI Agent..."
+                                                    }
+                                                }
                                                 Text(
-                                                    text = if (inputIsArabic) "رسالة إلى MEDLAM..." else "Message MEDLAM...",
+                                                    text = placeholderText,
                                                     style = TextStyle(
                                                         color = textDim,
                                                         fontSize = 12.sp,
@@ -870,12 +827,10 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     )
                                 }
 
-                                // Right: Internalized Inline Action Controls (Unified 30dp footprint, shared surface, zero overflow)
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
-                                    // 1. File Attachment Action
                                     Box(
                                         modifier = Modifier
                                             .size(30.dp)
@@ -891,7 +846,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         )
                                     }
 
-                                    // 2. Microphone / Voice Input Action
                                     Box(
                                         modifier = Modifier
                                             .size(30.dp)
@@ -915,7 +869,21 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         )
                                     }
 
-                                    // 3. Minimalist Red Square Stop Glyph / Idle Send Arrow Action
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .clickable { viewModel.toggleTts() },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (uiState.isTtsEnabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
+                                            contentDescription = "Real-Time TTS Voice",
+                                            tint = if (uiState.isTtsEnabled) cyanAccent else textDim,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+
                                     Box(
                                         modifier = Modifier
                                             .size(30.dp)
@@ -934,7 +902,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         contentAlignment = Alignment.Center
                                     ) {
                                         if (uiState.isProcessing) {
-                                            // Minimalist Red Square Stop Glyph (⏹) anchored directly on shared surface
                                             Box(
                                                 modifier = Modifier
                                                     .size(11.dp)
@@ -942,7 +909,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                                     .background(Color(0xFFEF4444))
                                             )
                                         } else {
-                                            // Clean Send Arrow Icon (↑)
                                             Icon(
                                                 imageVector = Icons.Default.ArrowUpward,
                                                 contentDescription = "Send",
@@ -969,12 +935,55 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
         isOpen = uiState.isLiveCanvasOpen,
         onDismiss = { viewModel.closeLiveCanvas() }
     )
+
+    if (viewingImageBytes != null) {
+        Dialog(
+            onDismissRequest = { viewingImageBytes = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.95f))
+                    .clickable { viewingImageBytes = null },
+                contentAlignment = Alignment.Center
+            ) {
+                val fullBmp = remember(viewingImageBytes) {
+                    viewingImageBytes?.let {
+                        try {
+                            BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap()
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }
+                if (fullBmp != null) {
+                    Image(
+                        bitmap = fullBmp,
+                        contentDescription = "Full View AI Generated Image",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                    )
+                }
+                IconButton(
+                    onClick = { viewingImageBytes = null },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(20.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = Color.White
+                    )
+                }
+            }
+        }
+    }
 }
 
-/**
- * Vibrant Micro-3D Telemetry Indicator Chip.
- * Features subtle depth, specular highlight gradients, and distinct hardware theme color-coding.
- */
 @Composable
 private fun TelemetryMicroChip(
     icon: ImageVector,
@@ -1019,13 +1028,6 @@ private fun TelemetryMicroChip(
     }
 }
 
-/**
- * Model Engine Lifecycle Beacon (Neural Core Status Indicator).
- * Lifecycle State Machine:
- * - Loading / Booting (INITIALIZING / LOADING): Animated breathing green beacon (#10B981 / #22C55E) with soft outward halo.
- * - Ready / Operational (LOADED / READY): Crisp, solid static green indicator (#22C55E) without animation.
- * - Error / Fallback: Solid red/amber error indicator (#EF4444 / #F59E0B).
- */
 @Composable
 fun ModelLifecycleBeacon(
     isLoading: Boolean,
@@ -1058,7 +1060,6 @@ fun ModelLifecycleBeacon(
             modifier = modifier.size(10.dp),
             contentAlignment = Alignment.Center
         ) {
-            // Soft outward green halo (40% to 100% alpha breathing pulse)
             Box(
                 modifier = Modifier
                     .size(6.dp)
@@ -1066,7 +1067,6 @@ fun ModelLifecycleBeacon(
                     .clip(CircleShape)
                     .background(Color(0xFF22C55E).copy(alpha = (1.8f - haloScale) * 0.45f * alphaAnim))
             )
-            // Vibrant green core beacon (#10B981 / #22C55E)
             Box(
                 modifier = Modifier
                     .size(5.5.dp)
@@ -1095,36 +1095,50 @@ fun ModelLifecycleBeacon(
     }
 }
 
-/**
- * Consolidated Master Header Frame docked at the top of the viewport.
- * Single structured container docked at top of viewport with 3 organized internal rows:
- * - Top Row: Tactile micro-card drawer toggle, centered MEDLAM-AI AGENT title with status badge (IDLE / RUNNING), tactile micro-card settings gear.
- * - Middle Row: Compact inline spec chip detailing active Base Model & Companion MTP profile (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16).
- * - Bottom Row: Vibrant micro-3D hardware telemetry ribbon: CPU Usage • RAM • Thermals • Storage • Auth Route • MTP Accelerator • Task Queue.
- * Minimal internal vertical padding to retain maximum screen real estate for message stream.
- */
+@Composable
+fun AtlasAiBranding(
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 13.5.sp,
+    lineWidth: Dp? = null,
+    lineHeight: Dp = 2.5.dp,
+    spacing: Dp = 1.5.dp,
+    showAgent: Boolean = true,
+    strokeWidth: Float = 2.5f
+) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+
+    Text(
+        text = androidx.compose.ui.text.buildAnnotatedString {
+            pushStyle(androidx.compose.ui.text.SpanStyle(color = primaryColor, fontWeight = FontWeight.Black))
+            append("ATLAS-AI")
+            pop()
+            
+            if (showAgent) {
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = secondaryColor, fontWeight = FontWeight.Bold))
+                append(" AGENT")
+                pop()
+            }
+        },
+        fontSize = fontSize,
+        fontFamily = FontFamily.Monospace,
+        letterSpacing = 0.1.em,
+        modifier = modifier
+    )
+}
+
 @Composable
 fun ConsolidatedMasterHeader(
     context: Context,
     uiState: AgentUiState,
+    stats: SystemStats,
     isDark: Boolean,
     onOpenDrawer: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
-    var stats by remember { mutableStateOf(SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            val nextStats = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                getSystemStats(context)
-            }
-            stats = nextStats
-            kotlinx.coroutines.delay(2500)
-        }
-    }
 
     val headerBg = MaterialTheme.colorScheme.surfaceContainer
-    val subCardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceVariant
+    val subCardBg = MaterialTheme.colorScheme.surfaceContainerHigh
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val primaryAccent = MaterialTheme.colorScheme.primary
@@ -1132,7 +1146,6 @@ fun ConsolidatedMasterHeader(
 
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
 
-    // Solid Master Header Card docked at top of viewport along the unified 5.dp horizontal grid rail
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1148,9 +1161,6 @@ fun ConsolidatedMasterHeader(
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // -------------------------------------------------------------
-            // 1. TOP ROW: Left-Aligned [Menu Card] MEDLAM-AI AGENT [Status Badge] ──── [Settings Card] (Right)
-            // -------------------------------------------------------------
             val cyanAccent = Color(0xFF00D2FF)
             val cyanBorder = Color(0xFF00B4D8)
 
@@ -1161,12 +1171,10 @@ fun ConsolidatedMasterHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left Anchor: Tactile micro-card drawer toggle button + MEDLAM-AI AGENT title + status badge
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Sidebar Drawer Button: Tactile micro-plate container with ambient cyan back-glow
                     Box(
                         modifier = Modifier
                             .size(28.dp)
@@ -1196,16 +1204,11 @@ fun ConsolidatedMasterHeader(
                         }
                     }
 
-                    Text(
-                        text = "MEDLAM-AI AGENT",
-                        color = textBright,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.09.em
+                    AtlasAiBranding(
+                        fontSize = 12.sp,
+                        lineHeight = 2.dp
                     )
 
-                    // Solid Status Badge docked inline on exact baseline
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
@@ -1232,8 +1235,6 @@ fun ConsolidatedMasterHeader(
                     }
                 }
 
-                // Right: Symmetric micro-plate settings gear icon anchored flush to far right
-                // Full visual parity with left drawer button: neon cyan accent, gradient border, and ambient cyan back-glow
                 Box(
                     modifier = Modifier
                         .size(28.dp)
@@ -1264,12 +1265,9 @@ fun ConsolidatedMasterHeader(
                 }
             }
 
-            // -------------------------------------------------------------
-            // 2. MIDDLE ROW: Centered active model chip (Base Model & Companion MTP)
-            // (● GEMMA-4-E2B Q2 • MTP: MTP-GEMMA-4-E2B-IT-BF16)
-            // -------------------------------------------------------------
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
             val isLocalMode = !isCloudMode
+            val isMtpDisabledByMmap = false 
             val effectiveDraftPath = uiState.activeDraftModelPath ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
             val hasMtp = isLocalMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
             val draftFile = if (hasMtp && effectiveDraftPath != null) File(effectiveDraftPath) else null
@@ -1311,6 +1309,8 @@ fun ConsolidatedMasterHeader(
                 "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
             } else if (hasMtp && draftTag != null) {
                 "$cleanBaseName • MTP: $draftTag$tpsSuffix"
+            } else if (isMtpDisabledByMmap) {
+                "$cleanBaseName • STANDALONE (MMAP LOCK)$tpsSuffix"
             } else {
                 "$cleanBaseName • STANDALONE$tpsSuffix"
             }
@@ -1349,19 +1349,15 @@ fun ConsolidatedMasterHeader(
                 }
             }
 
-            // -------------------------------------------------------------
-            // 3. BOTTOM ROW: Hardware telemetry ribbon (Disentangled 7-item sequence)
-            // Showing: CPU Usage • RAM • Thermals • Storage • Auth Route • MTP Accelerator • Task Queue
-            // -------------------------------------------------------------
-            val cpuColor = Color(0xFF10B981) // Dynamic emerald
-            val ramColor = Color(0xFF06B6D4) // Electric cyan
+            val cpuColor = Color(0xFF10B981) 
+            val ramColor = Color(0xFF06B6D4) 
             val thermalColor = when {
                 stats.cpuTempInt <= 0 -> Color(0xFF2DD4BF)
-                stats.cpuTempInt < 50 -> Color(0xFF2DD4BF) // Turquoise <50°C
-                stats.cpuTempInt <= 90 -> Color(0xFFF59E0B) // Warm amber 50–90°C
-                else -> Color(0xFFEF4444) // Coral red >90°C
+                stats.cpuTempInt < 50 -> Color(0xFF2DD4BF) 
+                stats.cpuTempInt <= 90 -> Color(0xFFF59E0B) 
+                else -> Color(0xFFEF4444) 
             }
-            val storageColor = Color(0xFF38BDF8) // Titanium / azure
+            val storageColor = Color(0xFF38BDF8) 
             val registeredKeysList = remember(uiState.config.geminiApiKeys) {
                 uiState.config.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             }
@@ -1381,9 +1377,9 @@ fun ConsolidatedMasterHeader(
             } else {
                 if (uiState.localModelLoaded) Color(0xFFA855F7) else textDim.copy(alpha = 0.6f)
             }
-            val mtpColor = if (hasMtp) Color(0xFF00E5FF) else textDim.copy(alpha = 0.6f) // Active cyan / dim
+            val mtpColor = if (hasMtp) Color(0xFF00E5FF) else textDim.copy(alpha = 0.6f) 
             val mtpText = if (hasMtp) "MTP ON" else "OFF"
-            val taskColor = Color(0xFF818CF8) // Vibrant indigo
+            val taskColor = Color(0xFF818CF8) 
 
             Row(
                 modifier = Modifier
@@ -1392,7 +1388,6 @@ fun ConsolidatedMasterHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 1. CPU Usage: Dedicated chip icon [CPU] followed by live load %
                 TelemetryMicroChip(
                     icon = Icons.Filled.DeveloperBoard,
                     text = stats.cpuUsage,
@@ -1400,7 +1395,6 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "CPU Usage"
                 )
 
-                // 2. RAM Allocation: Memory module icon [RAM] followed by active working set size
                 TelemetryMicroChip(
                     icon = Icons.Filled.Memory,
                     text = stats.ramFree,
@@ -1408,7 +1402,6 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "RAM Allocation"
                 )
 
-                // 3. Thermals: Dedicated thermometer glyph followed strictly by hardware temp in °C
                 TelemetryMicroChip(
                     icon = Icons.Filled.Thermostat,
                     text = stats.cpuTemp,
@@ -1416,7 +1409,6 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Thermals"
                 )
 
-                // 4. Storage: Hard drive icon followed strictly by available storage
                 TelemetryMicroChip(
                     icon = Icons.Filled.Storage,
                     text = stats.storageFree,
@@ -1424,7 +1416,6 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Storage"
                 )
 
-                // 5. Auth / Engine Route: Key glyph with active key counter (e.g. 1/5, 2/8) or LOCAL fallback
                 TelemetryMicroChip(
                     icon = Icons.Filled.VpnKey,
                     text = authText,
@@ -1432,7 +1423,6 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Active API Key / Pool"
                 )
 
-                // 6. Hardware Accelerator: Lightning bolt indicating MTP status (MTP ON or OFF)
                 TelemetryMicroChip(
                     icon = Icons.Filled.Bolt,
                     text = mtpText,
@@ -1441,7 +1431,6 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Hardware Accelerator"
                 )
 
-                // 7. Task Queue: Clipboard/task glyph with active task count (TSK 0)
                 TelemetryMicroChip(
                     icon = Icons.Filled.Assignment,
                     text = "TSK $totalTasks",
@@ -1453,13 +1442,6 @@ fun ConsolidatedMasterHeader(
     }
 }
 
-/**
- * CLI Terminal Activity Trace for Thinking & Reasoning.
- * Replaces the nested "Reasoning Tray" card with an authentic live terminal activity trace:
- * > Thinking Process: [● LIVE / (N tokens)] (collapse / expand)
- * Followed by the reasoning body indented with a thin vertical left gutter line,
- * dimmed / italicized monospace text, and real-time blinking block cursor ▌.
- */
 @Composable
 fun CliThoughtContainer(
     thinkingText: String,
@@ -1471,7 +1453,6 @@ fun CliThoughtContainer(
     var userExpanded by remember { mutableStateOf<Boolean?>(null) }
     val isExpanded = userExpanded ?: isThinking
 
-    // Conditional animation transitions: isolated strictly to when streaming/thinking is actively running
     val alphaAnim = if (isThinking) {
         val transition = rememberInfiniteTransition(label = "pulse")
         val alpha by transition.animateFloat(
@@ -1514,7 +1495,6 @@ fun CliThoughtContainer(
             .fillMaxWidth()
             .padding(vertical = 3.dp)
     ) {
-        // Line Header: > Thinking Process : [● LIVE / (N tokens)] (collapse / expand)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1540,7 +1520,6 @@ fun CliThoughtContainer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Single crisp pulsing beacon dot preceding LIVE text
                     Box(
                         modifier = Modifier
                             .size(5.dp)
@@ -1580,7 +1559,6 @@ fun CliThoughtContainer(
             )
         }
 
-        // Expanded Reasoning Body with vertical gutter line
         AnimatedVisibility(visible = isExpanded) {
             val isThoughtRtl = isRtlText(thinkingText)
             CompositionLocalProvider(
@@ -1611,7 +1589,7 @@ fun CliThoughtContainer(
                                     pop()
                                 }
                             } else {
-                                append("Formulating architecture & execution strategy...")
+                                append("Thinking & reasoning...")
                                 if (isThinking) {
                                     pushStyle(SpanStyle(color = traceAccent.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold))
                                     append(" ▌")
@@ -1633,11 +1611,6 @@ fun CliThoughtContainer(
     }
 }
 
-/**
- * Sleek Terminal Code Block Container with terminal ASCII header bar:
- * ┌── <LANG> • <FILE_PATH> ─────── [COPY] [-]
- * Monospace syntax highlighting, horizontally scrollable, 4dp corner radius.
- */
 @Composable
 fun CliCodeBlockContainer(
     code: String,
@@ -1684,7 +1657,6 @@ fun CliCodeBlockContainer(
         border = BorderStroke(1.dp, borderColor)
     ) {
         Column {
-            // Header Bar: Minimalist Terminal Bar with Locked 30dp Height & Strict Single-Row Guardrails
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1695,7 +1667,6 @@ fun CliCodeBlockContainer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left: ┌── <LANG> • <FILE_PATH> (Strict Single Line)
                 Row(
                     modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1735,12 +1706,10 @@ fun CliCodeBlockContainer(
                     }
                 }
 
-                // Right-Hand Action Cluster: [● LIVE] [COPY] [-]/[+] on strict single center baseline
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Micro-Scale Live Badge: docked directly to the left of the [COPY] action button
                     if (isStreaming) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1798,7 +1767,6 @@ fun CliCodeBlockContainer(
                 }
             }
 
-            // Horizontally Scrollable Monospace Code
             AnimatedVisibility(visible = isExpanded) {
                 val highlighted = remember(code, language, isDark) {
                     SyntaxHighlighter.highlight(code, language, isDark)
@@ -1812,9 +1780,9 @@ fun CliCodeBlockContainer(
                 ) {
                     Text(
                         text = highlighted,
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 15.5.sp,
+                        lineHeight = 13.5.sp,
                         color = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
                     )
                 }
@@ -1871,13 +1839,6 @@ fun filterCodeLeaksFromText(text: String): String {
     return sanitized.joinToString("\n").trim()
 }
 
-/**
- * CLI Terminal Execution Line for Tool Invocations, Shell Commands & Process Outputs.
- * Formats:
- * ● ManageTask(...) [expand/collapse]
- * ● Bash(...)
- * ● FileWrite(...)
- */
 @Composable
 fun CliTerminalToolLine(
     rawLine: String,
@@ -1886,7 +1847,7 @@ fun CliTerminalToolLine(
     var expanded by remember { mutableStateOf(false) }
 
     val isManageTask = rawLine.contains("ManageTask", ignoreCase = true)
-    val isBash = rawLine.contains("Bash", ignoreCase = true) || rawLine.startsWith("$ ")
+    val isBash = rawLine.contains("Bash", ignoreCase = true) || rawLine.startsWith("$ ") || rawLine.contains("run_shell", ignoreCase = true)
     val isFileWrite = rawLine.contains("File written", ignoreCase = true) || rawLine.contains("Writing to", ignoreCase = true) || rawLine.contains("FileWrite", ignoreCase = true)
     val isSuccess = rawLine.contains("done", ignoreCase = true) || rawLine.contains("success", ignoreCase = true) ||
                     rawLine.contains("exit 0", ignoreCase = true) || rawLine.contains("Ready / Operational", ignoreCase = true) ||
@@ -1911,11 +1872,11 @@ fun CliTerminalToolLine(
                       rawLine.contains("Production Sync:", ignoreCase = true) || rawLine.contains("Status:", ignoreCase = true)
 
     val bulletColor = when {
-        rawLine.contains("Storage Sentinel", ignoreCase = true) || isFailed -> if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626) // Red warning
-        isRunningOrchestrator || isTelemetry -> if (isDark) Color(0xFF00D2FF) else Color(0xFF0284C7) // Neon Cyan
-        isManageTask -> if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309) // Amber/Orange
-        isBash -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)       // Electric Cyan / Cobalt
-        isSuccess || isFileWrite -> if (isDark) Color(0xFF10B981) else Color(0xFF059669) // Emerald / Green
+        rawLine.contains("Storage Sentinel", ignoreCase = true) || isFailed -> if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626) 
+        isRunningOrchestrator || isTelemetry -> if (isDark) Color(0xFF00D2FF) else Color(0xFF0284C7) 
+        isManageTask -> if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309) 
+        isBash -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)       
+        isSuccess || isFileWrite -> if (isDark) Color(0xFF10B981) else Color(0xFF059669) 
         else -> if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
     }
 
@@ -2014,7 +1975,8 @@ fun CliTerminalToolLine(
 @Composable
 fun CliLogMessageView(
     log: LogEntry,
-    isDark: Boolean
+    isDark: Boolean,
+    onImageClick: ((ByteArray) -> Unit)? = null
 ) {
     val clipboard = LocalClipboardManager.current
     val isUser = log.sender == "USER"
@@ -2028,7 +1990,6 @@ fun CliLogMessageView(
 
     when {
         isUser -> {
-            // Authentic Developer Terminal Input Prompt: ❯ <prompt>
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2046,20 +2007,21 @@ fun CliLogMessageView(
                             text = if (isLogArabic) "❮" else "❯",
                             color = primaryAccent,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
+                            fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.padding(top = 1.dp)
                         )
 
-                        Text(
-                            text = if (isLogArabic) applyBidiIsolation(log.text) else log.text,
+                        CliMathFormattedText(
+                            text = log.text,
+                            isDark = isDark,
+                            isRtl = isLogArabic,
                             color = textBright,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Normal,
-                            lineHeight = if (isLogArabic) 18.5.sp else 17.sp,
+                            fontSize = 12.sp,
+                            lineHeight = if (isLogArabic) 17.sp else 16.sp,
                             textAlign = TextAlign.Start,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            markdownStyler = { txt, _, rtl -> AnnotatedString(if (rtl) applyBidiIsolation(txt) else txt) }
                         )
                     }
                 }
@@ -2077,7 +2039,6 @@ fun CliLogMessageView(
         }
 
         isSystem -> {
-            // Clean Terminal System & Error Output Lines
             val isError = log.isError
             val bulletColor = if (isError) Color(0xFFEF4444) else textDim
             val marker = if (isError) "✖ Error:" else "● System:"
@@ -2108,12 +2069,12 @@ fun CliLogMessageView(
         }
 
         else -> {
-            // AI Agent Terminal Output Stream: Direct continuous vertical flow, NO outer card container
-            val demuxed = remember(log.text, log.thinkingText, log.isThinking) {
+            val demuxed = remember(log.text, log.thinkingText, log.isThinking, log.imageBytes) {
                 StreamDemultiplexer.demux(
                     rawText = log.text,
                     externalThinkingText = log.thinkingText,
-                    externalIsThinking = log.isThinking
+                    externalIsThinking = log.isThinking,
+                    externalImageBytes = log.imageBytes
                 )
             }
 
@@ -2123,7 +2084,6 @@ fun CliLogMessageView(
                     .padding(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // 1. Thinking Process Activity Trace
                 if (demuxed.thinkingText.isNotBlank() || demuxed.isThinking) {
                     CliThoughtContainer(
                         thinkingText = demuxed.thinkingText,
@@ -2132,7 +2092,6 @@ fun CliLogMessageView(
                     )
                 }
 
-                // 2. Sequential Blocks (Prose, Code, Tools, and Terminal Frames)
                 if (demuxed.blocks.isNotEmpty()) {
                     demuxed.blocks.forEach { block ->
                         key(when (block) {
@@ -2140,6 +2099,7 @@ fun CliLogMessageView(
                             is StreamDemultiplexer.DemuxBlock.ToolCall -> block.executionId
                             is StreamDemultiplexer.DemuxBlock.Code -> "${block.filePath}_${block.language}_${block.code.hashCode()}"
                             is StreamDemultiplexer.DemuxBlock.Prose -> "prose_${block.text.hashCode()}"
+                            is StreamDemultiplexer.DemuxBlock.Image -> "image_${block.prompt.hashCode()}_${block.imageBytes.size}"
                         }) {
                             when (block) {
                                 is StreamDemultiplexer.DemuxBlock.Prose -> {
@@ -2160,12 +2120,28 @@ fun CliLogMessageView(
                                 is StreamDemultiplexer.DemuxBlock.TerminalFrame -> {
                                     CliTerminalFrame(block, isDark)
                                 }
+                                is StreamDemultiplexer.DemuxBlock.Image -> {
+                                    CliInlineImage(
+                                        imageBytes = block.imageBytes,
+                                        prompt = block.prompt,
+                                        isDark = isDark,
+                                        onClick = { onImageClick?.invoke(block.imageBytes) }
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                // 3. Subtle Inline Turn Indicator with Copy Action
+                if (log.imageBytes != null && demuxed.blocks.none { it is StreamDemultiplexer.DemuxBlock.Image }) {
+                    CliInlineImage(
+                        imageBytes = log.imageBytes,
+                        prompt = "",
+                        isDark = isDark,
+                        onClick = { onImageClick?.invoke(log.imageBytes) }
+                    )
+                }
+
                 if (!demuxed.isThinking && log.text.isNotBlank()) {
                     Row(
                         modifier = Modifier
@@ -2199,22 +2175,120 @@ fun CliLogMessageView(
 }
 
 @Composable
+fun CliInlineImage(
+    imageBytes: ByteArray,
+    prompt: String,
+    isDark: Boolean,
+    onClick: () -> Unit
+) {
+    val bitmap = remember(imageBytes) {
+        try {
+            BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)?.asImageBitmap()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    val borderColor = if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)
+    val cardBg = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        if (bitmap != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cardBg,
+                border = BorderStroke(1.dp, borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onClick() }
+            ) {
+                Column {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = prompt.ifBlank { "Visual Synthesis" },
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 180.dp, max = 320.dp)
+                            .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (prompt.isNotBlank()) prompt else "Generated Visual",
+                            color = textDim,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.ZoomIn,
+                                contentDescription = "Full Screen",
+                                tint = textDim,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "View",
+                                color = textDim,
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9),
+                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "✖ [Image Rendering Failed: Unable to decode bitmap bytes]",
+                    color = Color(0xFFEF4444),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark: Boolean) {
     val clipboard = LocalClipboardManager.current
 
-    // Clean output to filter out redundant completion status strings
     val rawOutput = block.output.trim()
     val cleanOutput = rawOutput
         .replace(Regex("""\[(?:Command|Process) completed with exit code \d+(?: \(no output\))?\]""", RegexOption.IGNORE_CASE), "")
         .trim()
 
-    // Auto-collapse if command + output exceeds 8 lines
     val cmdLines = block.command.lines()
     val outLines = if (cleanOutput.isNotBlank()) cleanOutput.lines() else emptyList()
     val totalLines = cmdLines.size + outLines.size
     val isLongOutput = totalLines > 8
 
-    var isExpanded by remember(block.executionId, block.command) { mutableStateOf(!isLongOutput) }
+    var isExpanded by remember(block.executionId, block.command) { mutableStateOf(true) }
     var copiedRecently by remember { mutableStateOf(false) }
 
     LaunchedEffect(copiedRecently) {
@@ -2225,9 +2299,9 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
     }
 
     val accentColor = when {
-        block.isRunning -> Color(0xFF38BDF8) // Cyan for running
-        block.exitCode == 0 -> Color(0xFF10B981) // Emerald for exit 0
-        else -> Color(0xFFEF4444) // Coral Red for non-zero errors
+        block.isRunning -> Color(0xFF38BDF8) 
+        block.exitCode == 0 -> Color(0xFF10B981) 
+        else -> Color(0xFFEF4444) 
     }
 
     val obsidianBg = Color(0xFF0B0F17)
@@ -2242,7 +2316,6 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
         border = BorderStroke(1.dp, subtleBorder)
     ) {
         Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            // Left Accent Indicator Bar
             Box(
                 modifier = Modifier
                     .width(3.5.dp)
@@ -2255,7 +2328,6 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                     .weight(1f)
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
-                // Header: ┌─ TERMINAL • bash [exit: 0]      [COPY] [-] ──┐
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2329,13 +2401,11 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                 Divider(color = subtleBorder, thickness = 0.5.dp)
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Terminal Execution Body
                 if (isExpanded) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        // Command line: $ <command>
                         Row(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = "$ ",
@@ -2353,7 +2423,6 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             )
                         }
 
-                        // Output content
                         if (cleanOutput.isNotBlank()) {
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
@@ -2363,9 +2432,18 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = 16.sp
                             )
+                        } else if (!block.isRunning) {
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = if (rawOutput.isNotBlank()) rawOutput else "[No output returned]",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                lineHeight = 16.sp
+                            )
                         }
 
-                        // Process completion indicator
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (block.isRunning) {
@@ -2394,7 +2472,6 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         }
                     }
                 } else {
-                    // Collapsed preview: single-line prompt preview
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -2488,7 +2565,6 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
 
 @Composable
 fun CliFormattedBody(raw: String, isDark: Boolean) {
-    // Cache sanitize + split only when raw text changes (avoids regex re-run on every recompose)
     val text = remember(raw) { StreamDemultiplexer.sanitizeProse(raw).trim() }
     if (text.isBlank()) return
 
@@ -2510,7 +2586,6 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                 continue
             }
 
-            // Check if this line is a tool or process event line
             val isToolLine = trimmed.startsWith("● ManageTask") || trimmed.startsWith("ManageTask(") ||
                              trimmed.startsWith("● Bash") || trimmed.startsWith("Bash(") ||
                              trimmed.startsWith("● FileWrite") || trimmed.startsWith("File written:") ||
@@ -2518,12 +2593,42 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                              trimmed.startsWith("Tool(") || trimmed.startsWith("✔ Tool(") || trimmed.startsWith("✖ Tool(") ||
                              trimmed.startsWith("Orchestrator:") || trimmed.startsWith("Verifier:") ||
                              trimmed.startsWith("Production Sync:") || trimmed.startsWith("Status:") ||
+                             trimmed.startsWith("run_shell(") || trimmed.startsWith("● run_shell") ||
                              trimmed.startsWith("  ├─")
 
             if (isToolLine) {
                 CliTerminalToolLine(trimmed, isDark)
                 i++
                 continue
+            }
+
+            // Check if trimmed starts a multi-line block math formula ($$...$$)
+            if (trimmed.startsWith("$$") && !trimmed.removePrefix("$$").contains("$$")) {
+                val blockMathLines = mutableListOf<String>()
+                blockMathLines.add(line)
+                var j = i + 1
+                var foundEnd = false
+                while (j < lines.size) {
+                    val nextLine = lines[j]
+                    blockMathLines.add(nextLine)
+                    if (nextLine.contains("$$")) {
+                        foundEnd = true
+                        i = j
+                        break
+                    }
+                    j++
+                }
+                if (foundEnd) {
+                    val fullBlockMath = blockMathLines.joinToString("\n")
+                    val formula = fullBlockMath.replace("$$", "").trim()
+                    CliBlockMathFormula(
+                        formula = formula,
+                        rawText = fullBlockMath,
+                        isDark = isDark
+                    )
+                    i++
+                    continue
+                }
             }
 
             val isLineArabic = isArabic(trimmed)
@@ -2566,16 +2671,18 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                         }
                     }
                     isHeader -> {
-                        Text(
-                            text = if (isLineArabic) applyBidiIsolation(clean) else clean,
+                        CliMathFormattedText(
+                            text = clean,
+                            isDark = isDark,
+                            isRtl = isLineArabic,
                             color = headingColor,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            lineHeight = if (isLineArabic) 18.sp else 15.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 4.dp, bottom = 2.dp)
+                                .padding(top = 4.dp, bottom = 2.dp),
+                            markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
                         )
                     }
                     isBullet -> {
@@ -2594,31 +2701,35 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             Text(
                                 text = bulletMarker,
                                 color = headingColor,
-                                fontSize = 11.sp,
+                                fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.padding(end = 4.dp)
                             )
-                            Text(
-                                text = buildOrganizedMarkdownString(bulletContent, isDark, isRtl = isLineArabic),
+                            CliMathFormattedText(
+                                text = bulletContent,
+                                isDark = isDark,
+                                isRtl = isLineArabic,
                                 color = textBright,
-                                fontSize = 11.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                lineHeight = if (isLineArabic) 19.sp else 16.sp,
+                                fontSize = 11.sp,
+                                lineHeight = if (isLineArabic) 18.sp else 15.sp,
                                 textAlign = TextAlign.Start,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
                             )
                         }
                     }
                     else -> {
-                        Text(
-                            text = buildOrganizedMarkdownString(clean, isDark, isRtl = isLineArabic),
+                        CliMathFormattedText(
+                            text = clean,
+                            isDark = isDark,
+                            isRtl = isLineArabic,
                             color = textBright,
-                            fontSize = 11.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = if (isLineArabic) 19.sp else 16.sp,
+                            fontSize = 11.sp,
+                            lineHeight = if (isLineArabic) 18.sp else 15.sp,
                             textAlign = TextAlign.Start,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
                         )
                     }
                 }
@@ -2704,179 +2815,346 @@ fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = f
     return builder.toAnnotatedString()
 }
 
-data class QuickActionCardItem(
-    val title: String,
-    val subtitle: String,
-    val prompt: String,
-    val icon: ImageVector
-)
-
 @Composable
 fun CliWelcomeScreen(
-    onSelectPrompt: (String) -> Unit
+    uiState: AgentUiState,
+    modifier: Modifier = Modifier
 ) {
     val isDark = isSystemInDarkTheme()
-    val electricCyan = Color(0xFF00D2FF)
+    val electricCyan = MaterialTheme.colorScheme.primary
+    val neonGreen = Color(0xFF00E676)
+    val crimsonRed = Color(0xFFFF2A4D)
+    val vibrantBlue = MaterialTheme.colorScheme.secondary
+    val amber = Color(0xFFF59E0B)
+    val textBright = MaterialTheme.colorScheme.onSurface
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
+    val cardBg = MaterialTheme.colorScheme.surfaceVariant
+    val cardBorder = MaterialTheme.colorScheme.outline
 
-    val quickActions = remember {
-        listOf(
-            QuickActionCardItem(
-                title = "Web Dashboard",
-                subtitle = "Build modern glassmorphic dashboard in webapp/",
-                prompt = "Build a modern responsive glassmorphic dashboard in /sdcard/Medlam-Ai/webapp/ with self-contained styles and live charts.",
-                icon = Icons.Filled.Dashboard
-            ),
-            QuickActionCardItem(
-                title = "System Watchdog",
-                subtitle = "Inspect hardware, memory cache & thermals",
-                prompt = "Inspect system hardware, memory cache, thermals, and optimize memory performance.",
-                icon = Icons.Filled.MonitorHeart
-            ),
-            QuickActionCardItem(
-                title = "Drop Caches",
-                subtitle = "Flush pagecache, dentries & inodes",
-                prompt = "sync && echo 3 > /proc/sys/vm/drop_caches",
-                icon = Icons.Filled.CleaningServices
-            ),
-            QuickActionCardItem(
-                title = "Network Check",
-                subtitle = "Test telephony, ping gateway & data status",
-                prompt = "dumpsys telephony.registry | grep -E 'mState|mServiceState|mSignalStrength'",
-                icon = Icons.Filled.NetworkCheck
-            ),
-            QuickActionCardItem(
-                title = "Python Daemon",
-                subtitle = "Scaffold & execute headless background script",
-                prompt = "Write and run a headless Python script to log device uptime and RAM usage to /sdcard/Medlam-Ai/system_log.json",
-                icon = Icons.Filled.Terminal
-            ),
-            QuickActionCardItem(
-                title = "Clean Storage",
-                subtitle = "Scan downloads & report large files",
-                prompt = "du -ah /sdcard/Download | sort -rh | head -n 10",
-                icon = Icons.Filled.Storage
-            ),
-            QuickActionCardItem(
-                title = "Cycle API Keys",
-                subtitle = "Test failover & advance to next key",
-                prompt = "Test active Gemini API key quota and verify failover rotation.",
-                icon = Icons.Filled.VpnKey
-            ),
-            QuickActionCardItem(
-                title = "Device Telemetry",
-                subtitle = "Inspect battery capacity, voltage & SoC",
-                prompt = "dumpsys battery",
-                icon = Icons.Filled.BatteryChargingFull
-            )
-        )
+    val currentPhase = when {
+        uiState.initPhase == InitializationPhase.SYSTEM_READY || uiState.localModelLoaded -> InitializationPhase.SYSTEM_READY
+        uiState.initPhase == InitializationPhase.PARSING_PERSONA -> InitializationPhase.PARSING_PERSONA
+        uiState.initPhase == InitializationPhase.ALLOCATING_MEMORY || uiState.localModelLoading -> InitializationPhase.ALLOCATING_MEMORY
+        else -> InitializationPhase.IDLE
     }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Centered Brand Hero
-        Text(
-            text = "MEDLAM-AI AGENT",
-            color = electricCyan,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            letterSpacing = 0.1.em,
-            textAlign = TextAlign.Center,
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(bottom = 16.dp)
+        ) {
+            AtlasAiBranding(
+                fontSize = 22.sp,
+                lineHeight = 3.5.dp,
+                spacing = 3.dp,
+                strokeWidth = 2.5f,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Text(
+                text = "NEURAL COGNITIVE MATRIX • ACCELERATED CORE RUNTIME",
+                color = textDim,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 0.08.em,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = Color(0x3300E676),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(0.5.dp, neonGreen.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "● SIMD NEON",
+                        color = neonGreen,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                }
+
+                Surface(
+                    color = Color(0x33007BFF),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(0.5.dp, vibrantBlue.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "⚡ SPECULATIVE MTP",
+                        color = Color(0xFF60A5FA),
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                }
+
+                Surface(
+                    color = Color(0x33FF2A4D),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(0.5.dp, crimsonRed.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "RAM DRAFT LOCK",
+                        color = crimsonRed,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 14.dp)
-        )
-
-        // 2-Column Responsive Quick-Actions Grid
-        val chunkedActions = remember(quickActions) { quickActions.chunked(2) }
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .tactileGlassGlow(cornerRadius = 14.dp, isDark = true, elevation = 3.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = cardBg,
+            border = BorderStroke(1.dp, cardBorder)
         ) {
-            chunkedActions.forEach { rowItems ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    rowItems.forEach { item ->
-                        QuickActionCard(
-                            item = item,
-                            isDark = isDark,
-                            onClick = { onSelectPrompt(item.prompt) },
-                            modifier = Modifier.weight(1f)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Terminal,
+                            contentDescription = "Terminal Engine",
+                            tint = electricCyan,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "NEURAL CORE INITIALIZATION",
+                            color = textBright,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.05.em
                         )
                     }
-                    if (rowItems.size == 1) {
-                        Spacer(modifier = Modifier.weight(1f))
+
+                    val (badgeText, badgeBg, badgeTextColor) = when (currentPhase) {
+                        InitializationPhase.ALLOCATING_MEMORY -> Triple("ALLOCATING", amber.copy(alpha = 0.2f), amber)
+                        InitializationPhase.PARSING_PERSONA -> Triple("PREFILLING", electricCyan.copy(alpha = 0.2f), electricCyan)
+                        InitializationPhase.SYSTEM_READY -> Triple("ONLINE", neonGreen.copy(alpha = 0.2f), neonGreen)
+                        InitializationPhase.IDLE -> Triple("STANDBY", textDim.copy(alpha = 0.2f), textDim)
+                    }
+                    Surface(
+                        color = badgeBg,
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(0.5.dp, badgeTextColor.copy(alpha = 0.6f))
+                    ) {
+                        Text(
+                            text = badgeText,
+                            color = badgeTextColor,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
                     }
                 }
+
+                Divider(color = cardBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
+
+                val isState1Active = currentPhase == InitializationPhase.ALLOCATING_MEMORY
+                val isState1Done = currentPhase == InitializationPhase.PARSING_PERSONA || currentPhase == InitializationPhase.SYSTEM_READY
+                InitializationStateItem(
+                    stepNumber = "1",
+                    title = if (uiState.activeModelType == ModelType.GEMINI) "Initializing Gemini Cloud Core..." else "Allocating Local Neural Core... [Model & Draft]",
+                    description = if (isState1Active) {
+                        uiState.loadingStatusText.ifBlank { if (uiState.activeModelType == ModelType.GEMINI) "Establishing encrypted cloud tunnel" else "Mapping Base to storage & locking Draft in RAM" }
+                    } else if (isState1Done) {
+                        if (uiState.activeModelType == ModelType.GEMINI) "Cloud tunnel established ✔" else "Neural Core & Speculative MTP mapped successfully ✔"
+                    } else {
+                        if (uiState.activeModelType == ModelType.GEMINI) "Connecting to Gemini servers" else "Base Model (Storage mmap) • Draft Model (RAM Locked)"
+                    },
+                    isActive = isState1Active,
+                    isCompleted = isState1Done,
+                    progress = if (isState1Active) uiState.loadingProgress else if (isState1Done) 1.0f else null,
+                    showProgressBar = isState1Active,
+                    isDark = true
+                )
+
+                val isState2Active = currentPhase == InitializationPhase.PARSING_PERSONA
+                val isState2Done = currentPhase == InitializationPhase.SYSTEM_READY
+                InitializationStateItem(
+                    stepNumber = "2",
+                    title = "Parsing Unified Persona...",
+                    description = if (isState2Active) {
+                        "Prefilling KV-cache with ATLAS-AI directives..."
+                    } else if (isState2Done) {
+                        "ATLAS-AI Persona compiled & KV-cache pre-warmed ✔"
+                    } else {
+                        "Pre-warming KV-cache with unified system prompt"
+                    },
+                    isActive = isState2Active,
+                    isCompleted = isState2Done,
+                    progress = if (isState2Active) 0.95f else if (isState2Done) 1.0f else null,
+                    showProgressBar = isState2Active,
+                    isDark = true
+                )
+
+                val isState3Done = currentPhase == InitializationPhase.SYSTEM_READY
+                InitializationStateItem(
+                    stepNumber = "3",
+                    title = "ATLAS-AI AGENT Core Ready.",
+                    description = if (isState3Done) {
+                        "Neural link established • Zero-latency inference standby"
+                    } else {
+                        "Awaiting initialization sequence completion"
+                    },
+                    isActive = false,
+                    isCompleted = isState3Done,
+                    progress = null,
+                    showProgressBar = false,
+                    isDark = true
+                )
             }
         }
     }
 }
 
 @Composable
-private fun QuickActionCard(
-    item: QuickActionCardItem,
-    isDark: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+private fun InitializationStateItem(
+    stepNumber: String,
+    title: String,
+    description: String,
+    isActive: Boolean,
+    isCompleted: Boolean,
+    progress: Float?,
+    showProgressBar: Boolean,
+    isDark: Boolean
 ) {
-    val cardBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer
-    val cardBorder = if (isDark) Color(0x0FFFFFFF) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
-    val titleColor = if (isDark) Color(0xFFF1F5F9) else Color(0xFF0F172A)
-    val subtitleColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val iconColor = Color(0xFF00D2FF)
+    val electricCyan = Color(0xFF00D2FF)
+    val neonGreen = Color(0xFF10B981)
+    val textBright = if (isDark) Color(0xFFF8FAFC) else Color(0xFF0F172A)
+    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
 
-    Surface(
-        onClick = onClick,
-        modifier = modifier
-            .fillMaxWidth()
-            .tactileGlassGlow(cornerRadius = 12.dp, isDark = isDark, elevation = 2.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = cardBg,
-        border = BorderStroke(1.dp, cardBorder)
+    val titleColor = when {
+        isCompleted -> neonGreen
+        isActive -> electricCyan
+        else -> textDim
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Box(
+                modifier = Modifier.size(20.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = item.icon,
-                    contentDescription = item.title,
-                    tint = iconColor,
-                    modifier = Modifier.size(15.dp)
-                )
+                when {
+                    isCompleted -> {
+                        Surface(
+                            shape = CircleShape,
+                            color = neonGreen.copy(alpha = 0.15f),
+                            modifier = Modifier.size(18.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = "Completed",
+                                    tint = neonGreen,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+                    }
+                    isActive -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = electricCyan,
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    else -> {
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .border(1.dp, textDim.copy(alpha = 0.35f), CircleShape)
+                        )
+                    }
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "STATE $stepNumber:$title",
+                        color = titleColor,
+                        fontSize = 12.sp,
+                        fontWeight = if (isActive || isCompleted) FontWeight.Bold else FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (isActive && progress != null) {
+                        Text(
+                            text = "${(progress.coerceIn(0f, 1f) * 100).toInt()}%",
+                            color = electricCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
                 Text(
-                    text = item.title,
-                    color = titleColor,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = description,
+                    color = textDim,
+                    fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    softWrap = false,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Text(
-                text = item.subtitle,
-                color = subtitleColor,
-                fontSize = 9.5.sp,
-                lineHeight = 13.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+        }
+
+        if (showProgressBar) {
+            Spacer(Modifier.height(2.dp))
+            LinearProgressIndicator(
+                progress = (progress ?: 0.1f).coerceIn(0.05f, 1.0f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 30.dp)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = electricCyan,
+                trackColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
             )
         }
     }
@@ -2892,13 +3170,13 @@ fun SidebarContent(
     val sessions by viewModel.chatSessions.collectAsState()
     val activeSessionId by viewModel.currentSessionId.collectAsState()
 
-    val drawerBg = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
+    val drawerBg = MaterialTheme.colorScheme.surfaceContainerLow
     val onSurface = MaterialTheme.colorScheme.onSurface
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
     val primary = MaterialTheme.colorScheme.primary
     val primaryContainer = MaterialTheme.colorScheme.primaryContainer
     val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
-    val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val surfaceContainer = MaterialTheme.colorScheme.surfaceContainer
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val errorColor = MaterialTheme.colorScheme.error
 
@@ -2915,7 +3193,7 @@ fun SidebarContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("SESSION ARCHIVE", color = primary, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                AtlasAiBranding(fontSize = 13.sp, lineHeight = 2.dp)
                 IconButton(onClick = onCloseDrawer) {
                     Icon(Icons.Outlined.Close, "Close", tint = onSurfaceVariant, modifier = Modifier.size(18.dp))
                 }

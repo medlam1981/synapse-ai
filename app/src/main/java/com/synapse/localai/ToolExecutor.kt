@@ -649,7 +649,12 @@ object ToolExecutor {
      */
     fun executeShellCommand(cmd: String, timeoutMs: Long = 15_000L): String {
         return try {
-            runProcessWithWatchdog(cmd, "su", timeoutMs)
+            val lines = RootShellManager.exec(cmd)
+            if (lines.isNotEmpty()) {
+                lines.joinToString("\n")
+            } else {
+                runProcessWithWatchdog(cmd, "sh", timeoutMs)
+            }
         } catch (_: Exception) {
             try {
                 runProcessWithWatchdog(cmd, "sh", timeoutMs)

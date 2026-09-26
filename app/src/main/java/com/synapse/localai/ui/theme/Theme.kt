@@ -14,106 +14,123 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 // =========================================================================
-// Universal Semantic Material 3 Container Extensions for Fixed Dual-Theme
-// =========================================================================
-// =========================================================================
-// Universal Semantic Material 3 Container Extensions for Fixed Dual-Theme
+// Material 3 ColorScheme Extension Properties
+// Provides surfaceContainer tiers for both themes cleanly
 // =========================================================================
 val ColorScheme.surfaceContainerLowest: Color
-    @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF0B0F17) else Color(0xFFF8FAFC)
+    @Composable get() = if (background.luminance() < 0.5f)
+        Color(0xFF080810) else Color(0xFFF0F4FF)
 
 val ColorScheme.surfaceContainerLow: Color
-    @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF161E2E) else Color(0xFFFFFFFF)
+    @Composable get() = if (background.luminance() < 0.5f)
+        NightSurface else DaySurface
 
 val ColorScheme.surfaceContainer: Color
-    @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF161E2E) else Color(0xFFFFFFFF)
+    @Composable get() = if (background.luminance() < 0.5f)
+        NightSurfaceContainer else DaySurfaceContainer
 
 val ColorScheme.surfaceContainerHigh: Color
-    @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF1E283A) else Color(0xFFEDF2F7)
+    @Composable get() = if (background.luminance() < 0.5f)
+        NightSurfaceVariant else DaySurfaceVariant
 
 val ColorScheme.surfaceContainerHighest: Color
-    @Composable
-    get() = if (isSystemInDarkTheme()) Color(0xFF263346) else Color(0xFFE2E8F0)
+    @Composable get() = if (background.luminance() < 0.5f)
+        Color(0xFF26263E) else Color(0xFFDDE3F4)
 
 // =========================================================================
-// 1. Dark Theme Palette (Modern Cyber Obsidian)
+// NIGHT THEME — "Atlas Deep Space"
+// Background: #0A0A12 (Near-black cosmic)  |  Primary: #00E5FF (Electric Cyan)
 // =========================================================================
-private val DarkColorScheme = darkColorScheme(
-    primary = ObsidianPrimary,
-    secondary = ObsidianSecondary,
-    tertiary = ObsidianTertiary,
-    background = ObsidianBackground,
-    surface = ObsidianBackground,
-    surfaceVariant = ObsidianSurface,
-    primaryContainer = Color(0xFF0C4A6E),
-    onPrimaryContainer = Color(0xFFE0F2FE),
-    secondaryContainer = Color(0xFF312E81),
-    onSecondaryContainer = Color(0xFFEDE9FE),
-    tertiaryContainer = Color(0xFF1E1B4B),
-    onTertiaryContainer = Color(0xFFE0E7FF),
-    onPrimary = Color(0xFF0B0F17),
-    onSecondary = Color(0xFF0B0F17),
-    onTertiary = Color(0xFF0B0F17),
-    onBackground = ObsidianOnSurface,
-    onSurface = ObsidianOnSurface,
-    onSurfaceVariant = ObsidianOnSurfaceVariant,
-    outline = ObsidianOutline,
-    outlineVariant = ObsidianOutlineVariant,
-    error = ObsidianError
+private val AtlasNightColorScheme = darkColorScheme(
+    primary               = NightPrimary,
+    onPrimary             = NightOnPrimary,
+    primaryContainer      = NightPrimaryContainer,
+    onPrimaryContainer    = NightOnPrimaryContainer,
+    secondary             = NightSecondary,
+    onSecondary           = NightOnSecondary,
+    secondaryContainer    = Color(0xFF2A1A4E),
+    onSecondaryContainer  = Color(0xFFD8B4FE),
+    tertiary              = NightTertiary,
+    onTertiary            = Color(0xFFFFFFFF),
+    tertiaryContainer     = Color(0xFF4A0018),
+    onTertiaryContainer   = Color(0xFFFFB3C0),
+    background            = NightBackground,
+    onBackground          = NightOnBackground,
+    surface               = NightSurface,
+    onSurface             = NightOnSurface,
+    surfaceVariant        = NightSurfaceVariant,
+    onSurfaceVariant      = NightOnSurfaceVariant,
+    outline               = NightOutline,
+    outlineVariant        = NightOutlineVariant,
+    error                 = NightError,
+    onError               = Color(0xFFFFFFFF),
+    errorContainer        = Color(0xFF4A0000),
+    onErrorContainer      = Color(0xFFFFB3B3),
+    inverseSurface        = Color(0xFFE8EAF6),
+    inverseOnSurface      = Color(0xFF0A0A12),
+    inversePrimary        = Color(0xFF006B80),
+    scrim                 = Color(0xCC000000),
 )
 
 // =========================================================================
-// 2. Light Theme Palette (Modern Porcelain Minimalist)
+// DAY THEME — "Atlas Crystal White"
+// Background: #FFFFFF (Pure White)  |  Primary: #2563EB (Modern Indigo Blue)
 // =========================================================================
-private val LightColorScheme = lightColorScheme(
-    primary = PorcelainPrimary,
-    secondary = PorcelainSecondary,
-    tertiary = PorcelainTertiary,
-    background = PorcelainBackground,
-    surface = PorcelainBackground,
-    surfaceVariant = Color(0xFFEDF2F7),
-    primaryContainer = Color(0xFFDBEAFE),
-    onPrimaryContainer = Color(0xFF1E40AF),
-    secondaryContainer = Color(0xFFEEF2FF),
-    onSecondaryContainer = Color(0xFF3730A3),
-    tertiaryContainer = Color(0xFFF3E8FF),
-    onTertiaryContainer = Color(0xFF581C87),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = PorcelainOnSurface,
-    onSurface = PorcelainOnSurface,
-    onSurfaceVariant = PorcelainOnSurfaceVariant,
-    outline = PorcelainOutline,
-    outlineVariant = PorcelainOutlineVariant,
-    error = PorcelainError
+private val AtlasDayColorScheme = lightColorScheme(
+    primary               = DayPrimary,
+    onPrimary             = DayOnPrimary,
+    primaryContainer      = DayPrimaryContainer,
+    onPrimaryContainer    = DayOnPrimaryContainer,
+    secondary             = DaySecondary,
+    onSecondary           = DayOnSecondary,
+    secondaryContainer    = Color(0xFFEDE9FE),
+    onSecondaryContainer  = Color(0xFF4C1D95),
+    tertiary              = DayTertiary,
+    onTertiary            = Color(0xFFFFFFFF),
+    tertiaryContainer     = Color(0xFFFEE2E2),
+    onTertiaryContainer   = Color(0xFF7F1D1D),
+    background            = DayBackground,
+    onBackground          = DayOnBackground,
+    surface               = DaySurface,
+    onSurface             = DayOnSurface,
+    surfaceVariant        = DaySurfaceVariant,
+    onSurfaceVariant      = DayOnSurfaceVariant,
+    outline               = DayOutline,
+    outlineVariant        = DayOutlineVariant,
+    error                 = DayError,
+    onError               = Color(0xFFFFFFFF),
+    errorContainer        = Color(0xFFFEE2E2),
+    onErrorContainer      = Color(0xFF7F1D1D),
+    inverseSurface        = Color(0xFF1C1C2E),
+    inverseOnSurface      = Color(0xFFE8EAF6),
+    inversePrimary        = Color(0xFF93C5FD),
+    scrim                 = Color(0x80000000),
 )
 
-/**
- * Deterministic Dual-Theme Architecture:
- * Completely decoupled from Android OS wallpaper extraction APIs.
- * Operates strictly with handcrafted Dark and Light palettes.
- */
+// =========================================================================
+// AtlasAiTheme — Primary Dynamic Theme
+// Automatically switches between Night and Day based on system setting
+// =========================================================================
 @Composable
-fun SynapseAITheme(
+fun AtlasAiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false, // Deprecated: dynamic extraction completely decoupled
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val colorScheme = if (darkTheme) AtlasNightColorScheme else AtlasDayColorScheme
+    val bgArgb = colorScheme.background.toArgb()
 
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.surface.toArgb()
-            window.navigationBarColor = colorScheme.surface.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
-            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !darkTheme
+            @Suppress("DEPRECATION")
+            window.statusBarColor = bgArgb
+            @Suppress("DEPRECATION")
+            window.navigationBarColor = bgArgb
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
         }
     }
 
@@ -123,3 +140,17 @@ fun SynapseAITheme(
         content = content
     )
 }
+
+// =========================================================================
+// SynapseAITheme — Alias for backward compatibility → delegates to AtlasAiTheme
+// =========================================================================
+@Composable
+fun SynapseAITheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = false,
+    content: @Composable () -> Unit
+) = AtlasAiTheme(darkTheme = darkTheme, content = content)
+
+// Helper: calculate perceived luminance of a Color
+private fun Color.luminance(): Float =
+    0.2126f * red + 0.7152f * green + 0.0722f * blue

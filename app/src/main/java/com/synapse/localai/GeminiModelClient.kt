@@ -9,6 +9,11 @@ import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlockThreshold
 import com.google.ai.client.generativeai.type.HarmCategory
 import com.google.ai.client.generativeai.type.SafetySetting
+import com.google.ai.client.generativeai.type.Tool
+import com.google.ai.client.generativeai.type.defineFunction
+import com.google.ai.client.generativeai.type.Schema
+import com.google.ai.client.generativeai.type.FunctionCallPart
+import com.google.ai.client.generativeai.type.Content
 import com.google.ai.client.generativeai.type.content
 import com.google.ai.client.generativeai.type.generationConfig
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +55,8 @@ class GeminiModelClient(
 
     @Volatile var lastFinishReason: String? = null
     @Volatile var lastTokenCount: Int = 0
+    @Volatile var activeChat: com.google.ai.client.generativeai.Chat? = null
+    @Volatile var lastFunctionCall: FunctionCallPart? = null
 
     private fun fileLog(msg: String) {
         Log.d(TAG, msg)
@@ -222,6 +229,17 @@ class GeminiModelClient(
                 try {
                     val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
 
+                    val shellTool = Tool(
+                        listOf(
+                            defineFunction(
+                                name = "run_shell",
+                                description = "Execute a shell command in the system terminal",
+                                parameters = listOf(Schema.str("command", "The bash shell command to execute")),
+                                requiredParameters = listOf("command")
+                            )
+                        )
+                    )
+
                     val generativeModel = GenerativeModel(
                         modelName = effectiveModelName,
                         apiKey = apiKey,
@@ -235,10 +253,12 @@ class GeminiModelClient(
                             SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
                             SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
                         ),
+                        tools = listOf(shellTool),
                         systemInstruction = content { text(systemPrompt) }
                     )
 
                     val chat = generativeModel.startChat(chatHistory)
+                    activeChat = chat
                     val responseFlow = chat.sendMessageStream(content(role = "user") {
                         text(promptText)
                         for (img in promptImages) {
@@ -249,7 +269,9 @@ class GeminiModelClient(
                     lastFinishReason = null
                     lastTokenCount = 0
 
+                    var functionCallDetected = false
                     responseFlow.collect { chunk ->
+                        if (functionCallDetected) return@collect
                         val candidate = chunk.candidates.firstOrNull()
                         val reason = candidate?.finishReason?.name
                         if (!reason.isNullOrBlank()) {
@@ -258,6 +280,18 @@ class GeminiModelClient(
                         val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
                         if (candTokens > 0) {
                             lastTokenCount = candTokens
+                        }
+                        val fns = chunk.functionCalls
+                        if (fns.isNotEmpty()) {
+                            val call = fns.first()
+                            lastFunctionCall = call
+                            val cmd = call.args["command"] ?: call.args.values.firstOrNull() ?: ""
+                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (command: $cmd)")
+                            val toolXml = "<invoke name=\"${call.name}\">\n<parameter name=\"command\">$cmd</parameter>\n</invoke>"
+                            channel.send(toolXml)
+                            channel.close()
+                            functionCallDetected = true
+                            return@collect
                         }
                         if (isActive && chunk.text != null) {
                             channel.send(chunk.text!!)
@@ -328,7 +362,7 @@ class GeminiModelClient(
 
             } catch (t: Throwable) {
                 streamJob.cancel()
-                if (t is kotlinx.coroutines.CancellationException) {
+                if (t is kotlinx.coroutines.CancellationException || t.javaClass.simpleName == "SynchronousToolBarrierException" || t.message?.contains("Synchronous ReAct Barrier") == true) {
                     throw t
                 }
 
@@ -436,6 +470,17 @@ class GeminiModelClient(
                 try {
                     val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
 
+                    val shellTool = Tool(
+                        listOf(
+                            defineFunction(
+                                name = "run_shell",
+                                description = "Execute a shell command in the system terminal",
+                                parameters = listOf(Schema.str("command", "The bash shell command to execute")),
+                                requiredParameters = listOf("command")
+                            )
+                        )
+                    )
+
                     val generativeModel = GenerativeModel(
                         modelName = effectiveModelName,
                         apiKey = apiKey,
@@ -449,16 +494,20 @@ class GeminiModelClient(
                             SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
                             SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
                         ),
+                        tools = listOf(shellTool),
                         systemInstruction = content { text(systemPrompt) }
                     )
 
                     val chat = generativeModel.startChat(chatHistory)
+                    activeChat = chat
                     val responseFlow = chat.sendMessageStream(promptText)
 
                     lastFinishReason = null
                     lastTokenCount = 0
 
+                    var functionCallDetected = false
                     responseFlow.collect { chunk ->
+                        if (functionCallDetected) return@collect
                         val candidate = chunk.candidates.firstOrNull()
                         val reason = candidate?.finishReason?.name
                         if (!reason.isNullOrBlank()) {
@@ -467,6 +516,18 @@ class GeminiModelClient(
                         val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
                         if (candTokens > 0) {
                             lastTokenCount = candTokens
+                        }
+                        val fns = chunk.functionCalls
+                        if (fns.isNotEmpty()) {
+                            val call = fns.first()
+                            lastFunctionCall = call
+                            val cmd = call.args["command"] ?: call.args.values.firstOrNull() ?: ""
+                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (command: $cmd)")
+                            val toolXml = "<invoke name=\"${call.name}\">\n<parameter name=\"command\">$cmd</parameter>\n</invoke>"
+                            channel.send(toolXml)
+                            channel.close()
+                            functionCallDetected = true
+                            return@collect
                         }
                         if (isActive && chunk.text != null) {
                             channel.send(chunk.text!!)
@@ -537,7 +598,7 @@ class GeminiModelClient(
 
             } catch (t: Throwable) {
                 streamJob.cancel()
-                if (t is kotlinx.coroutines.CancellationException) {
+                if (t is kotlinx.coroutines.CancellationException || t.javaClass.simpleName == "SynchronousToolBarrierException" || t.message?.contains("Synchronous ReAct Barrier") == true) {
                     throw t
                 }
 
@@ -600,6 +661,72 @@ class GeminiModelClient(
 
         if (!success) {
             throw RuntimeException("All tried API keys in pool failed or timed out. Last error: $lastErrorDetail")
+        }
+    }.flowOn(Dispatchers.IO)
+
+    suspend fun sendFunctionResponseStream(
+        name: String,
+        sanitizedOutput: String,
+        exitCode: Int,
+        fallbackMessages: JSONArray? = null,
+        systemPrompt: String = ""
+    ): Flow<String> = flow {
+        var collectedAnyText = false
+        val chat = activeChat
+
+        if (chat != null) {
+            try {
+                val historyList = chat.history as? MutableList<Content>
+                if (historyList != null) {
+                    val lastItem = historyList.lastOrNull()
+                    val hasFc = lastItem?.parts?.any { it is FunctionCallPart } == true
+                    if (!hasFc) {
+                        val argsMap = lastFunctionCall?.args ?: mapOf("command" to "")
+                        val fnCallPart = FunctionCallPart(name, argsMap)
+                        if (lastItem != null && lastItem.role == "model") {
+                            val existingParts = lastItem.parts.filter { (it as? com.google.ai.client.generativeai.type.TextPart)?.text?.isNotBlank() ?: true }
+                            val newParts = if (existingParts.isEmpty()) listOf(fnCallPart) else existingParts + fnCallPart
+                            historyList[historyList.size - 1] = Content(role = "model", parts = newParts)
+                        } else {
+                            historyList.add(Content(role = "model", parts = listOf(fnCallPart)))
+                        }
+                    }
+                }
+
+                val toolResponsePart = Part.fromFunctionResponse(name, mapOf("output" to sanitizedOutput, "exit_code" to exitCode))
+                val toolResponseContent = Content(role = "function", parts = listOf(toolResponsePart))
+                val responseFlow = chat.sendMessageStream(toolResponseContent)
+
+                lastFinishReason = null
+                lastTokenCount = 0
+                responseFlow.collect { chunk ->
+                    val candidate = chunk.candidates.firstOrNull()
+                    val reason = candidate?.finishReason?.name
+                    if (!reason.isNullOrBlank()) {
+                        lastFinishReason = reason
+                    }
+                    val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
+                    if (candTokens > 0) {
+                        lastTokenCount = candTokens
+                    }
+                    val text = chunk.text
+                    if (!text.isNullOrEmpty()) {
+                        collectedAnyText = true
+                        emit(text)
+                    }
+                }
+            } catch (t: Throwable) {
+                fileLog("Native sendFunctionResponseStream failed: ${t.message}. Initiating multi-turn fallback.")
+                Log.w(TAG, "Native sendFunctionResponseStream failed: ${t.message}. Initiating multi-turn fallback.", t)
+            }
+        }
+
+        // If native SDK response failed or produced no output, stream via resilient multi-turn Ollama engine
+        if (!collectedAnyText && fallbackMessages != null) {
+            fileLog("Executing resilient second-turn synthesis via generateStreamWithOllamaMessages")
+            generateStreamWithOllamaMessages(fallbackMessages, systemPrompt).collect { chunk ->
+                emit(chunk)
+            }
         }
     }.flowOn(Dispatchers.IO)
 

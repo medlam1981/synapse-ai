@@ -33,38 +33,11 @@ class MultiWorkerOrchestrator(
         private val ggufExecutionMutex = Mutex()
 
         /**
-         * Determines if a user prompt is an orchestration candidate
-         * (e.g. multi-file application, dashboard, fullstack UI, or complex deployment).
+         * Determines if a user prompt is an orchestration candidate.
+         * Disabled to prevent prompt pollution and ensure single-agent execution with the Unified System Prompt.
          */
         fun isOrchestrationCandidate(command: String): Boolean {
-            val lower = command.lowercase().trim()
-            if (lower.length < 5) return false
-
-            val hasActionVerb = lower.contains("deploy") || lower.contains("build") ||
-                    lower.contains("create") || lower.contains("scaffold") ||
-                    lower.contains("make") || lower.contains("develop") ||
-                    lower.contains("design") || lower.contains("generate") ||
-                    lower.contains("setup") || lower.contains("اصنع") ||
-                    lower.contains("انشئ") || lower.contains("ابني")
-
-            val hasTargetNoun = lower.contains("dashboard") || lower.contains("webapp") ||
-                    lower.contains("web app") || lower.contains("website") ||
-                    lower.contains("site") || lower.contains("portal") ||
-                    lower.contains("interface") || lower.contains("frontend") ||
-                    lower.contains("fullstack") || lower.contains("calculator") ||
-                    lower.contains("todo") || lower.contains("notes app") ||
-                    lower.contains("landing page") || lower.contains("auth") ||
-                    lower.contains("multi-worker") || lower.contains("orchestrat")
-
-            // Explicit direct triggers
-            if (lower.startsWith("deploy ") || lower.startsWith("build web") ||
-                lower.startsWith("create web") || lower.startsWith("scaffold ") ||
-                lower.contains("with auth logic") || lower.contains("modern web")
-            ) {
-                return true
-            }
-
-            return hasActionVerb && hasTargetNoun
+            return false
         }
     }
 
@@ -119,15 +92,15 @@ CRITICAL RULES:
             )
         } else {
             // Standard Web App / Dashboard (HTML5 + CSS3 + Modern JavaScript)
-            // Worker 1 (Core Logic & State): app.js
+            // Core Logic & State: app.js
             tasks.add(
                 WorkerSubTask(
-                    workerId = "Worker 1",
+                    workerId = "CoreLogic",
                     role = WorkerRole.CORE_LOGIC,
                     taskDescription = "Synthesizing app.js & business logic...",
                     targetFileNames = listOf("app.js"),
                     prompt = """
-You are Worker 1 (Core Logic & State). Synthesize complete, production-ready JavaScript application logic and state handling for:
+Synthesize complete, production-ready JavaScript application logic and state handling for:
 "$userPrompt"
 
 Target deliverable: app.js
@@ -140,15 +113,15 @@ Requirements:
                 )
             )
 
-            // Worker 2 (Layout & Presentation): index.html & styles.css
+            // Layout & Presentation: index.html & styles.css
             tasks.add(
                 WorkerSubTask(
-                    workerId = "Worker 2",
+                    workerId = "LayoutPresentation",
                     role = WorkerRole.LAYOUT_PRESENTATION,
                     taskDescription = "Scaffolding index.html & styles.css...",
                     targetFileNames = listOf("index.html", "styles.css"),
                     prompt = """
-You are Worker 2 (Layout & Presentation). Synthesize modern semantic HTML and responsive dark-mode styling for:
+Synthesize modern semantic HTML and responsive dark-mode styling for:
 "$userPrompt"
 
 Target deliverables:
@@ -394,7 +367,7 @@ CRITICAL RULES:
 
         try {
             val rawOutput = runLlmPass(
-                systemPrompt = "You are ${task.workerId} (${task.role.displayName}). Output ONLY pure file code without XML tool tags.",
+                systemPrompt = "You are ATLAS-AI, The Elite Autonomous Engineer. Output ONLY pure file code without XML tool tags.",
                 userPrompt = task.prompt,
                 onChunk = onChunk
             )

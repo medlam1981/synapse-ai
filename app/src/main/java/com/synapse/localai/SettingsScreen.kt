@@ -22,11 +22,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
@@ -68,6 +71,7 @@ private fun formatSize(bytes: Long): String {
 @Composable
 fun SettingsScreen(
     viewModel: AgentViewModel,
+    settingsViewModel: SettingsViewModel = viewModel.settingsViewModel,
     onBack: () -> Unit
 ) {
     BackHandler { onBack() }
@@ -75,8 +79,8 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val config = uiState.config
 
-    SynapseAITheme {
-        SettingsScreenContent(viewModel, onBack, uiState, config, context)
+    AtlasAiTheme {
+        SettingsScreenContent(viewModel, settingsViewModel, onBack, uiState, config, context)
     }
 }
 
@@ -84,6 +88,7 @@ fun SettingsScreen(
 @Composable
 fun SettingsScreenContent(
     viewModel: AgentViewModel,
+    settingsViewModel: SettingsViewModel,
     onBack: () -> Unit,
     uiState: AgentUiState,
     config: AgentConfig,
@@ -93,7 +98,12 @@ fun SettingsScreenContent(
     val coroutineScope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
     var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
-    var isScanning by remember { mutableStateOf(false) }
+    var acousticModels by remember { mutableStateOf<List<File>>(emptyList()) }
+    var vocoderModels by remember { mutableStateOf<List<File>>(emptyList()) }
+    var speakerModels by remember { mutableStateOf<List<File>>(emptyList()) }
+    
+    // UI state fixed: initialized to true to prevent state flash
+    var isScanning by remember { mutableStateOf(true) }
 
     // Dynamic Material 3 Color Tokens
     val primary = MaterialTheme.colorScheme.primary
@@ -110,12 +120,21 @@ fun SettingsScreenContent(
     var geminiModelText by remember(config.geminiModelName) { mutableStateOf(config.geminiModelName) }
     var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
+    var gpuLayersText by remember(config.gpuLayers) { mutableStateOf(config.gpuLayers.toString()) }
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
 
     LaunchedEffect(Unit) {
-        // Zero-Overhead: Read exclusively from cached manifests (NO automatic filesystem sweep on resume)
         models = ModelScanner.getBaseModels(context, forceRescan = false)
         mtpModels = ModelScanner.getMtpModels(context, forceRescan = false)
+        if (mtpModels.isEmpty()) {
+            val (freshBase, freshMtp) = ModelScanner.rescanModels(context)
+            models = freshBase
+            mtpModels = freshMtp
+        }
+        acousticModels = ModelScanner.getAcousticModels(context, forceRescan = false)
+        vocoderModels = ModelScanner.getVocoderModels(context, forceRescan = false)
+        speakerModels = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
+        isScanning = false // End of initial scan
     }
 
     Column(
@@ -143,14 +162,8 @@ fun SettingsScreenContent(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(horizontalAlignment = Alignment.Start) {
-                    Text(
-                        "SYSTEM SETTINGS",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
-                    )
+                    AtlasAiBranding(fontSize = 14.sp, lineHeight = 2.dp)
+                    Spacer(Modifier.height(3.dp))
                     Text(
                         "CONFIGURATION CORE • AUTO-SAVED",
                         color = primary,
@@ -629,11 +642,18 @@ fun SettingsScreenContent(
 
                     // Base Model Picker
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("BASE NEURAL MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                        models.filter { ModelScanner.isBaseModelFile(it) }.forEach { file ->
-                            val isSelected = config.localModelPath == file.absolutePath
+                        Text("BASE NEURAL MODEL (PRIMARY BRAIN):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        val distinctBaseModels = models.filter { ModelScanner.isBaseModelFile(it) && !it.name.startsWith(".") }.distinctBy { it.name.lowercase() }
 
-                            Row(
+                        if (distinctBaseModels.isEmpty() && !isScanning) {
+                            Text("No base .gguf models detected in /sdcard/Medlam-Ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                        }
+
+                        distinctBaseModels.forEach { file ->
+                            val isSelected = config.localModelPath == file.absolutePath ||
+                                (config.localModelPath.isNotBlank() && File(config.localModelPath).name.equals(file.name, ignoreCase = true))
+
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
@@ -648,77 +668,164 @@ fun SettingsScreenContent(
                                         )
                                         viewModel.saveConfig(context, newConfig)
                                     }
-                                    .padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(10.dp)
                             ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = {
-                                        val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
-                                        val newDraft = if (config.draftModelPath.isNotBlank()) config.draftModelPath else (matchedMtp?.absolutePath ?: "STANDALONE")
-                                        val newConfig = config.copy(
-                                            localModelPath = file.absolutePath,
-                                            draftModelPath = newDraft,
-                                            preferredModelType = ModelType.GGUF
-                                        )
-                                        viewModel.saveConfig(context, newConfig)
-                                    },
-                                    colors = RadioButtonDefaults.colors(selectedColor = primary)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
-                                    Text(
-                                        formatSize(file.length()) + " • " + (if (isSelected) (if (config.useMmap) "mmap (disk)" else "RAM loaded") + " • " else "") + file.parent,
-                                        color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 10.sp
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = {
+                                            val matchedMtp = ModelScanner.findMatchingMtpModel(file.absolutePath, context)
+                                            val newDraft = if (config.draftModelPath.isNotBlank()) config.draftModelPath else (matchedMtp?.absolutePath ?: "STANDALONE")
+                                            val newConfig = config.copy(
+                                                localModelPath = file.absolutePath,
+                                                draftModelPath = newDraft,
+                                                preferredModelType = ModelType.GGUF
+                                            )
+                                            viewModel.saveConfig(context, newConfig)
+                                        },
+                                        colors = RadioButtonDefaults.colors(selectedColor = primary)
                                     )
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                        Text(
+                                            formatSize(file.length()) + " • " + (if (isSelected) (if (config.useMmap) "💾 DISK (mmap)" else "⚡ RAM (loaded)") + " • " else "") + file.parent,
+                                            color = if (isSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 10.sp
+                                        )
+                                    }
                                 }
+
                                 if (isSelected) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    Spacer(Modifier.height(6.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                                            .padding(horizontal = 8.dp, vertical = 6.dp)
                                     ) {
-                                        Column(horizontalAlignment = Alignment.End) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
                                             Text(
-                                                "mmap",
-                                                color = onPrimaryContainer,
-                                                fontSize = 10.5.sp,
+                                                "BASE MEMORY MODE:",
+                                                fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                fontFamily = FontFamily.Monospace
+                                                fontFamily = FontFamily.Monospace,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
-                                            Text(
-                                                if (config.useMmap) "disk" else "RAM",
-                                                color = onPrimaryContainer.copy(alpha = 0.75f),
-                                                fontSize = 8.5.sp,
-                                                fontFamily = FontFamily.Monospace
-                                            )
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                // Option A: RAM (mlock)
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (config.pinModelInRam || !config.useMmap) Color(0xFF00E676).copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (config.pinModelInRam || !config.useMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.outlineVariant),
+                                                    modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
+                                                        viewModel.togglePinModelInRam(true, context)
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        "⚡ RAM (mlock)",
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                                        fontSize = 9.5.sp,
+                                                        fontWeight = if (config.pinModelInRam || !config.useMmap) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (config.pinModelInRam || !config.useMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+
+                                                // Option B: DISK (mmap)
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (!config.pinModelInRam && config.useMmap) Color(0xFF007BFF).copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (!config.pinModelInRam && config.useMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.outlineVariant),
+                                                    modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
+                                                        viewModel.togglePinModelInRam(false, context)
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        "💾 DISK (mmap)",
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                                        fontSize = 9.5.sp,
+                                                        fontWeight = if (!config.pinModelInRam && config.useMmap) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (!config.pinModelInRam && config.useMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
                                         }
-                                        Switch(
-                                            checked = config.useMmap,
-                                            onCheckedChange = {
-                                                val newConfig = config.copy(useMmap = it)
-                                                viewModel.saveConfig(context, newConfig)
-                                            },
-                                            modifier = Modifier.scale(0.75f),
-                                            colors = SwitchDefaults.colors(
-                                                checkedThumbColor = primary,
-                                                checkedTrackColor = surfaceColor,
-                                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
-                                                uncheckedTrackColor = surfaceContainer
-                                            )
+                                        Text(
+                                            if (!config.pinModelInRam && config.useMmap) "💾 Loaded via disk mmap — safe from low memory / OOM errors." else "⚡ Preloaded into physical RAM — highest inference speed (requires free RAM).",
+                                            fontSize = 8.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                            modifier = Modifier.padding(top = 2.dp)
                                         )
                                     }
                                 }
                             }
                         }
+                    }
 
+                    // Dedicated Opt-in Physical RAM Pinning Toggle (RAM-Heavy Mode)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text(
+                                        "Pin Model into High-Speed Physical RAM (RAM-Heavy Mode)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        if (config.pinModelInRam)
+                                            "⚡ RAM-Heavy Mode Active: Weights pinned into physical RAM via mlock. Storage streaming disabled."
+                                        else
+                                            "💾 Default: Zero-Forced-RAM (mmap). Weights stream on-demand from storage via Linux page cache, preserving physical RAM.",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = config.pinModelInRam,
+                                    onCheckedChange = { isChecked ->
+                                        viewModel.togglePinModelInRam(isChecked, context)
+                                    },
+                                    enabled = !uiState.localModelLoading
+                                )
+                            }
+                        }
                     }
 
                     // User-Driven Companion Draft / MTP Model Selection
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("COMPANION DRAFT / MTP MODEL:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                "COMPANION DRAFT / MTP MODEL (SPECULATIVE ACCELERATION):",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
 
                         // Option 1: Standalone Execution (No MTP)
                         val isStandalone = config.draftModelPath.isBlank() || config.draftModelPath == "STANDALONE"
@@ -727,10 +834,10 @@ fun SettingsScreenContent(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isStandalone) primaryContainer else surfaceContainer)
-                            .clickable {
-                                viewModel.setDraftModelPath(context, "STANDALONE")
-                            }
-                            .padding(10.dp),
+                                .clickable {
+                                    viewModel.setDraftModelPath(context, "STANDALONE")
+                                }
+                                .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -742,16 +849,21 @@ fun SettingsScreenContent(
                             )
                             Spacer(Modifier.width(8.dp))
                             Column {
-                                Text("Standalone Execution (No MTP)", color = if (isStandalone) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Standard autoregressive generation without companion draft", color = if (isStandalone) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                Text("Standalone Execution (No Companion Draft)", color = if (isStandalone) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Standard autoregressive generation without speculative draft", color = if (isStandalone) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                             }
                         }
 
-                        // Option 2: Discovered MTP models from storage
-                        mtpModels.forEach { mtpFile ->
+                        // Option 2: Discovered MTP models and companion drafts (Strictly unique, zero duplicate entries)
+                        val distinctMtpModels = (mtpModels + models.filter { it.length() < 1600L * 1024 * 1024 })
+                            .filter { it.exists() && !it.name.startsWith(".") && !it.name.equals(File(config.localModelPath).name, ignoreCase = true) }
+                            .distinctBy { it.name.lowercase() }
+                            .sortedBy { it.length() }
+                        distinctMtpModels.forEach { mtpFile ->
                             val isMtpSelected = config.draftModelPath == mtpFile.absolutePath ||
-                                (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE" && File(config.draftModelPath).name == mtpFile.name)
-                            Row(
+                                (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE" && File(config.draftModelPath).name.equals(mtpFile.name, ignoreCase = true))
+
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
@@ -759,64 +871,102 @@ fun SettingsScreenContent(
                                     .clickable {
                                         viewModel.setDraftModelPath(context, mtpFile.absolutePath)
                                     }
-                                    .padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(10.dp)
                             ) {
-                                RadioButton(
-                                    selected = isMtpSelected,
-                                    onClick = {
-                                        viewModel.setDraftModelPath(context, mtpFile.absolutePath)
-                                    },
-                                    colors = RadioButtonDefaults.colors(selectedColor = primary)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        mtpFile.name,
-                                        color = if (isMtpSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = isMtpSelected,
+                                        onClick = {
+                                            viewModel.setDraftModelPath(context, mtpFile.absolutePath)
+                                        },
+                                        colors = RadioButtonDefaults.colors(selectedColor = primary)
                                     )
-                                    Text(
-                                        formatSize(mtpFile.length()) + " • " + (if (isMtpSelected) (if (config.draftUseMmap) "mmap (disk)" else "locked in RAM") + " • " else "") + mtpFile.parent,
-                                        color = if (isMtpSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 10.sp
-                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            mtpFile.name,
+                                            color = if (isMtpSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            formatSize(mtpFile.length()) + " • " + (if (isMtpSelected) (if (config.draftUseMmap) "💾 DISK (mmap)" else "⚡ RAM (locked)") + " • " else "") + mtpFile.parent,
+                                            color = if (isMtpSelected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 10.sp
+                                        )
+                                    }
                                 }
+
                                 if (isMtpSelected) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    Spacer(Modifier.height(6.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                                            .padding(horizontal = 8.dp, vertical = 6.dp)
                                     ) {
-                                        Column(horizontalAlignment = Alignment.End) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
                                             Text(
-                                                "mmap",
-                                                color = onPrimaryContainer,
-                                                fontSize = 10.5.sp,
+                                                "DRAFT MEMORY ALLOCATION:",
+                                                fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                fontFamily = FontFamily.Monospace
+                                                fontFamily = FontFamily.Monospace,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
-                                            Text(
-                                                if (config.draftUseMmap) "disk" else "locked",
-                                                color = onPrimaryContainer.copy(alpha = 0.75f),
-                                                fontSize = 8.5.sp,
-                                                fontFamily = FontFamily.Monospace
-                                            )
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                // Option A: RAM (mlock)
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (!config.draftUseMmap) Color(0xFF00E676).copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (!config.draftUseMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.outlineVariant),
+                                                    modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
+                                                        viewModel.toggleDraftMmapState(false, context)
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        "⚡ RAM (mlock)",
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                                        fontSize = 9.5.sp,
+                                                        fontWeight = if (!config.draftUseMmap) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (!config.draftUseMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+
+                                                // Option B: DISK (mmap)
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (config.draftUseMmap) Color(0xFF007BFF).copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (config.draftUseMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.outlineVariant),
+                                                    modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
+                                                        viewModel.toggleDraftMmapState(true, context)
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        "💾 DISK (mmap)",
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                                        fontSize = 9.5.sp,
+                                                        fontWeight = if (config.draftUseMmap) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (config.draftUseMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
                                         }
-                                        Switch(
-                                            checked = config.draftUseMmap,
-                                            onCheckedChange = {
-                                                val newConfig = config.copy(draftUseMmap = it)
-                                                viewModel.saveConfig(context, newConfig)
-                                            },
-                                            modifier = Modifier.scale(0.75f),
-                                            colors = SwitchDefaults.colors(
-                                                checkedThumbColor = primary,
-                                                checkedTrackColor = surfaceColor,
-                                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
-                                                uncheckedTrackColor = surfaceContainer
-                                            )
+                                        Text(
+                                            if (!config.draftUseMmap) "⚡ Draft locked in physical RAM (recommended for <1.5GB draft models to eliminate disk latency)." else "💾 Draft memory-mapped from disk storage (mmap).",
+                                            fontSize = 8.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                            modifier = Modifier.padding(top = 2.dp)
                                         )
                                     }
                                 }
@@ -836,8 +986,11 @@ fun SettingsScreenContent(
                                 }
                                 models = freshBase
                                 mtpModels = freshMtp
+                                acousticModels = ModelScanner.getAcousticModels(context, forceRescan = false)
+                                vocoderModels = ModelScanner.getVocoderModels(context, forceRescan = false)
+                                speakerModels = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
                                 isScanning = false
-                                Toast.makeText(context, "Discovered ${freshBase.size} models, ${freshMtp.size} MTP drafts", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Discovered ${freshBase.size} base, ${freshMtp.size} MTP, ${acousticModels.size} acoustic, ${vocoderModels.size} vocoder", Toast.LENGTH_SHORT).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -875,15 +1028,15 @@ fun SettingsScreenContent(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Context Length Presets (up to 16K)
+                    // Context Length Presets (up to 32K)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("CONTEXT WINDOW HORIZON (UP TO 16K):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        Text("CONTEXT WINDOW HORIZON (UP TO 32K):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            listOf(2048, 4096, 8192, 16384).forEach { size ->
-                                val label = if (size == 16384) "16K" else if (size == 8192) "8K" else if (size == 4096) "4K" else "2K"
+                            listOf(4096, 8192, 16384, 32768).forEach { size ->
+                                val label = if (size == 32768) "32K" else if (size == 16384) "16K" else if (size == 8192) "8K" else "4K"
                                 val isSelected = config.contextLength == size
                                 Surface(
                                     modifier = Modifier.weight(1f).clickable {
@@ -917,13 +1070,13 @@ fun SettingsScreenContent(
                             onValueChange = {
                                 contextLengthText = it
                                 it.toIntOrNull()?.let { len ->
-                                    if (len in 1024..16384) {
+                                    if (len in 1024..32768) {
                                         val newConfig = config.copy(contextLength = len)
                                         viewModel.saveConfig(context, newConfig)
                                     }
                                 }
                             },
-                            label = { Text("Context Size (up to 16K)") },
+                            label = { Text("Context Size (up to 32K)") },
                             modifier = Modifier.weight(1f),
                             colors = settingsFieldColors(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
@@ -943,6 +1096,51 @@ fun SettingsScreenContent(
                             modifier = Modifier.weight(1f),
                             colors = settingsFieldColors(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = gpuLayersText,
+                            onValueChange = {
+                                gpuLayersText = it
+                                it.toIntOrNull()?.let { gl ->
+                                    if (gl in 0..999) {
+                                        val newConfig = config.copy(gpuLayers = gl)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
+                                }
+                            },
+                            enabled = true,
+                            label = { Text("GPU (ngl)") },
+                            modifier = Modifier.weight(1f),
+                            colors = settingsFieldColors(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+
+                    val isVkSupported = remember { LlamaServerJNI.safeIsVulkanSupported() }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val badgeColor = if (isVkSupported) Color(0xFF00E676) else Color(0xFFFFB300)
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(badgeColor)
+                        )
+                        Text(
+                            text = if (isVkSupported) {
+                                "⚡ Vulkan Compute 16-Bit Active • GPU Acceleration Enabled (ngl)"
+                            } else {
+                                "⚙️ Adreno 610 (No 16-bit storage) • Scaled to High-Performance Big CPU Cores"
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = badgeColor,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                     
@@ -976,7 +1174,9 @@ fun SettingsScreenContent(
             SettingsCard(
                 title = "4. UNIFIED INTERNAL PERSONA",
                 titleColor = primary,
-                statusText = "GOD MODE ACTIVE"
+                statusText = "GOD MODE ACTIVE",
+                isCollapsible = true,
+                initialExpanded = false
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -1008,23 +1208,884 @@ fun SettingsScreenContent(
                         }
                     }
 
-                    // Monospace preview of the unified rules
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF0D1117),
-                        border = BorderStroke(1.dp, Color(0xFF30363D))
-                    ) {
-                        Text(
-                            text = UNIFIED_CORE_PROMPT.trim(),
-                            color = Color(0xFF58A6FF),
-                            fontSize = 9.sp,
+                    // Module 4: Dynamic Editable Persona Prompt
+                    val customPersonaPromptValue by settingsViewModel.customPersonaPrompt.collectAsState()
+                    var personaPromptInput by remember(customPersonaPromptValue) { mutableStateOf(customPersonaPromptValue) }
+
+                    OutlinedTextField(
+                        value = personaPromptInput,
+                        onValueChange = {
+                            personaPromptInput = it
+                            settingsViewModel.updatePersonaPrompt(it)
+                            viewModel.updateCustomPersonaPrompt(it, context)
+                        },
+                        label = {
+                            Text(
+                                "Core Persona & System Prompt",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 200.dp, max = 380.dp),
+                        textStyle = TextStyle(
                             fontFamily = FontFamily.Monospace,
-                            lineHeight = 13.sp,
-                            modifier = Modifier.padding(10.dp)
-                        )
+                            fontSize = 10.sp,
+                            lineHeight = 14.5.sp,
+                            color = Color(0xFF79C0FF)
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = Color(0xFF30363D),
+                            focusedTextColor = Color(0xFF79C0FF),
+                            unfocusedTextColor = Color(0xFF79C0FF),
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                            focusedContainerColor = Color(0xFF090D12),
+                            unfocusedContainerColor = Color(0xFF090D12)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Subtle Auto-Save Indicator with Checkmark Icon
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Saved",
+                                tint = Color(0xFF10B981).copy(alpha = 0.85f),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "Auto-saved to DataStore",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        // Material 3 OutlinedButton with Refresh Icon
+                        OutlinedButton(
+                            onClick = {
+                                val def = PersonaDataStore.DEFAULT_PROMPT
+                                personaPromptInput = def
+                                settingsViewModel.resetPersonaPromptToDefault()
+                                viewModel.resetCustomPersonaPrompt(context)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Reset Defaults",
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = "Reset Defaults",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
+
+            // ==========================================
+            // CARD 5: VOICE & AUDIO ENGINE
+            // ==========================================
+            SettingsCard(
+                title = "5. VOICE & AUDIO ENGINE",
+                titleColor = primary,
+                statusDot = if (config.ttsEnabled) primary else MaterialTheme.colorScheme.outlineVariant,
+                statusText = if (config.ttsEnabled) {
+                    when (config.ttsEngineType) {
+                        "HUMAN_NEURAL" -> "NEURAL HUMAN"
+                        "EDGE_ONNX" -> "EDGE ONNX"
+                        else -> "SYSTEM TTS"
+                    }
+                } else "MUTED"
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // 1. Enable / Mute TTS Master Switch
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(surfaceContainer)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "REAL-TIME SPEECH SYNTHESIS (TTS)",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                if (config.ttsEnabled) "Pipelined voice streaming active on assistant responses" else "Voice generation muted",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 9.5.sp
+                            )
+                        }
+                        Switch(
+                            checked = config.ttsEnabled,
+                            onCheckedChange = { isEnabled ->
+                                viewModel.saveConfig(context, config.copy(ttsEnabled = isEnabled))
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onPrimary,
+                                checkedTrackColor = primary
+                            )
+                        )
+                    }
+
+                    // 2. Voice Engine Mode Selector
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "VOICE SYNTHESIS ENGINE:",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "HUMAN_NEURAL" to "Human Neural\n(Google/WaveNet)",
+                                "EDGE_ONNX" to "Edge ONNX\n(Qwen3 0.6B)",
+                                "SYSTEM_DEFAULT" to "System\nStandard"
+                            ).forEach { (engineId, label) ->
+                                val isSelected = config.ttsEngineType == engineId
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(ttsEngineType = engineId))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 9.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            textAlign = TextAlign.Center,
+                                            lineHeight = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Language Selector
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "VOCAL LANGUAGE DETECTION:",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "AUTO" to "Auto (تلقائي)",
+                                "ARABIC" to "Arabic (العربية)",
+                                "ENGLISH" to "English (US)"
+                            ).forEach { (langId, label) ->
+                                val isSelected = config.ttsVoiceLanguage == langId
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(ttsVoiceLanguage = langId))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Sliders for Speed & Pitch
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Speech Rate (Speed)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "SPEECH SPEED / TEMPO:",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                "${String.format("%.2f", config.ttsSpeechRate)}x",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Slider(
+                            value = config.ttsSpeechRate,
+                            onValueChange = { newRate ->
+                                viewModel.saveConfig(context, config.copy(ttsSpeechRate = newRate))
+                            },
+                            valueRange = 0.7f..1.5f,
+                            steps = 7,
+                            colors = SliderDefaults.colors(
+                                thumbColor = primary,
+                                activeTrackColor = primary,
+                                inactiveTrackColor = surfaceContainer
+                            )
+                        )
+
+                        // Voice Pitch
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "VOICE PITCH / TONE:",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                "${String.format("%.2f", config.ttsPitch)}x",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Slider(
+                            value = config.ttsPitch,
+                            onValueChange = { newPitch ->
+                                viewModel.saveConfig(context, config.copy(ttsPitch = newPitch))
+                            },
+                            valueRange = 0.8f..1.2f,
+                            steps = 7,
+                            colors = SliderDefaults.colors(
+                                thumbColor = primary,
+                                activeTrackColor = primary,
+                                inactiveTrackColor = surfaceContainer
+                            )
+                        )
+                    }
+
+                    // 5. Test Voice Button
+                    Button(
+                        onClick = {
+                            val testMsg = if (config.ttsVoiceLanguage == "ENGLISH") {
+                                "Hello! I am your intelligent assistant running locally with high-fidelity speech."
+                            } else {
+                                "مرحباً بك، أنا وكيلك الذكي بنظام Medlam AI. الصوت يعمل بنجاح وبدقة عالية."
+                            }
+                            viewModel.testVoice(context, testMsg)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = primaryContainer,
+                            contentColor = onPrimaryContainer
+                        )
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("TEST VOICE / تجربة الصوت", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
+
+                    // 6. Custom Edge Audio Models Selection (Customizable like GGUF & MTP)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "CUSTOMIZABLE EDGE AUDIO MODELS (/sdcard/Medlam-Ai/tts):",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+
+                        val isSingleStageActive = remember(config.customAcousticModelPath) {
+                            if (config.customAcousticModelPath.isBlank()) false
+                            else ModelScanner.isPiperVitsModel(File(config.customAcousticModelPath))
+                        }
+
+                        // Acoustic Model (.onnx)
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("ACOUSTIC / END-TO-END MODEL (.onnx):", color = primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            if (acousticModels.isEmpty()) {
+                                Text("No custom .onnx found. Using default: qwen3_tts_acoustic_int8.onnx", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                            } else {
+                                acousticModels.forEach { file ->
+                                    val isSelected = config.customAcousticModelPath == file.absolutePath
+                                    val isSingle = ModelScanner.isPiperVitsModel(file)
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isSelected) primaryContainer else surfaceContainer)
+                                            .clickable {
+                                                viewModel.saveConfig(context, config.copy(customAcousticModelPath = file.absolutePath))
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = {
+                                                viewModel.saveConfig(context, config.copy(customAcousticModelPath = file.absolutePath))
+                                            },
+                                            colors = RadioButtonDefaults.colors(selectedColor = primary)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                if (isSingle) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(3.dp),
+                                                        color = primary.copy(alpha = 0.15f)
+                                                    ) {
+                                                        Text("Single-Stage E2E", color = primary, fontSize = 7.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp))
+                                                    }
+                                                }
+                                            }
+                                            val typeLabel = if (isSingle) "⚡ Piper VITS (Vocoder Bypassed)" else "Two-Stage Acoustic"
+                                            Text("$typeLabel • ${formatSize(file.length())} • ${file.parent}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Vocoder Model (.onnx)
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("VOCODER NEURAL SYNTHESIZER (.onnx):", color = primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            if (isSingleStageActive) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = surfaceContainer,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "⚡ Vocoder Bypassed: Active model is Single-Stage Piper VITS. Audio is synthesized and streamed directly from the model output with zero vocoder overhead.",
+                                        color = primary,
+                                        fontSize = 9.sp,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                            } else if (vocoderModels.isEmpty()) {
+                                Text("No custom .onnx found. Using default: qwen3_tts_vocoder_fp16.onnx", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                            } else {
+                                vocoderModels.forEach { file ->
+                                    val isSelected = config.customVocoderModelPath == file.absolutePath
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isSelected) primaryContainer else surfaceContainer)
+                                            .clickable {
+                                                viewModel.saveConfig(context, config.copy(customVocoderModelPath = file.absolutePath))
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = {
+                                                viewModel.saveConfig(context, config.copy(customVocoderModelPath = file.absolutePath))
+                                            },
+                                            colors = RadioButtonDefaults.colors(selectedColor = primary)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column {
+                                            Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text("${formatSize(file.length())} • ${file.parent}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Speaker Embedding Profile (.bin / .npy)
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("SPEAKER IDENTITY PROFILE (.bin / .npy):", color = primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            if (speakerModels.isEmpty()) {
+                                Text("Using default: speaker_embedding.bin (Baked in APK)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
+                            } else {
+                                speakerModels.forEach { file ->
+                                    val isSelected = config.customSpeakerEmbeddingPath == file.absolutePath
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isSelected) primaryContainer else surfaceContainer)
+                                            .clickable {
+                                                viewModel.saveConfig(context, config.copy(customSpeakerEmbeddingPath = file.absolutePath))
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = {
+                                                viewModel.saveConfig(context, config.copy(customSpeakerEmbeddingPath = file.absolutePath))
+                                            },
+                                            colors = RadioButtonDefaults.colors(selectedColor = primary)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column {
+                                            Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text("${formatSize(file.length())} • ${file.parent}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
+
+                    // 7. Embedded APK Assets Status Badge
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = surfaceContainer
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = primary, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "PERMANENT APK ASSETS (BUILT-IN):",
+                                    color = primary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Text(
+                                "✓ config.json (4.4KB) • ✓ vocab.json (2.7MB) • ✓ merges.txt (1.6MB)\n✓ mel_basis.bin (257KB) • ✓ speaker_embedding.bin (6.1MB)",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 9.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 14.sp
+                            )
+                            Text(
+                                "All static audio assets are permanently baked inside the APK. 100% offline, guaranteed preserved even if storage is formatted.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                fontSize = 8.5.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // CARD 6: IMAGE GENERATION & DIFFUSION (ADAPTIVE ENGINE)
+            // ==========================================
+            SettingsCard(
+                title = "6. IMAGE GENERATION & DIFFUSION",
+                titleColor = primary,
+                statusDot = primary,
+                statusText = "${config.sdComputeDevice} • " + (if (config.sdSteps == 0) "AUTO-ADAPTIVE" else "${config.sdSteps} STEPS")
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // 0. COMPUTE BACKEND (وحدة المعالجة للنموذج المحلي CPU / GPU)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "COMPUTE BACKEND (وحدة المعالجة الحسابية):",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                if (config.sdComputeDevice == "GPU") "GPU (Vulkan Adreno 610)" else "CPU (SIMD NEON 4-Cores)",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "CPU" to "⚡ CPU (SIMD NEON)\nمعالج الأنوية الكبيرة taskset f0",
+                                "GPU" to "🎮 GPU (VULKAN ADRENO)\nمعالج الرسوميات تسريع العتاد"
+                            ).forEach { (dev, label) ->
+                                val isSelected = config.sdComputeDevice == dev
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(sdComputeDevice = dev))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 1. Inference Steps Control
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "INFERENCE STEPS (DENOISING):",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                if (config.sdSteps == 0) "AUTO (1-2 Turbo / 15 Std)" else "${config.sdSteps} STEPS",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        // Presets
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                0 to "AUTO",
+                                1 to "1 (TURBO)",
+                                4 to "4 (LCM)",
+                                15 to "15 (STD)",
+                                20 to "20 (HQ)"
+                            ).forEach { (steps, label) ->
+                                val isSelected = config.sdSteps == steps
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(sdSteps = steps))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. CFG Scale (Guidance Scale)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "CFG GUIDANCE SCALE:",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                if (config.sdCfgScale <= 0f) "AUTO (1.0 Turbo / 7.0 Std)" else "${config.sdCfgScale}",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                0.0f to "AUTO",
+                                1.0f to "1.0 (TURBO)",
+                                2.0f to "2.0 (LCM)",
+                                7.0f to "7.0 (STD)"
+                            ).forEach { (cfg, label) ->
+                                val isSelected = config.sdCfgScale == cfg
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(sdCfgScale = cfg))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Storage Streaming & RAM Usage (Zero-Forced-RAM Option)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "RAM USAGE PROFILE (ذاكرة الوصول العشوائي):",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                if (config.sdLowMemoryMode) "ZERO-RAM (DISK)" else "RAM (MMAP)",
+                                color = if (config.sdLowMemoryMode) primary else MaterialTheme.colorScheme.secondary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                true to "ZERO-RAM DISK STREAMING (موصى به)",
+                                false to "RAM MMAP BUFFER (يتطلب رام عالي)"
+                            ).forEach { (isLowMem, label) ->
+                                val isSelected = config.sdLowMemoryMode == isLowMem
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(sdLowMemoryMode = isLowMem))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Diffusion CPU Threading
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "DIFFUSION CPU THREADS:",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                "${config.sdThreads} BIG CORES",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                2 to "2 THREADS (ECO)",
+                                4 to "4 (BIG CORES)",
+                                6 to "6 THREADS (MAX)"
+                            ).forEach { (threads, label) ->
+                                val isSelected = config.sdThreads == threads
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(sdThreads = threads))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 5. Resolution (Width x Height)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "OUTPUT RESOLUTION:",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                (256 to 256) to "256x256 (ZERO-RAM)",
+                                (384 to 384) to "384x384 (BALANCED)",
+                                (512 to 512) to "512x512 (HQ / TILING)"
+                            ).forEach { (dims, label) ->
+                                val isSelected = config.sdWidth == dims.first && config.sdHeight == dims.second
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            viewModel.saveConfig(context, config.copy(sdWidth = dims.first, sdHeight = dims.second))
+                                        },
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(40.dp))
         }
     }
@@ -1037,11 +2098,12 @@ fun SettingsCard(
     statusDot: Color? = null,
     statusText: String? = null,
     isCollapsible: Boolean = false,
+    initialExpanded: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(true) }
-    val isDark = isSystemInDarkTheme()
-    val cardColor = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface
+    var expanded by remember { mutableStateOf(initialExpanded) }
+    val isDark = true
+    val cardColor = MaterialTheme.colorScheme.surfaceContainerLow
     val borderColor = MaterialTheme.colorScheme.outlineVariant
 
     Surface(
@@ -1086,20 +2148,36 @@ fun SettingsCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                if (statusText != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = statusText,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (statusText != null) {
+                        Text(
+                            text = statusText,
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                    }
+                    if (isCollapsible) {
+                        Icon(
+                            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
             
-            androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
