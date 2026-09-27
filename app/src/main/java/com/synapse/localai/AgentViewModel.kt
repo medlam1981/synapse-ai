@@ -56,7 +56,6 @@ import com.synapse.localai.repository.ImageState
 import com.synapse.localai.repository.GeminiImageGenerator
 import com.synapse.localai.repository.LocalDiffusionGenerator
 
-
 enum class ModelType { GGUF, GEMINI }
 
 enum class AgentActionPhase {
@@ -170,9 +169,9 @@ enum class EngineState {
 
 enum class InitializationPhase {
     IDLE,
-    ALLOCATING_MEMORY,     // STATE 1: Allocating Memory... (Base & MTP loading progress with modern LinearProgressIndicator)
-    PARSING_PERSONA,       // STATE 2: Parsing Unified Persona... (Triggered after successful RAM/mmap allocation during KV-cache prefill)
-    SYSTEM_READY           // STATE 3: System Ready
+    ALLOCATING_MEMORY,
+    PARSING_PERSONA,
+    SYSTEM_READY
 }
 
 data class AgentUiState(
@@ -277,10 +276,7 @@ class AgentViewModel : ViewModel() {
         initialValue = SystemStats(0, false, "--", "--", "--", "--", 0, 0, 0)
     )
 
-    // Lightweight hot signal for auto-scroll — avoids carrying scroll intent inside uiState
-    // (which would trigger full recomposition on every token). Replaces streamVersion entirely.
     val scrollSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    // Throttle tokens-per-second HUD updates to max once per 500ms
     @Volatile private var lastTpsUpdateMs = 0L
 
     var taskMemory: TaskMemoryManager? = null
@@ -375,12 +371,6 @@ class AgentViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Silently queries the active text LLM (Local GGUF or Gemini) using Few-Shot prompting
-     * to enrich a short visual prompt into a highly detailed, comma-separated diffusion prompt
-     * BEFORE swapping to the Diffusion engine.
-     * Prevents template echoing on small 2B models.
-     */
     suspend fun enrichVisualPromptWithLLM(shortPrompt: String): String = withContext(Dispatchers.Default) {
         val client = ggufClient
         val isLocalLoaded = (_uiState.value.activeModelType == ModelType.GGUF || _uiState.value.localModelLoaded || (client != null && client.isLoaded))
@@ -445,42 +435,25 @@ class AgentViewModel : ViewModel() {
 
     private fun cleanEnrichedPrompt(raw: String, fallback: String): String {
         if (raw.isBlank()) return fallback
-        // Strip <think>...</think> blocks from reasoning models
         var cleaned = raw.replace(Regex("""<think>[\s\S]*?</think>""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""<think>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""^```(?:markdown|text|plaintext)?\s*""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\s*```$"""), "")
             .trim()
 
-        // Strip role prefixes if echoed
         cleaned = cleaned.replace(Regex("""^(?:Assistant|System|User)\s*:\s*""", RegexOption.IGNORE_CASE), "")
-
-        // Strip prefixes like "Prompt:", "Expanded Prompt:", "Output:", etc.
         cleaned = cleaned.replace(Regex("""^(?:Expanded Prompt|Prompt|Output|Enriched Prompt)\s*:\s*""", RegexOption.IGNORE_CASE), "")
-
-        // Strip outer quotes
         cleaned = cleaned.trim().removeSurrounding("\"").removeSurrounding("'").trim()
 
-        // If the model echoed a template placeholder or bracketed text like "[Your complete...", reject it and use fallback
         if (cleaned.contains("[Your", ignoreCase = true) || cleaned.contains("[Insert", ignoreCase = true) || cleaned.contains("[complete", ignoreCase = true)) {
             Log.w(TAG, "⚡ [Enrichment Interceptor] Detected placeholder echo: \"$cleaned\". Falling back to raw prompt.")
             return fallback
         }
 
-        // If trivial or too short, return fallback
         if (cleaned.length < 5) return fallback
         return cleaned
     }
 
-    /**
-     * Strict Sequential Memory Swapping for 100% Offline Image Synthesis.
-     * Prevents OOM crashes on constrained Snapdragon 665 / 4GB RAM devices:
-     * 1. SUSPEND LLM: Immediately invoke LlamaNativeEngine.unloadModel() to flush GGUF weights & KV cache.
-     * 2. LOAD DIFFUSION: Load local diffusion model / latent synthesizer into freed RAM.
-     * 3. SYNTHESIZE: Generate Bitmap/ByteArray locally using prompt.
-     * 4. UNLOAD DIFFUSION: Flush diffusion engine and intermediate buffers from RAM via unloadDiffusionModel() & GC.
-     * 5. RESUME LLM: Reload .gguf model into RAM via triggerModelLoad and restore context.
-     */
     suspend fun executeSequentialImageSynthesis(prompt: String): ImageResult = withContext(Dispatchers.Default) {
         val hadLocalModel = (_uiState.value.activeModelType == ModelType.GGUF ||
                              _uiState.value.localModelLoaded ||
@@ -495,7 +468,6 @@ class AgentViewModel : ViewModel() {
 
         Log.i(TAG, "⚡ [RAM Swap] Initiating Sequential Memory Swapping for prompt: \"$prompt\" (hadLocalModel=$hadLocalModel)")
 
-        // Step 1: SUSPEND LLM
         if (hadLocalModel) {
             Log.i(TAG, "⚡ [RAM Swap] Step 1/4: Suspending LLM to reclaim RAM...")
             _uiState.update { it.copy(
@@ -527,7 +499,6 @@ class AgentViewModel : ViewModel() {
             System.runFinalization()
         }
 
-        // Step 2: LOAD DIFFUSION & SYNTHESIZE
         Log.i(TAG, "⚡ [RAM Swap] Step 2/4: Synthesizing visual locally...")
         _uiState.update { it.copy(
             activeStatusDetail = "Synthesizing Image...",
@@ -544,7 +515,6 @@ class AgentViewModel : ViewModel() {
             Log.e(TAG, "Error during local diffusion generation: ${e.message}", e)
             return@withContext ImageResult.Error("Local diffusion failed: ${e.message}")
         } finally {
-            // Step 3: UNLOAD DIFFUSION
             Log.i(TAG, "⚡ [RAM Swap] Step 3/4: Flushing Diffusion Engine...")
             _uiState.update { it.copy(
                 activeStatusDetail = "Flushing Diffusion Engine...",
@@ -560,7 +530,6 @@ class AgentViewModel : ViewModel() {
             System.runFinalization()
         }
 
-        // Step 4: RESUME LLM
         if (hadLocalModel && modelPath.isNotBlank() && targetContext != null) {
             Log.i(TAG, "⚡ [RAM Swap] Step 4/4: Reloading LLM into RAM...")
             _uiState.update { it.copy(
@@ -602,14 +571,9 @@ class AgentViewModel : ViewModel() {
     private var coreMission: String = ""
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
-    /**
-     * Context Memory Management: Rolling buffer / context shift for conversation history.
-     * Dynamically shifts out oldest messages when conversation history approaches the active context horizon.
-     */
     private fun trimConversationHistoryToContextLimit(targetTokenCeiling: Int? = null) {
         val maxEstimatedTokens = targetTokenCeiling?.coerceAtLeast(1024) ?: run {
             val ctx = _uiState.value.config.contextLength.coerceIn(2048, 8192)
-            // Leave ample room for system prompt (~600 tokens) and generation (~1024 tokens)
             (ctx - 1500).coerceAtLeast(1024)
         }
         synchronized(conversationHistory) {
@@ -623,7 +587,6 @@ class AgentViewModel : ViewModel() {
         }
     }
 
-    // ── Turn-Level Tool Deduplication & Idempotency Lock ──────────────────────
     private val executedCallsThisTurn = Collections.synchronizedSet(mutableSetOf<String>())
     private val inFlightCalls = Collections.synchronizedSet(mutableSetOf<String>())
 
@@ -667,7 +630,6 @@ class AgentViewModel : ViewModel() {
         return null
     }
 
-
     private fun isExecutableCodeStreaming(text: String): Boolean {
         val lastBackticks = text.lastIndexOf("```")
         if (lastBackticks == -1) return false
@@ -679,13 +641,9 @@ class AgentViewModel : ViewModel() {
 
     private fun cleanVisibleText(raw: String): String {
         var text = raw
-        // 1. Remove fenced thought blocks
         text = text.replace(Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE), "")
-        // 2. Remove all closed thinking tags
         text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
-        // 3. Remove unclosed thinking tags at end
         text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        // 4. Remove tool calls and terminal frames
         text = text.replace(Regex("""<function_calls>[\s\S]*?</function_calls>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<function_calls>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
@@ -693,7 +651,6 @@ class AgentViewModel : ViewModel() {
         text = text.replace(Regex("""<terminal_frame[\s\S]*?</terminal_frame>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<terminal_frame[\s\S]*$""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""Shell output \(`[^`]+`\):\s*```(?:bash|sh)?\r?\n[\s\S]*?```""", RegexOption.IGNORE_CASE), "")
-        // 5. Remove any orphan or stray tags
         text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""</?terminal_frame>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL), "")
@@ -725,12 +682,6 @@ class AgentViewModel : ViewModel() {
         }.take(maxLen)
     }
 
-    /**
-     * Sanitizes process output according to edge device constraints:
-     * - If output is blank or empty, fallback to "[Process completed with no output]"
-     * - Truncate output to the last 600 characters or 15 lines before storing or injecting into context
-     *   to avoid OOM, swap thrashing, and memory saturation on 4GB devices.
-     */
     fun sanitizeProcessOutput(raw: String, maxChars: Int = 600, maxLines: Int = 15): String {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return "[Process completed with no output]"
@@ -755,12 +706,6 @@ class AgentViewModel : ViewModel() {
         return sanitizeProcessOutput(raw, maxChars, maxLines)
     }
 
-    /**
-     * Robust Safe Shell Executor:
-     * Executes commands using ProcessBuilder with redirectErrorStream(true) and a strict 12-second execution timeout.
-     * If exceeded, kills the process forcibly and returns a timeout warning.
-     * Runs strictly on Dispatchers.IO.
-     */
     suspend fun executeSafeProcess(command: String): Pair<Int, String> = withContext(Dispatchers.IO) {
         if (command.isBlank()) return@withContext -1 to "[Process completed with no output]"
 
@@ -878,206 +823,201 @@ class AgentViewModel : ViewModel() {
             try {
                 val loaded = PersonaDataStore.getCustomPersonaPrompt(context)
                 _customPersonaPrompt.value = loaded
-                PersonaDataStore.getCustomPersonaPromptFlow(context).collectLatest { prompt ->
-                    _customPersonaPrompt.value = prompt
+                launch {
+                    PersonaDataStore.getCustomPersonaPromptFlow(context).collectLatest { prompt ->
+                        _customPersonaPrompt.value = prompt
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load customPersonaPrompt from DataStore: ${e.message}")
             }
-        }
-        Log.i(TAG, "Starting loadConfig...")
-        try {
-            if (portalServer == null) {
-                portalServer = PortalServer(this)
-                portalServer?.start()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "PortalServer init failed", e)
-        }
 
-        try {
-            val prefs = prefs(context)
-            val savedPath = prefs.getString("local_model_path", null)
-            
-            val hasMigrated4k = prefs.getBoolean("has_migrated_4k_baseline_context", false)
-            var savedContext = prefs.getInt("context_length", 4096)
-            var savedThreads = 4 // Strictly locked to 4 Kryo 260 Gold performance cores
-            if (!hasMigrated4k || savedContext < 4096) {
-                savedContext = 4096
-                savedThreads = 4
-                prefs.edit()
-                    .putBoolean("has_migrated_4k_baseline_context", true)
-                    .putInt("context_length", 4096)
-                    .putInt("thread_count", 4)
-                    .putBoolean("use_mmap", true)
-                    .apply()
-            } else {
-                savedContext = savedContext.coerceIn(2048, 8192)
-                savedThreads = 4
-            }
-
-            
-            val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
-            val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
-            var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
-            var geminiModel = prefs.getString("gemini_model_name", "gemini-2.0-flash") ?: "gemini-2.0-flash"
-            ModelScanner.ensureDirectories()
-            val activePersonasSet = PersonaManager.getActivePersonas(context)
-            val activePersonaName = activePersonasSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
-            val cachedPersonasList = PersonaManager.getPersonas(context, forceRescan = false)
-            
-            var localPath = savedPath ?: ""
-            val isCorruptLegacy = localPath.contains("qwen-to-mobilellm-r1-140m", ignoreCase = true)
-            if (localPath.isBlank() || isCorruptLegacy || !File(localPath).exists() || !ModelScanner.isBaseModelFile(File(localPath))) {
-                val cachedModels = ModelScanner.getBaseModels(context, forceRescan = true)
-                    .filter { ModelScanner.isBaseModelFile(it) }
-                if (cachedModels.isNotEmpty()) {
-                    val preferred = cachedModels.firstOrNull { ModelScanner.isQuantizedModel(it) } ?: cachedModels.first()
-                    localPath = preferred.absolutePath
-                    prefs.edit().putString("local_model_path", localPath).apply()
+            Log.i(TAG, "Starting background loadConfig on Dispatchers.IO...")
+            try {
+                if (portalServer == null) {
+                    portalServer = PortalServer(this@AgentViewModel)
+                    portalServer?.start()
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "PortalServer init failed", e)
             }
-            val rawDraft = AgentSettingsRepository.getDraftModelPath(context).ifBlank {
-                prefs.getString("draft_model_path", "") ?: ""
-            }
-            val isExplicitStandalone = rawDraft == "STANDALONE"
-            val draftFile = if (!isExplicitStandalone && rawDraft.isNotBlank()) File(rawDraft) else null
-            val isDraftValid = draftFile != null && draftFile.exists() &&
-                (draftFile.name.contains("gemma", ignoreCase = true) || ModelScanner.isMtpModelFile(draftFile))
 
-            val draftPath = when {
-                isExplicitStandalone -> "STANDALONE"
-                isDraftValid -> rawDraft
-                else -> {
-                    if (localPath.isNotBlank()) {
-                        val matched = ModelScanner.findMatchingMtpModel(localPath, context)
-                        if (matched != null && matched.exists()) {
-                            matched.absolutePath
+            try {
+                val prefs = prefs(context)
+                val savedPath = prefs.getString("local_model_path", null)
+                
+                val hasMigrated4k = prefs.getBoolean("has_migrated_4k_baseline_context", false)
+                var savedContext = prefs.getInt("context_length", 4096)
+                if (!hasMigrated4k || savedContext < 4096) {
+                    savedContext = 4096
+                    prefs.edit()
+                        .putBoolean("has_migrated_4k_baseline_context", true)
+                        .putInt("context_length", 4096)
+                        .putInt("thread_count", 4)
+                        .putBoolean("use_mmap", true)
+                        .apply()
+                } else {
+                    savedContext = savedContext.coerceIn(2048, 8192)
+                }
+
+                val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
+                val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
+                var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
+                var geminiModel = prefs.getString("gemini_model_name", "gemini-2.0-flash") ?: "gemini-2.0-flash"
+                ModelScanner.ensureDirectories()
+                val activePersonasSet = PersonaManager.getActivePersonas(context)
+                val activePersonaName = activePersonasSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
+                val cachedPersonasList = PersonaManager.getPersonas(context, forceRescan = false)
+                
+                var localPath = savedPath ?: ""
+                val isCorruptLegacy = localPath.contains("qwen-to-mobilellm-r1-140m", ignoreCase = true)
+                if (localPath.isBlank() || isCorruptLegacy || !File(localPath).exists() || !ModelScanner.isBaseModelFile(File(localPath))) {
+                    val cachedModels = ModelScanner.getBaseModels(context, forceRescan = true)
+                        .filter { ModelScanner.isBaseModelFile(it) }
+                    if (cachedModels.isNotEmpty()) {
+                        val preferred = cachedModels.firstOrNull { ModelScanner.isQuantizedModel(it) } ?: cachedModels.first()
+                        localPath = preferred.absolutePath
+                        prefs.edit().putString("local_model_path", localPath).apply()
+                    }
+                }
+                val rawDraft = AgentSettingsRepository.getDraftModelPath(context).ifBlank {
+                    prefs.getString("draft_model_path", "") ?: ""
+                }
+                val isExplicitStandalone = rawDraft == "STANDALONE"
+                val draftFile = if (!isExplicitStandalone && rawDraft.isNotBlank()) File(rawDraft) else null
+                val isDraftValid = draftFile != null && draftFile.exists() &&
+                    (draftFile.name.contains("gemma", ignoreCase = true) || ModelScanner.isMtpModelFile(draftFile))
+
+                val draftPath = when {
+                    isExplicitStandalone -> "STANDALONE"
+                    isDraftValid -> rawDraft
+                    else -> {
+                        if (localPath.isNotBlank()) {
+                            val matched = ModelScanner.findMatchingMtpModel(localPath, context)
+                            if (matched != null && matched.exists()) {
+                                matched.absolutePath
+                            } else {
+                                "STANDALONE"
+                            }
                         } else {
                             "STANDALONE"
                         }
-                    } else {
-                        "STANDALONE"
                     }
                 }
-            }
-            val gpuLayers = prefs.getInt("gpu_layers", 0)
-            val pinModelInRam = prefs.getBoolean("pin_model_in_ram", false)
-            val useMmap = if (pinModelInRam) false else prefs.getBoolean("use_mmap", true)
-            val draftUseMmap = if (pinModelInRam) false else prefs.getBoolean("draft_use_mmap", true)
+                val gpuLayers = prefs.getInt("gpu_layers", 0)
+                val pinModelInRam = prefs.getBoolean("pin_model_in_ram", false)
+                val useMmap = if (pinModelInRam) false else prefs.getBoolean("use_mmap", true)
+                val draftUseMmap = if (pinModelInRam) false else prefs.getBoolean("draft_use_mmap", true)
 
-            val activeKeysList = geminiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            val activeGeminiKeyCount = activeKeysList.size
-            var effectiveModelType = modelType
-            if (effectiveModelType == ModelType.GEMINI && activeGeminiKeyCount == 0 && localPath.isNotBlank()) {
-                effectiveModelType = ModelType.GGUF
-            }
-            
-            val config = AgentConfig(
-                preferredModelType = effectiveModelType,
-                localModelPath = localPath,
-                draftModelPath = draftPath,
-                gpuLayers = gpuLayers,
-                useMmap = useMmap,
-                draftUseMmap = draftUseMmap,
-                pinModelInRam = pinModelInRam,
-                geminiApiKeys = geminiKeys,
-                geminiModelName = geminiModel,
-                serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
-                serverPort = prefs.getInt("server_port", 8088),
-                contextLength = if (savedContext in 2048..8192) savedContext else 4096,
-                threadCount = prefs.getInt("thread_count", 4).let { if (it in 1..32) it else 4 },
-                maxTokens = prefs.getInt("max_tokens", 2048).let { if (it <= 0) 2048 else it },
-                temperature = prefs.getFloat("temperature", 0.4f).let { if (it == 0.7f || it == 0.5f) 0.4f else it },
-                enableVisualHistory = prefs.getBoolean("enable_visual_history", false),
-                enableNeuralReflexes = prefs.getBoolean("enable_neural_reflexes", false),
-                enabledSpecializedAgents = prefs.getStringSet("enabled_agents", emptySet()) ?: emptySet(),
-                systemPrompt = prefs.getString("system_prompt", "") ?: "",
-                customToolsPrompt = prefs.getString("custom_tools_prompt", "") ?: "",
-                showApiKeyTracker = prefs.getBoolean("show_api_key_tracker", true),
-                activePersona = activePersonaName,
-                activePersonas = activePersonasSet,
-                ttsEnabled = prefs.getBoolean("tts_enabled", true),
-                ttsEngineType = prefs.getString("tts_engine_type", "HUMAN_NEURAL") ?: "HUMAN_NEURAL",
-                ttsVoiceLanguage = prefs.getString("tts_voice_language", "AUTO") ?: "AUTO",
-                ttsSpeechRate = prefs.getFloat("tts_speech_rate", 1.0f),
-                ttsPitch = prefs.getFloat("tts_pitch", 0.88f),
-                customAcousticModelPath = prefs.getString("custom_acoustic_model_path", "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx") ?: "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx",
-                customVocoderModelPath = prefs.getString("custom_vocoder_model_path", "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx") ?: "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx",
-                customSpeakerEmbeddingPath = prefs.getString("custom_speaker_embedding_path", "") ?: "",
-                sdSteps = prefs.getInt("sd_steps", 0),
-                sdCfgScale = prefs.getFloat("sd_cfg_scale", 0f),
-                sdWidth = prefs.getInt("sd_width", 256).let { if (it <= 0) 256 else it },
-                sdHeight = prefs.getInt("sd_height", 256).let { if (it <= 0) 256 else it },
-                sdLowMemoryMode = prefs.getBoolean("sd_low_memory_mode", true),
-                sdThreads = prefs.getInt("sd_threads", 4).let { if (it <= 0) 4 else it },
-                sdEngineMode = prefs.getString("sd_engine_mode", "SD_TURBO") ?: "SD_TURBO",
-                sdComputeDevice = prefs.getString("sd_compute_device", "CPU") ?: "CPU"
-            )
-
-            getOrCreateCascadeInterceptor(context).applyConfig(config)
-
-            // Cold-Start Memory: Restore last known working key index directly from disk
-            val savedKeyIndex = prefs.getInt("current_key_index", 0)
-            val safeKeyIndex = if (activeGeminiKeyCount > 0) savedKeyIndex.coerceIn(0, activeGeminiKeyCount - 1) else 0
-
-            val newDraftPath = if (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE") config.draftModelPath else null
-            val baseModelName = if (config.localModelPath.isNotBlank()) {
-                File(config.localModelPath).nameWithoutExtension
-            } else {
-                val baseModels = ModelScanner.getBaseModels(context)
-                baseModels.firstOrNull()?.nameWithoutExtension ?: "GEMMA-4-E2B Q4"
-            }
-
-            _uiState.update { 
-                it.copy(
-                    config = config, 
-                    totalKeys = activeGeminiKeyCount,
-                    currentKeyIndex = safeKeyIndex,
+                val activeKeysList = geminiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val activeGeminiKeyCount = activeKeysList.size
+                var effectiveModelType = modelType
+                if (effectiveModelType == ModelType.GEMINI && activeGeminiKeyCount == 0 && localPath.isNotBlank()) {
+                    effectiveModelType = ModelType.GGUF
+                }
+                
+                val config = AgentConfig(
+                    preferredModelType = effectiveModelType,
+                    localModelPath = localPath,
+                    draftModelPath = draftPath,
+                    gpuLayers = gpuLayers,
+                    useMmap = useMmap,
+                    draftUseMmap = draftUseMmap,
+                    pinModelInRam = pinModelInRam,
+                    geminiApiKeys = geminiKeys,
+                    geminiModelName = geminiModel,
+                    serverHost = prefs.getString("server_host", "0.0.0.0") ?: "0.0.0.0",
+                    serverPort = prefs.getInt("server_port", 8088),
+                    contextLength = if (savedContext in 2048..8192) savedContext else 4096,
+                    threadCount = prefs.getInt("thread_count", 4).let { if (it in 1..32) it else 4 },
+                    maxTokens = prefs.getInt("max_tokens", 2048).let { if (it <= 0) 2048 else it },
+                    temperature = prefs.getFloat("temperature", 0.4f).let { if (it == 0.7f || it == 0.5f) 0.4f else it },
+                    enableVisualHistory = prefs.getBoolean("enable_visual_history", false),
+                    enableNeuralReflexes = prefs.getBoolean("enable_neural_reflexes", false),
+                    enabledSpecializedAgents = prefs.getStringSet("enabled_agents", emptySet()) ?: emptySet(),
+                    systemPrompt = prefs.getString("system_prompt", "") ?: "",
+                    customToolsPrompt = prefs.getString("custom_tools_prompt", "") ?: "",
+                    showApiKeyTracker = prefs.getBoolean("show_api_key_tracker", true),
                     activePersona = activePersonaName,
                     activePersonas = activePersonasSet,
-                    availablePersonas = cachedPersonasList,
-                    activeDraftModelPath = newDraftPath,
-                    activeModelName = baseModelName,
-                    isTtsEnabled = config.ttsEnabled
-                ) 
-            }
-            prefs.edit()
-                .putInt("context_length", config.contextLength)
-                .putInt("max_tokens", -1)
-                .apply()
+                    ttsEnabled = prefs.getBoolean("tts_enabled", true),
+                    ttsEngineType = prefs.getString("tts_engine_type", "HUMAN_NEURAL") ?: "HUMAN_NEURAL",
+                    ttsVoiceLanguage = prefs.getString("tts_voice_language", "AUTO") ?: "AUTO",
+                    ttsSpeechRate = prefs.getFloat("tts_speech_rate", 1.0f),
+                    ttsPitch = prefs.getFloat("tts_pitch", 0.88f),
+                    customAcousticModelPath = prefs.getString("custom_acoustic_model_path", "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx") ?: "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx",
+                    customVocoderModelPath = prefs.getString("custom_vocoder_model_path", "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx") ?: "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx",
+                    customSpeakerEmbeddingPath = prefs.getString("custom_speaker_embedding_path", "") ?: "",
+                    sdSteps = prefs.getInt("sd_steps", 0),
+                    sdCfgScale = prefs.getFloat("sd_cfg_scale", 0f),
+                    sdWidth = prefs.getInt("sd_width", 256).let { if (it <= 0) 256 else it },
+                    sdHeight = prefs.getInt("sd_height", 256).let { if (it <= 0) 256 else it },
+                    sdLowMemoryMode = prefs.getBoolean("sd_low_memory_mode", true),
+                    sdThreads = prefs.getInt("sd_threads", 4).let { if (it <= 0) 4 else it },
+                    sdEngineMode = prefs.getString("sd_engine_mode", "SD_TURBO") ?: "SD_TURBO",
+                    sdComputeDevice = prefs.getString("sd_compute_device", "CPU") ?: "CPU"
+                )
 
-            consolidateWorkspaceDirectories()
+                getOrCreateCascadeInterceptor(context).applyConfig(config)
 
-            if (chatDb == null) {
-                chatDb = ChatDatabaseHelper(context)
-            }
-            chatDb?.cleanupEmptySessions()
-            refreshSessions()
+                val savedKeyIndex = prefs.getInt("current_key_index", 0)
+                val safeKeyIndex = if (activeGeminiKeyCount > 0) savedKeyIndex.coerceIn(0, activeGeminiKeyCount - 1) else 0
 
-            // Pristine Default Workspace: Every cold launch always lands on a fresh, clean slate
-            startNewSession()
-            _uiState.update { it.copy(
-                logs = emptyList(),
-                resumptionNotice = null,
-                activeWorkspacePath = null
-            ) }
-
-            loadWorkflows(prefs)
-            initTaskSystem(context)
-            startScheduler()
-            scanSpecializedAgents()
-
-            if (config.preferredModelType == ModelType.GGUF && config.localModelPath.isNotBlank()) {
-                viewModelScope.launch {
-                    triggerModelLoad(context, config.localModelPath)
+                val newDraftPath = if (config.draftModelPath.isNotBlank() && config.draftModelPath != "STANDALONE") config.draftModelPath else null
+                val baseModelName = if (config.localModelPath.isNotBlank()) {
+                    File(config.localModelPath).nameWithoutExtension
+                } else {
+                    val baseModels = ModelScanner.getBaseModels(context)
+                    baseModels.firstOrNull()?.nameWithoutExtension ?: "GEMMA-4-E2B Q4"
                 }
-            } else if (config.preferredModelType == ModelType.GEMINI && activeGeminiKeyCount > 0) {
-                loadGeminiModel(config.geminiApiKeys, config.geminiModelName, context)
+
+                _uiState.update { 
+                    it.copy(
+                        config = config, 
+                        totalKeys = activeGeminiKeyCount,
+                        currentKeyIndex = safeKeyIndex,
+                        activePersona = activePersonaName,
+                        activePersonas = activePersonasSet,
+                        availablePersonas = cachedPersonasList,
+                        activeDraftModelPath = newDraftPath,
+                        activeModelName = baseModelName,
+                        isTtsEnabled = config.ttsEnabled
+                    ) 
+                }
+                prefs.edit()
+                    .putInt("context_length", config.contextLength)
+                    .putInt("max_tokens", -1)
+                    .apply()
+
+                consolidateWorkspaceDirectories()
+
+                if (chatDb == null) {
+                    chatDb = ChatDatabaseHelper(context)
+                }
+                chatDb?.cleanupEmptySessions()
+                refreshSessions()
+
+                startNewSession()
+                _uiState.update { it.copy(
+                    logs = emptyList(),
+                    resumptionNotice = null,
+                    activeWorkspacePath = null
+                ) }
+
+                loadWorkflows(prefs)
+                initTaskSystem(context)
+                startScheduler()
+                scanSpecializedAgents()
+
+                if (config.preferredModelType == ModelType.GGUF && config.localModelPath.isNotBlank()) {
+                    triggerModelLoad(context, config.localModelPath)
+                } else if (config.preferredModelType == ModelType.GEMINI && activeGeminiKeyCount > 0) {
+                    loadGeminiModel(config.geminiApiKeys, config.geminiModelName, context)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "initialize failed", e)
+                addLog(LogEntry(sender = "SYSTEM", text = "Boot Error: ${e.message}", isError = true))
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "initialize failed", e)
-            addLog(LogEntry(sender = "SYSTEM", text = "Boot Error: ${e.message}", isError = true))
         }
     }
 
@@ -1101,7 +1041,7 @@ class AgentViewModel : ViewModel() {
 
         if (updatedConfig.preferredModelType == ModelType.GGUF && updatedConfig.localModelPath.isNotBlank()) {
             closeAllModels()
-            viewModelScope.launch {
+            viewModelScope.launch(Dispatchers.IO) {
                 delay(300)
                 triggerModelLoad(context, updatedConfig.localModelPath)
             }
@@ -1220,7 +1160,7 @@ class AgentViewModel : ViewModel() {
         if (finalConfig.preferredModelType == ModelType.GGUF) {
             if (modelChanged || draftChanged || typeChanged || mmapChanged || notLoaded) {
                 closeAllModels()
-                viewModelScope.launch {
+                viewModelScope.launch(Dispatchers.IO) {
                     delay(300)
                     triggerModelLoad(context, finalConfig.localModelPath)
                 }
@@ -1238,19 +1178,10 @@ class AgentViewModel : ViewModel() {
 
     fun updateConfig(config: AgentConfig, context: Context) = saveConfig(context, config)
 
-    /**
-     * Force model unload before applying new mmap state.
-     * 1. Prevents changes while the engine is actively loading.
-     * 2. Frees RAM/VRAM/process resources if the model is currently active.
-     * 3. Persists the new setting to preferences/DataStore.
-     * 4. Re-initializes the model with the updated mmap parameter.
-     */
     fun toggleMmapState(enableMmap: Boolean, context: Context? = null) {
-        viewModelScope.launch {
-            // Prevent changes while the engine is actively loading
+        viewModelScope.launch(Dispatchers.IO) {
             if (_uiState.value.localModelLoading || isModelLoadingInProgress) return@launch
 
-            // Free RAM/VRAM if the model is currently active
             if (_uiState.value.localModelLoaded || isModelLoaded()) {
                 closeAllModels()
             }
@@ -1260,7 +1191,6 @@ class AgentViewModel : ViewModel() {
             val newConfig = currentConfig.copy(useMmap = enableMmap)
             _uiState.update { it.copy(config = newConfig) }
 
-            // Persist the new setting to DataStore/Preferences
             if (targetContext != null) {
                 AgentSettingsRepository.saveConfig(targetContext, newConfig)
                 try {
@@ -1268,7 +1198,6 @@ class AgentViewModel : ViewModel() {
                 } catch (_: Exception) {}
             }
 
-            // Re-initialize the model with the updated mmap parameter
             val selectedModelPath = newConfig.localModelPath
             if (newConfig.preferredModelType == ModelType.GGUF && selectedModelPath.isNotBlank() && targetContext != null) {
                 delay(300)
@@ -1280,7 +1209,7 @@ class AgentViewModel : ViewModel() {
     fun toggleMmapState(enableMmap: Boolean) = toggleMmapState(enableMmap, null)
 
     fun toggleDraftMmapState(enableMmap: Boolean, context: Context? = null) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             if (_uiState.value.localModelLoading || isModelLoadingInProgress) return@launch
 
             if (_uiState.value.localModelLoaded || isModelLoaded()) {
@@ -1309,15 +1238,8 @@ class AgentViewModel : ViewModel() {
 
     fun toggleDraftMmapState(enableMmap: Boolean) = toggleDraftMmapState(enableMmap, null)
 
-    /**
-     * Dedicated Opt-in Physical RAM Pinning (RAM-Heavy Mode):
-     * - Default: DISABLED / OFF (Zero-Forced-RAM, mmap-First, Storage-Streamed).
-     * - When OFF: All backends initialize with use_mmap = true and use_mlock = false.
-     * - When ON: Checks ActivityManager.MemoryInfo. If free RAM > (Model Size + 1.5GB buffer),
-     *   permits use_mlock = true / in-memory loading. If insufficient, reverts to mmap with a warning Toast.
-     */
     fun togglePinModelInRam(enable: Boolean, context: Context? = null) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             if (_uiState.value.localModelLoading || isModelLoadingInProgress) return@launch
 
             val targetContext = context ?: appContext ?: MainActivity.instance
@@ -1331,7 +1253,7 @@ class AgentViewModel : ViewModel() {
                 val availRamMb = memInfo.availMem / (1024 * 1024)
                 val modelFile = File(_uiState.value.config.localModelPath)
                 val modelSizeMb = if (modelFile.exists()) modelFile.length() / (1024 * 1024) else 2000L
-                val requiredRamMb = modelSizeMb + 1536L // Model size + 1.5GB safety buffer
+                val requiredRamMb = modelSizeMb + 1536L
 
                 if (availRamMb <= requiredRamMb) {
                     finalEnable = false
@@ -1382,20 +1304,20 @@ class AgentViewModel : ViewModel() {
     @Volatile private var isModelLoadingInProgress = false
     @Volatile private var currentLoadingPath: String? = null
 
-    suspend fun triggerModelLoad(context: Context, path: String) {
+    suspend fun triggerModelLoad(context: Context, path: String) = withContext(Dispatchers.IO) {
         if (isModelLoadingInProgress && currentLoadingPath == path) {
             Log.i(TAG, "Model load already in progress for $path, ignoring duplicate trigger")
-            return
+            return@withContext
         }
         if (ggufClient?.isLoaded == true && currentLoadingPath == path && _uiState.value.localModelLoaded) {
             Log.i(TAG, "Model already loaded and operational for $path")
-            return
+            return@withContext
         }
         isModelLoadingInProgress = true
         currentLoadingPath = path
         modelLoadJob?.cancel()
 
-        modelLoadJob = viewModelScope.launch {
+        modelLoadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val type = detectModelType(path)
                 val modelName = java.io.File(path).nameWithoutExtension
@@ -1462,9 +1384,13 @@ class AgentViewModel : ViewModel() {
                                         try {
                                             val dynamicPersona = getEffectivePersonaPrompt(context)
                                             val systemPrompt = buildSystemPrompt(context, forLocalModel = true, dynamicPersonaPrompt = dynamicPersona)
-                                            val primed = client.warmupPersonaKVCache(systemPrompt)
+                                            val primed = withTimeoutOrNull(12_000L) {
+                                                client.warmupPersonaKVCache(systemPrompt)
+                                            } ?: false
                                             if (primed) {
                                                 addSystemLog("Persona KV Cache Primed & Pre-warmed ✓")
+                                            } else {
+                                                Log.i(TAG, "KV Cache pre-warm skipped or completed gracefully")
                                             }
                                         } catch (e: Exception) {
                                             Log.w(TAG, "Background pre-warm notice: ${e.message}")
@@ -1615,6 +1541,7 @@ class AgentViewModel : ViewModel() {
     }
 
     private fun getToolsDescription(): String {
+        val bt = "\u0060\u0060\u0060"
         return """
 ## Host Action & System Toolchains:
 You have direct programmatic access to the host Android system through these toolchains:
@@ -1636,10 +1563,10 @@ Format for calling tools:
 ## Autonomous Workspace File Engine:
 To create or update files in the local workspace (`/sdcard/Medlam-Ai/...`), specify the file path immediately above a fenced code block:
 file: /sdcard/Medlam-Ai/webapp/index.html
-```html
+${bt}html
 <!DOCTYPE html>
 <html>...</html>
-```
+$bt
 The file execution engine automatically parses this block and writes the file directly to device storage.
 """.trimIndent()
     }
@@ -1706,7 +1633,6 @@ The file execution engine automatically parses this block and writes the file di
             "\n\nCRITICAL: For code generation, bypass all logical reasoning and <think> steps. Begin your response IMMEDIATELY with the markdown code block. Do not output internal thoughts."
         } else ""
 
-        // Distilled high-density prompt for on-device GGUF execution (cuts CPU prefill latency to <2s)
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
             val prompt = """$effectivePersona
@@ -1725,10 +1651,8 @@ Format code in ```lang fences.$custom$antiMonologueDirective""".trimIndent()
             return cachedStaticPrefix!!
         }
 
-        // 1. Distilled Epistemic Mind (hardware, memory snapshot, user preferences)
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
 
-        // 2. Operational Toolchains & Execution Guidelines (High-density, token-efficient format)
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
 CRITICAL UI RULE: Never output raw shell commands, heredocs (cat << 'EOF'), or raw command logs directly into conversational dialogue. For creating or editing files, always call the dedicated write_file tool. To launch an Android app, always call open_app(package_name) natively; never pipe 'am start' through run_shell. When calling run_shell, supply clean, concise system commands only. Keep conversational responses focused on human-readable summaries, architectural analysis, and verified status reports.
@@ -1762,7 +1686,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         val trimmed = command.trim()
         cascadeInterceptor?.stopAndFlush()
 
-        // MODULE 4: Direct Shell REPL ($ Prefix Token Bypass)
         if (trimmed.startsWith("$")) {
             val shellCmd = trimmed.removePrefix("$").trim()
             autoTitleSessionIfNew(command)
@@ -1799,8 +1722,8 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             return
         }
 
-        // MODULE 2: Slash Command Autocomplete Engine Routing (/ Trigger)
-        if (trimmed.startsWith("/") && MediaIntentClassifier.classify(trimmed) is MediaIntent.TextDialogue) {
+        // FIXED: Do NOT intercept /image as an unknown slash command
+        if (trimmed.startsWith("/") && !trimmed.startsWith("/image", ignoreCase = true) && MediaIntentClassifier.classify(trimmed) is MediaIntent.TextDialogue) {
             val slashCmd = trimmed.substringBefore(" ").lowercase()
             autoTitleSessionIfNew(command)
             val userLog = LogEntry(sender = "USER", text = command)
@@ -1850,7 +1773,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
         val userLog = LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]")
         addLog(userLog)
         val sid = currentSessionId.value
-        val detectedInitialPath = ToolExecutor.detectFilePath(command)
 
         viewModelScope.launch(Dispatchers.IO) {
             chatDb?.insertMessage(
@@ -1864,7 +1786,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             )
             refreshSessions()
         }
-
 
         val lowerCmd = command.lowercase().trim()
         val isBackgroundRequest = lowerCmd.contains("in background") || lowerCmd.contains("فالخلفية") || 
@@ -1885,7 +1806,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
             }
             addLog(userLog)
             addLog(LogEntry(sender = "AGENT", text = confirmMsg))
-            val sid = currentSessionId.value
             viewModelScope.launch(Dispatchers.IO) {
                 chatDb?.insertMessage(ChatMessageEntity(id = userLog.id, sessionId = sid, sender = "USER", text = userLog.text, timestamp = userLog.timestamp))
                 chatDb?.insertMessage(ChatMessageEntity(id = UUID.randomUUID().toString(), sessionId = sid, sender = "AGENT", text = confirmMsg, timestamp = System.currentTimeMillis()))
@@ -1911,7 +1831,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                 var finalCommand = command
                 val imageBase64List = mutableListOf<String>()
 
-                // Silent background web search pre-fetch for live weather & real-time queries
                 val isWeatherOrSearch = lowerCmd.contains("weather") || lowerCmd.contains("طقس") || 
                     lowerCmd.contains("météo") || lowerCmd.contains("meteo") || 
                     lowerCmd.contains("search for") || lowerCmd.contains("ابحث عن") ||
@@ -1958,8 +1877,14 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                     conversationHistory.add("user" to finalCommand)
                 }
 
-                // ── Native Dynamic Media Broker Intercept (Image & Video) ───────
-                val mediaIntent = MediaIntentClassifier.classify(finalCommand)
+                // FIXED: Direct Routing for /image commands
+                val mediaIntent = if (finalCommand.trim().startsWith("/image", ignoreCase = true)) {
+                    val cleanPrompt = finalCommand.trim().removePrefix("/image").trim()
+                    MediaIntent.GenerateImage(prompt = cleanPrompt, rawInput = finalCommand, isArabic = isArabic(cleanPrompt))
+                } else {
+                    MediaIntentClassifier.classify(finalCommand)
+                }
+
                 if (mediaIntent !is MediaIntent.TextDialogue) {
                     val isCloud = modelType == ModelType.GEMINI &&
                                   _uiState.value.config.geminiApiKeys.isNotBlank()
@@ -2352,11 +2277,10 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                         }
                     )
 
-                    // 1. Immediate Post-Prompt Reasoning Anchor
                     val isSecondTurnAnalysis = toolsUsedThisTurn && iterationCount > 1
-                    val isCode = !isGreeting(finalCommand) && isCodeRequest(finalCommand)
-                    val initialPhase = if (isSecondTurnAnalysis) AgentActionPhase.ANALYZING_OUTPUT else if (isCode) AgentActionPhase.GENERATING_CODE else AgentActionPhase.COMPLETING
-                    val initialDetail = if (isSecondTurnAnalysis) "Analyzing tool output..." else if (isCode) "Drafting Code & Architecture..." else "Replying..."
+                    val isCodeTurn = !isGreeting(finalCommand) && isCodeRequest(finalCommand)
+                    val initialPhase = if (isSecondTurnAnalysis) AgentActionPhase.ANALYZING_OUTPUT else if (isCodeTurn) AgentActionPhase.GENERATING_CODE else AgentActionPhase.COMPLETING
+                    val initialDetail = if (isSecondTurnAnalysis) "Analyzing tool output..." else if (isCodeTurn) "Drafting Code & Architecture..." else "Replying..."
 
                     val initialLiveLog = LogEntry(
                         id = liveLogId,
@@ -2419,7 +2343,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                     val toolName = toolBlock?.toolName ?: Regex("<invoke name=\"([^\"]+)\"").find(rawText)?.groupValues?.get(1)
                                     if (toolName != null) "Executing Tool / Task ($toolName)..." else "Executing Tool / Task..."
                                 }
-                                isCode && (isCodeStreaming || hasCodeBlock) -> "Drafting Code & Architecture..."
+                                isCodeTurn && (isCodeStreaming || hasCodeBlock) -> "Drafting Code & Architecture..."
                                 demuxed.isThinking -> "Thinking & Planning..."
                                 else -> "Replying..."
                             }
@@ -2450,13 +2374,10 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                     logs = updatedLogs
                                 )
                             }
-                            // Emit lightweight scroll signal — avoids spurious full recomposition
-                            // that streamVersion += 1 caused on every emitted token.
                             scrollSignal.tryEmit(Unit)
                         }
 
                         while (continueRecursion && !streamInterrupted) {
-                            // Hardware Storage Sentinel Guardrail before continuation cycle
                             if (continuationCycle > 1) {
                                 if (StorageSentinel.isStorageCritical()) {
                                     hitStorageLimit = true
@@ -2502,7 +2423,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                     }
                                     ggufClient!!.generateStreamWithRawPrompt(
                                         promptText = ggufPrompt,
-                                        overrideTemperature = if (isCode) 0.15f else null,
+                                        overrideTemperature = if (isCodeTurn) 0.15f else null,
                                         onSpeedUpdate = { tps ->
                                             val now = System.currentTimeMillis()
                                             if (now - lastTpsUpdateMs >= 500L) {
@@ -2548,7 +2469,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 }
                             }
 
-                            var lastThermalCheckTime = 0L
                             var bufferedTokensCount = 0
                             try {
                                 stream.collect { chunk ->
@@ -2560,10 +2480,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                             getOrCreateCascadeInterceptor(ctx).onTokenChunk(chunk)
                                         }
                                     }
-                                    // ── Zero Throttling: Run CPU big cores at full hardware capacity ──
                                     val now = System.currentTimeMillis()
-                                    // Token batching: buffer incoming tokens and emit UI updates every 50ms,
-                                    // eliminating per-token Jetpack Compose recomposition choke and CPU thrashing.
                                     val elapsedMs = now - lastUiUpdateTime
                                     if (elapsedMs >= 50L) {
                                         lastUiUpdateTime = now
@@ -2574,7 +2491,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         pendingUiUpdate = true
                                     }
 
-                                    // ── Enforce Synchronous ReAct Barrier: Immediately pause text generation ──
                                     if (StreamDemultiplexer.hasCompletedToolCall(responseSb.toString())) {
                                         Log.i(TAG, "ReAct Barrier: Tool call completed in stream. Halting text generation immediately.")
                                         throw SynchronousToolBarrierException()
@@ -2596,7 +2512,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 continueRecursion = false
                             }
 
-
                             if (pendingUiUpdate || bufferedTokensCount > 0) {
                                 bufferedTokensCount = 0
                                 pendingUiUpdate = false
@@ -2607,7 +2522,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 cascadeInterceptor?.onStreamComplete()
                             }
 
-                            // Intercept finishReason at stream processor level
                             val finishReason = when (modelType) {
                                 ModelType.GEMINI -> geminiClient?.lastFinishReason ?: "STOP"
                                 ModelType.GGUF -> ggufClient?.lastFinishReason ?: "STOP"
@@ -2627,9 +2541,7 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             totalAccumulatedTokens += chunkTokensEmitted
 
                             if (finishReason == "MAX_TOKENS") {
-                                // Direct-to-Disk Stream Sinks: Commit tokens to storage & keep file open
                                 liveDiskStreamer.flush()
-
                                 val formattedChunkTokens = NumberFormat.getNumberInstance(Locale.US).format(chunkTokensEmitted)
                                 val chunkFinalizedMsg = "Generation Chunk $continuationCycle finalized ($formattedChunkTokens tokens) -> Storage Synced"
                                 val nextCycleMsg = "Auto-extending token stream [Cycle ${continuationCycle + 1}]..."
@@ -2646,7 +2558,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 continuationCycle++
                                 continueRecursion = true
                             } else {
-                                // Clean termination with STOP or natural stream completion
                                 continueRecursion = false
                                 val formattedTotalTokens = NumberFormat.getNumberInstance(Locale.US).format(totalAccumulatedTokens)
                                 val completeMsg = "Execution Complete [Total Tokens: $formattedTotalTokens]"
@@ -2664,11 +2575,9 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                             Log.i(TAG, "ReAct Barrier: Text generation paused cleanly for tool execution at cycle level.")
                             continueRecursion = false
                         } else {
-                            // Graceful stream cancellation when user presses Stop: no red error trace
                             Log.i(TAG, "Stream cancelled by user cleanly.")
                             streamInterrupted = true
-                            interruptMsg = "" // empty string → suppress error display
-                            // Re-throw so the coroutine cancellation propagates correctly
+                            interruptMsg = ""
                             throw e
                         }
                     } catch (e: Exception) {
@@ -2686,8 +2595,6 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
 
                     val fullResponse = responseSb.toString()
                     val demuxedFull = StreamDemultiplexer.demux(fullResponse)
-
-                    // Finalize and auto-flush any in-flight file streaming with full synthesis
                     val writtenFilesFromStream = liveDiskStreamer.closeAll(fullResponse)
 
                     if (hitStorageLimit) {
@@ -2787,7 +2694,6 @@ SYSTEM STATE GUARDRAIL: Analyze the command observation above. You must strictly
                                         trimConversationHistoryToContextLimit()
                                     }
 
-                                    // ── KV Cache Continuity: Append observation token sequence directly to active prompt ──
                                     val currentBase = activeGgufPromptPrefix ?: ChatTemplateEngine.formatPrompt(
                                         history = historyCopy,
                                         systemDirective = systemPrompt,
@@ -2938,10 +2844,8 @@ Please analyze the tool observation above and provide your complete response to 
                         keepGoing = false
                         activeGgufPromptPrefix = null
                     }
-
-                    }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Graceful Manual Cancellation: user pressed Stop button — no red error banner
                 Log.i(TAG, "Generation stopped by user (CancellationException caught cleanly).")
                 addSystemLog("Generation stopped by user.")
                 _uiState.update { state ->
@@ -2969,7 +2873,7 @@ Please analyze the tool observation above and provide your complete response to 
             nextCommand = if (pendingCommands.isNotEmpty()) pendingCommands.removeAt(0) else null
         }
         if (nextCommand != null) {
-            viewModelScope.launch {
+            viewModelScope.launch(Dispatchers.IO) {
                 delay(500)
                 sendCommand(nextCommand, context = context)
             }
@@ -3153,14 +3057,13 @@ Please analyze the tool observation above and provide your complete response to 
 
     private fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): Pair<Int, String> {
         val pb = ProcessBuilder(shell, "-c", cmd)
-        pb.redirectErrorStream(true) // Pipe deadlock prevention: merge stderr into stdout
+        pb.redirectErrorStream(true)
         val env = pb.environment()
         val currentPath = env["PATH"] ?: "/system/bin:/system/xbin"
         env["PATH"] = "$currentPath:/system/bin:/system/xbin:/data/local/tmp"
 
         val process = pb.start()
 
-        // Close stdin immediately: prevents interactive commands or subshells from waiting for user input
         try {
             process.outputStream.close()
         } catch (_: Exception) {}
@@ -3205,7 +3108,6 @@ Please analyze the tool observation above and provide your complete response to 
             val exitCode = try { process.exitValue() } catch (_: Exception) { 0 }
             return exitCode to outputSb.toString()
         } finally {
-            // Clean up process streams immediately upon receiving exit code or timeout to prevent leaks and zombie tasks
             try { process.inputStream?.close() } catch (_: Exception) {}
             try { process.errorStream?.close() } catch (_: Exception) {}
             try { process.outputStream?.close() } catch (_: Exception) {}
@@ -3235,6 +3137,7 @@ Please analyze the tool observation above and provide your complete response to 
             -1 to sanitizeProcessOutput("Error executing command: ${e.message ?: e.javaClass.simpleName}")
         }
     }
+
     suspend fun runShellInternal(cmd: String, timeoutMs: Long = 15_000L): String {
         return runShellWithExitCode(cmd, timeoutMs).second
     }
@@ -3315,7 +3218,6 @@ Please analyze the tool observation above and provide your complete response to 
                 val params = call.params
                 _uiState.update { it.copy(activeStatusDetail = "Executing Tool / Task ($action)...") }
 
-                // ── Idempotency Gate ──────────────────────────────────────────
                 val callHash = computeCallHash(action, params)
                 if (executedCallsThisTurn.contains(callHash) || inFlightCalls.contains(callHash)) {
                     Log.d(TAG, "Idempotency Lock: Suppressed duplicate tool call [$action] with hash $callHash")
@@ -3355,7 +3257,6 @@ Please analyze the tool observation above and provide your complete response to 
                                 actionToolUsed = true
                                 val trimmedCmd = rawCmd.trim()
 
-                                // Fast-Path Native Intent Routing: Intercept am start for zero-latency app launch
                                 if (trimmedCmd.startsWith("am start", ignoreCase = true)) {
                                     val extractedTarget = extractTargetFromAmStart(trimmedCmd)
                                     if (extractedTarget != null) {
@@ -3375,7 +3276,6 @@ Please analyze the tool observation above and provide your complete response to 
                                                     summaries.add(toolRes.summary)
                                                     addSystemLog("Native fast-path launch (intercepted am start): $extractedTarget ($resolvedPkg)")
                                                 } else {
-                                                    // Fallback to real shell execution if native intent fails
                                                     val (code, out) = runShellWithExitCode(rawCmd)
                                                     val safeCmd = StreamDemultiplexer.escapeXml(rawCmd)
                                                     val safeOut = StreamDemultiplexer.escapeXml(truncateObservation(out.trim()))
@@ -3520,7 +3420,9 @@ Please analyze the tool observation above and provide your complete response to 
             val dynamicPersona = getEffectivePersonaPrompt(context)
             val isLocal = _uiState.value.activeModelType == ModelType.GGUF || _uiState.value.config.preferredModelType == ModelType.GGUF
             val systemPrompt = buildSystemPrompt(context, forLocalModel = isLocal, dynamicPersonaPrompt = dynamicPersona)
-            ggufClient?.warmupPersonaKVCache(systemPrompt)
+            withTimeoutOrNull(10_000L) {
+                ggufClient?.warmupPersonaKVCache(systemPrompt)
+            }
         }
     }
 
@@ -3540,7 +3442,9 @@ Please analyze the tool observation above and provide your complete response to 
             val dynamicPersona = getEffectivePersonaPrompt(context)
             val isLocal = _uiState.value.activeModelType == ModelType.GGUF || _uiState.value.config.preferredModelType == ModelType.GGUF
             val systemPrompt = buildSystemPrompt(context, forLocalModel = isLocal, dynamicPersonaPrompt = dynamicPersona)
-            ggufClient?.warmupPersonaKVCache(systemPrompt)
+            withTimeoutOrNull(10_000L) {
+                ggufClient?.warmupPersonaKVCache(systemPrompt)
+            }
         }
     }
 
