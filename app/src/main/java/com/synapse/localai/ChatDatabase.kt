@@ -2,53 +2,44 @@ package com.synapse.localai
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import java.util.UUID
 
-/**
- * ChatSessionEntity — Persistent record of a conversation session.
- */
 data class ChatSessionEntity(
-    val id: String = UUID.randomUUID().toString(),
+    val id: String,
     val title: String,
-    val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis(),
+    val createdAt: Long,
+    val updatedAt: Long,
     val summary: String = ""
 )
 
-/**
- * ChatMessageEntity — Persistent record of a single message within a session.
- */
 data class ChatMessageEntity(
-    val id: String = UUID.randomUUID().toString(),
+    val id: String,
     val sessionId: String,
     val sender: String,
     val text: String,
     val isError: Boolean = false,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long
 )
 
-/**
- * ChatDatabaseHelper — SQLite storage engine for Chat Sessions, Messages, and Agent Long-Term Memory.
- */
 class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
-        private const val TAG = "ChatDatabase"
-        private const val DATABASE_NAME = "medlam_ai_chat.db"
-        private const val DATABASE_VERSION = 1
+        private const val TAG = "ChatDatabaseHelper"
+        private const val DATABASE_NAME = "synapse_chat_history.db"
+        private const val DATABASE_VERSION = 2
 
         private const val TABLE_SESSIONS = "chat_sessions"
-        private const val TABLE_MESSAGES = "chat_messages"
-
         private const val COL_SESSION_ID = "id"
         private const val COL_SESSION_TITLE = "title"
         private const val COL_SESSION_CREATED = "created_at"
         private const val COL_SESSION_UPDATED = "updated_at"
         private const val COL_SESSION_SUMMARY = "summary"
 
+        private const val TABLE_MESSAGES = "chat_messages"
         private const val COL_MSG_ID = "id"
         private const val COL_MSG_SESSION_ID = "session_id"
         private const val COL_MSG_SENDER = "sender"
@@ -58,66 +49,52 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """
+        val createSessionsTable = """
             CREATE TABLE $TABLE_SESSIONS (
                 $COL_SESSION_ID TEXT PRIMARY KEY,
-                $COL_SESSION_TITLE TEXT NOT NULL,
-                $COL_SESSION_CREATED INTEGER NOT NULL,
-                $COL_SESSION_UPDATED INTEGER NOT NULL,
-                $COL_SESSION_SUMMARY TEXT DEFAULT ''
+                $COL_SESSION_TITLE TEXT,
+                $COL_SESSION_CREATED INTEGER,
+                $COL_SESSION_UPDATED INTEGER,
+                $COL_SESSION_SUMMARY TEXT
             )
-            """.trimIndent()
-        )
+        """.trimIndent()
 
-        db.execSQL(
-            """
+        val createMessagesTable = """
             CREATE TABLE $TABLE_MESSAGES (
                 $COL_MSG_ID TEXT PRIMARY KEY,
-                $COL_MSG_SESSION_ID TEXT NOT NULL,
-                $COL_MSG_SENDER TEXT NOT NULL,
-                $COL_MSG_TEXT TEXT NOT NULL,
-                $COL_MSG_IS_ERROR INTEGER DEFAULT 0,
-                $COL_MSG_TIMESTAMP INTEGER NOT NULL
+                $COL_MSG_SESSION_ID TEXT,
+                $COL_MSG_SENDER TEXT,
+                $COL_MSG_TEXT TEXT,
+                $COL_MSG_IS_ERROR INTEGER,
+                $COL_MSG_TIMESTAMP INTEGER,
+                FOREIGN KEY($COL_MSG_SESSION_ID) REFERENCES $TABLE_SESSIONS($COL_SESSION_ID) ON DELETE CASCADE
             )
-            """.trimIndent()
-        )
+        """.trimIndent()
 
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_msg_session ON $TABLE_MESSAGES($COL_MSG_SESSION_ID, $COL_MSG_TIMESTAMP ASC)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_session_updated ON $TABLE_SESSIONS($COL_SESSION_UPDATED DESC)")
+        db.execSQL(createSessionsTable)
+        db.execSQL(createMessagesTable)
+        db.execSQL("CREATE INDEX idx_msg_session ON $TABLE_MESSAGES($COL_MSG_SESSION_ID, $COL_MSG_TIMESTAMP)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Upgrades handled gracefully
+        db.execSQL("DROP TABLE IF EXISTS $TABLE_MESSAGES")
+        db.execSQL("DROP TABLE IF EXISTS $TABLE_SESSIONS")
+        onCreate(db)
     }
 
     fun getAllSessions(): List<ChatSessionEntity> {
         val list = mutableListOf<ChatSessionEntity>()
         val db = readableDatabase
-        val cursor = db.query(
-            TABLE_SESSIONS,
-            null,
-            null,
-            null,
-            null,
-            null,
-            "$COL_SESSION_UPDATED DESC"
-        )
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_SESSIONS ORDER BY $COL_SESSION_UPDATED DESC", null)
         cursor.use {
-            val idIdx = cursor.getColumnIndexOrThrow(COL_SESSION_ID)
-            val titleIdx = cursor.getColumnIndexOrThrow(COL_SESSION_TITLE)
-            val createdIdx = cursor.getColumnIndexOrThrow(COL_SESSION_CREATED)
-            val updatedIdx = cursor.getColumnIndexOrThrow(COL_SESSION_UPDATED)
-            val summaryIdx = cursor.getColumnIndexOrThrow(COL_SESSION_SUMMARY)
-
-            while (cursor.moveToNext()) {
+            while (it.moveToNext()) {
                 list.add(
                     ChatSessionEntity(
-                        id = cursor.getString(idIdx),
-                        title = cursor.getString(titleIdx),
-                        createdAt = cursor.getLong(createdIdx),
-                        updatedAt = cursor.getLong(updatedIdx),
-                        summary = cursor.getString(summaryIdx) ?: ""
+                        id = it.getString(it.getColumnIndexOrThrow(COL_SESSION_ID)),
+                        title = it.getString(it.getColumnIndexOrThrow(COL_SESSION_TITLE)),
+                        createdAt = it.getLong(it.getColumnIndexOrThrow(COL_SESSION_CREATED)),
+                        updatedAt = it.getLong(it.getColumnIndexOrThrow(COL_SESSION_UPDATED)),
+                        summary = it.getString(it.getColumnIndexOrThrow(COL_SESSION_SUMMARY)) ?: ""
                     )
                 )
             }
@@ -127,23 +104,15 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
 
     fun getSession(sessionId: String): ChatSessionEntity? {
         val db = readableDatabase
-        val cursor = db.query(
-            TABLE_SESSIONS,
-            null,
-            "$COL_SESSION_ID = ?",
-            arrayOf(sessionId),
-            null,
-            null,
-            null
-        )
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_SESSIONS WHERE $COL_SESSION_ID = ?", arrayOf(sessionId))
         cursor.use {
-            if (cursor.moveToFirst()) {
+            if (it.moveToFirst()) {
                 return ChatSessionEntity(
-                    id = cursor.getString(cursor.getColumnIndexOrThrow(COL_SESSION_ID)),
-                    title = cursor.getString(cursor.getColumnIndexOrThrow(COL_SESSION_TITLE)),
-                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_SESSION_CREATED)),
-                    updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_SESSION_UPDATED)),
-                    summary = cursor.getString(cursor.getColumnIndexOrThrow(COL_SESSION_SUMMARY)) ?: ""
+                    id = it.getString(it.getColumnIndexOrThrow(COL_SESSION_ID)),
+                    title = it.getString(it.getColumnIndexOrThrow(COL_SESSION_TITLE)),
+                    createdAt = it.getLong(it.getColumnIndexOrThrow(COL_SESSION_CREATED)),
+                    updatedAt = it.getLong(it.getColumnIndexOrThrow(COL_SESSION_UPDATED)),
+                    summary = it.getString(it.getColumnIndexOrThrow(COL_SESSION_SUMMARY)) ?: ""
                 )
             }
         }
@@ -152,96 +121,39 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
 
     fun insertSession(session: ChatSessionEntity) {
         val db = writableDatabase
-        val cv = ContentValues().apply {
+        val values = ContentValues().apply {
             put(COL_SESSION_ID, session.id)
             put(COL_SESSION_TITLE, session.title)
             put(COL_SESSION_CREATED, session.createdAt)
             put(COL_SESSION_UPDATED, session.updatedAt)
             put(COL_SESSION_SUMMARY, session.summary)
         }
-        db.insertWithOnConflict(TABLE_SESSIONS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        db.insertWithOnConflict(TABLE_SESSIONS, null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     fun updateSessionTitle(sessionId: String, title: String) {
         val db = writableDatabase
-        val cv = ContentValues().apply {
+        val values = ContentValues().apply {
             put(COL_SESSION_TITLE, title)
             put(COL_SESSION_UPDATED, System.currentTimeMillis())
         }
-        db.update(TABLE_SESSIONS, cv, "$COL_SESSION_ID = ?", arrayOf(sessionId))
-    }
-
-    fun updateSessionTimestamp(sessionId: String, timestamp: Long = System.currentTimeMillis()) {
-        val db = writableDatabase
-        val cv = ContentValues().apply {
-            put(COL_SESSION_UPDATED, timestamp)
-        }
-        db.update(TABLE_SESSIONS, cv, "$COL_SESSION_ID = ?", arrayOf(sessionId))
-    }
-
-    fun deleteSession(sessionId: String) {
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            db.delete(TABLE_MESSAGES, "$COL_MSG_SESSION_ID = ?", arrayOf(sessionId))
-            db.delete(TABLE_SESSIONS, "$COL_SESSION_ID = ?", arrayOf(sessionId))
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
-
-    fun cleanupEmptySessions(exceptSessionId: String? = null) {
-        val db = writableDatabase
-        try {
-            // Purge any legacy telemetry messages erroneously saved as chat messages
-            db.delete(TABLE_MESSAGES, "$COL_MSG_TEXT LIKE '%Execution Complete%' OR $COL_MSG_TEXT LIKE '%Generation Chunk%'", null)
-
-            val whereClause = if (exceptSessionId.isNullOrBlank()) {
-                "$COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES)"
-            } else {
-                "$COL_SESSION_ID != ? AND $COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES)"
-            }
-            val whereArgs = if (exceptSessionId.isNullOrBlank()) null else arrayOf(exceptSessionId)
-            db.delete(TABLE_SESSIONS, whereClause, whereArgs)
-        } catch (e: Exception) {
-            Log.e(TAG, "cleanupEmptySessions error: ${e.message}")
-        }
+        db.update(TABLE_SESSIONS, values, "$COL_SESSION_ID = ?", arrayOf(sessionId))
     }
 
     fun getMessagesForSession(sessionId: String): List<ChatMessageEntity> {
         val list = mutableListOf<ChatMessageEntity>()
         val db = readableDatabase
-        val cursor = db.query(
-            TABLE_MESSAGES,
-            null,
-            "$COL_MSG_SESSION_ID = ?",
-            arrayOf(sessionId),
-            null,
-            null,
-            "$COL_MSG_TIMESTAMP ASC"
-        )
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_MESSAGES WHERE $COL_MSG_SESSION_ID = ? ORDER BY $COL_MSG_TIMESTAMP ASC", arrayOf(sessionId))
         cursor.use {
-            val idIdx = cursor.getColumnIndexOrThrow(COL_MSG_ID)
-            val sessIdIdx = cursor.getColumnIndexOrThrow(COL_MSG_SESSION_ID)
-            val senderIdx = cursor.getColumnIndexOrThrow(COL_MSG_SENDER)
-            val textIdx = cursor.getColumnIndexOrThrow(COL_MSG_TEXT)
-            val errorIdx = cursor.getColumnIndexOrThrow(COL_MSG_IS_ERROR)
-            val timeIdx = cursor.getColumnIndexOrThrow(COL_MSG_TIMESTAMP)
-
-            while (cursor.moveToNext()) {
-                val text = cursor.getString(textIdx)
-                if (text.contains("Execution Complete") || text.contains("Generation Chunk")) {
-                    continue
-                }
+            while (it.moveToNext()) {
                 list.add(
                     ChatMessageEntity(
-                        id = cursor.getString(idIdx),
-                        sessionId = cursor.getString(sessIdIdx),
-                        sender = cursor.getString(senderIdx),
-                        text = text,
-                        isError = cursor.getInt(errorIdx) == 1,
-                        timestamp = cursor.getLong(timeIdx)
+                        id = it.getString(it.getColumnIndexOrThrow(COL_MSG_ID)),
+                        sessionId = it.getString(it.getColumnIndexOrThrow(COL_MSG_SESSION_ID)),
+                        sender = it.getString(it.getColumnIndexOrThrow(COL_MSG_SENDER)),
+                        text = it.getString(it.getColumnIndexOrThrow(COL_MSG_TEXT)),
+                        isError = it.getInt(it.getColumnIndexOrThrow(COL_MSG_IS_ERROR)) == 1,
+                        timestamp = it.getLong(it.getColumnIndexOrThrow(COL_MSG_TIMESTAMP))
                     )
                 )
             }
@@ -249,40 +161,39 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         return list
     }
 
-    fun insertMessage(message: ChatMessageEntity) {
+    fun insertMessage(msg: ChatMessageEntity) {
         val db = writableDatabase
-        val cv = ContentValues().apply {
-            put(COL_MSG_ID, message.id)
-            put(COL_MSG_SESSION_ID, message.sessionId)
-            put(COL_MSG_SENDER, message.sender)
-            put(COL_MSG_TEXT, message.text)
-            put(COL_MSG_IS_ERROR, if (message.isError) 1 else 0)
-            put(COL_MSG_TIMESTAMP, message.timestamp)
+        val values = ContentValues().apply {
+            put(COL_MSG_ID, msg.id)
+            put(COL_MSG_SESSION_ID, msg.sessionId)
+            put(COL_MSG_SENDER, msg.sender)
+            put(COL_MSG_TEXT, msg.text)
+            put(COL_MSG_IS_ERROR, if (msg.isError) 1 else 0)
+            put(COL_MSG_TIMESTAMP, msg.timestamp)
         }
-        db.insertWithOnConflict(TABLE_MESSAGES, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        updateSessionTimestamp(message.sessionId, message.timestamp)
+        db.insertWithOnConflict(TABLE_MESSAGES, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+
+        val sessionValues = ContentValues().apply {
+            put(COL_SESSION_UPDATED, System.currentTimeMillis())
+        }
+        db.update(TABLE_SESSIONS, sessionValues, "$COL_SESSION_ID = ?", arrayOf(msg.sessionId))
     }
 
     fun saveFullSessionMessages(sessionId: String, title: String, logs: List<LogEntry>) {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            val now = System.currentTimeMillis()
-            val sessionCv = ContentValues().apply {
+            val sValues = ContentValues().apply {
                 put(COL_SESSION_ID, sessionId)
                 put(COL_SESSION_TITLE, title)
-                put(COL_SESSION_UPDATED, now)
+                put(COL_SESSION_UPDATED, System.currentTimeMillis())
+                put(COL_SESSION_CREATED, System.currentTimeMillis())
             }
-            val rows = db.update(TABLE_SESSIONS, sessionCv, "$COL_SESSION_ID = ?", arrayOf(sessionId))
-            if (rows == 0) {
-                sessionCv.put(COL_SESSION_CREATED, now)
-                sessionCv.put(COL_SESSION_SUMMARY, "")
-                db.insert(TABLE_SESSIONS, null, sessionCv)
-            }
+            db.insertWithOnConflict(TABLE_SESSIONS, null, sValues, SQLiteDatabase.CONFLICT_REPLACE)
+            db.execSQL("DELETE FROM $TABLE_MESSAGES WHERE $COL_MSG_SESSION_ID = ?", arrayOf(sessionId))
 
-            db.delete(TABLE_MESSAGES, "$COL_MSG_SESSION_ID = ?", arrayOf(sessionId))
-            logs.forEach { log ->
-                val cv = ContentValues().apply {
+            for (log in logs) {
+                val mValues = ContentValues().apply {
                     put(COL_MSG_ID, log.id)
                     put(COL_MSG_SESSION_ID, sessionId)
                     put(COL_MSG_SENDER, log.sender)
@@ -290,11 +201,28 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
                     put(COL_MSG_IS_ERROR, if (log.isError) 1 else 0)
                     put(COL_MSG_TIMESTAMP, log.timestamp)
                 }
-                db.insert(TABLE_MESSAGES, null, cv)
+                db.insertWithOnConflict(TABLE_MESSAGES, null, mValues, SQLiteDatabase.CONFLICT_REPLACE)
             }
             db.setTransactionSuccessful()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving session messages: ${e.message}")
         } finally {
             db.endTransaction()
+        }
+    }
+
+    fun deleteSession(sessionId: String) {
+        val db = writableDatabase
+        db.delete(TABLE_MESSAGES, "$COL_MSG_SESSION_ID = ?", arrayOf(sessionId))
+        db.delete(TABLE_SESSIONS, "$COL_SESSION_ID = ?", arrayOf(sessionId))
+    }
+
+    fun cleanupEmptySessions(exceptSessionId: String? = null) {
+        val db = writableDatabase
+        if (exceptSessionId != null) {
+            db.execSQL("DELETE FROM $TABLE_SESSIONS WHERE $COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES) AND $COL_SESSION_ID != ?", arrayOf(exceptSessionId))
+        } else {
+            db.execSQL("DELETE FROM $TABLE_SESSIONS WHERE $COL_SESSION_ID NOT IN (SELECT DISTINCT $COL_MSG_SESSION_ID FROM $TABLE_MESSAGES)")
         }
     }
 
@@ -303,15 +231,14 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         if (sessions.isEmpty()) return ""
         val sb = StringBuilder()
         sb.appendLine("=== LONG-TERM BRAIN CONTEXT ===")
-        sessions.forEach { session ->
+        for (session in sessions) {
             sb.appendLine("Session: ${session.title}")
             val msgs = getMessagesForSession(session.id).takeLast(4)
-            msgs.forEach { m ->
+            for (m in msgs) {
                 val snippet = if (m.text.length > 80) m.text.take(80) + "..." else m.text
                 sb.appendLine("  ${m.sender}: $snippet")
             }
         }
-        sb.appendLine("=== END LONG-TERM BRAIN CONTEXT ===")
-        return sb.toString()
+        return sb.toString().trim()
     }
 }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import kotlin.random.Random
 
 /**
  * Result of a dynamic media request dispatched to DynamicMediaBroker.
@@ -66,14 +67,11 @@ sealed class MediaResult {
  * 1. Runtime Dynamic Discovery & On-Demand Rescan:
  *    Discovers GGUF checkpoints dynamically across storage.
  * 2. Authentic Inference via stable-diffusion.cpp:
- *    Executes native neural tensor computation via sd.cpp.
- *    No procedural mock canvas or fake graphics.
+ *    Executes native neural tensor computation via sd.cpp on CPU.
  * 3. Exact Native Error Propagation:
- *    Captures exact stderr / logs from the native engine if model components
- *    (e.g., VAE or text encoder) are missing or encounter an error.
- * 4. 4GB Memory Profile Constraints:
- *    Pure 4-thread CPU vectorization (mmap=true, mlock=false),
- *    with memory advice (MADV_WILLNEED / MADV_DONTNEED).
+ *    Captures exact stderr / logs from the native engine.
+ * 4. Zero-Forced-RAM Execution:
+ *    Strict mmap streaming directly from disk, VAE tiling, and dynamic seed diversification.
  */
 object DynamicMediaBroker {
 
@@ -98,6 +96,121 @@ object DynamicMediaBroker {
     }
 
     /**
+     * Translates Arabic/Darija prompts into high-density English visual descriptors
+     * understood by CLIP, and enriches subject geometry (e.g. centering vehicles and enhancing fur).
+     */
+    private fun translateAndEnrichPrompt(raw: String, isArabic: Boolean): String {
+        var text = raw.trim().lowercase()
+
+        // 1. Strip conversational command noise
+        val noiseWords = listOf(
+            "ارسم", "صمم", "دير ليا", "دير", "صاوب", "توليد", "انشئ", "اعطني", "اريد", "من فضلك", "عفاك",
+            "draw", "generate", "create", "paint", "make a picture of", "make an image of", "photo of", "image of"
+        )
+        for (nw in noiseWords) {
+            text = text.replace(Regex("""\b$nw\b""", RegexOption.IGNORE_CASE), "")
+        }
+        text = text.trim()
+
+        val hasArabic = isArabic || text.any { it in '\u0600'..'\u06FF' }
+
+        val translated = if (hasArabic) {
+            // Phrase-level translation for semantic accuracy
+            val phraseDict = linkedMapOf(
+                "على السرير" to "on a cozy bed",
+                "فوق السرير" to "on a cozy bed",
+                "في السرير" to "in a cozy bed",
+                "على الفراش" to "on a cozy bed",
+                "على الاريكة" to "on a sofa couch",
+                "على الكنبة" to "on a sofa couch",
+                "نائمة على" to "sleeping on",
+                "نائم على" to "sleeping on",
+                "ناعسة على" to "sleeping on",
+                "ناعس على" to "sleeping on",
+                "قطة جميلة" to "a cute beautiful cat",
+                "قطة نائمة" to "a sleeping cat",
+                "قطة لطيفة" to "a cute adorable cat",
+                "في الليل" to "at night, dark atmosphere",
+                "في الصباح" to "in the morning, soft sunlight",
+                "تحت المطر" to "in the rain, wet reflections",
+                "سباق سيارات" to "sports car race",
+                "مدينة مستقبلية" to "futuristic cyberpunk city",
+                "ناطحات سحاب" to "skyscrapers"
+            )
+
+            var working = text
+            for ((ar, en) in phraseDict) {
+                working = working.replace(ar, en)
+            }
+
+            // Word-level mapping
+            val wordDict = mapOf(
+                // Animals
+                "قطة" to "cat", "قطه" to "cat", "قط" to "cat", "بسة" to "cat", "مش" to "cat", "هر" to "cat", "قطط" to "cats",
+                "كلب" to "dog", "كلبة" to "dog", "جرو" to "puppy",
+                "اسد" to "lion", "أسد" to "lion", "نمر" to "tiger", "ذئب" to "wolf", "فهد" to "cheetah",
+                "حصان" to "horse", "فرس" to "horse", "طائر" to "bird", "عصفور" to "little bird", "نسر" to "eagle",
+                // Vehicles
+                "سيارة" to "car", "سياره" to "car", "طوموبيل" to "car", "مركبة" to "vehicle", "عربة" to "vehicle",
+                "سوبركار" to "supercar", "سباق" to "racing", "شاحنة" to "truck", "دراجة" to "motorcycle",
+                // People
+                "رجل" to "man", "امراة" to "woman", "امرأة" to "woman", "فتاة" to "girl", "بنت" to "girl",
+                "ولد" to "boy", "طفل" to "child", "محارب" to "warrior", "شخص" to "person",
+                // Adjectives
+                "جميلة" to "beautiful", "جميل" to "beautiful", "زوينة" to "beautiful", "زوين" to "beautiful",
+                "كيوت" to "cute", "لطيفة" to "cute", "لطيف" to "cute", "صغيرة" to "small cute", "صغير" to "small",
+                "كبيرة" to "large", "كبير" to "large", "سريعة" to "fast", "سريع" to "fast",
+                "نائمة" to "sleeping", "نائم" to "sleeping", "ناعسة" to "sleeping", "ناعس" to "sleeping",
+                "سعيدة" to "happy", "سعيد" to "happy", "غاضب" to "angry",
+                "واقعية" to "photorealistic", "سينمائي" to "cinematic", "سايبربانك" to "cyberpunk", "نيون" to "neon",
+                // Objects & Places
+                "سرير" to "bed", "فراش" to "bed", "اريكة" to "sofa", "طاولة" to "table",
+                "غرفة" to "room", "منزل" to "house", "شارع" to "street", "طريق" to "road",
+                "مدينة" to "city", "حديقة" to "garden", "غابة" to "forest",
+                "بحر" to "ocean sea", "شاطئ" to "beach", "جبل" to "mountain", "ثلج" to "snow",
+                "شمس" to "sun", "قمر" to "moon", "نجوم" to "stars", "فضاء" to "deep space", "كوكب" to "planet",
+                // Prepositions
+                "على" to "on", "فوق" to "on", "في" to "in", "تحت" to "under", "مع" to "with", "امام" to "in front of"
+            )
+
+            val words = working.split(Regex("""\s+"""))
+            val translatedWords = words.map { w ->
+                val cleanW = w.trim().replace(Regex("[،,.!؟]"), "")
+                wordDict[cleanW] ?: cleanW
+            }
+            translatedWords.joinToString(" ")
+        } else {
+            text
+        }
+
+        // Strip orphaned non-ASCII characters to keep CLIP text encoder clean
+        val sanitized = translated.replace(Regex("""[\u0600-\u06FF]"""), "").trim()
+        val baseEnglish = if (sanitized.length >= 3) sanitized else "high quality digital artwork"
+
+        // Subject-Specific Camera & Lighting Conditioning
+        val lowerBase = baseEnglish.lowercase()
+        val enrichment = when {
+            lowerBase.contains("car") || lowerBase.contains("vehicle") || lowerBase.contains("supercar") -> {
+                "full vehicle visible, wide angle cinematic shot, centered in frame, whole car body, 8k resolution, detailed automotive photography, photorealistic, dramatic lighting, sharp focus, masterwork"
+            }
+            lowerBase.contains("cat") || lowerBase.contains("dog") || lowerBase.contains("puppy") || lowerBase.contains("kitten") -> {
+                "highly detailed fluffy fur, expressive eyes, cute, 8k resolution, soft cinematic lighting, studio quality, sharp focus, award-winning photography, photorealistic"
+            }
+            lowerBase.contains("cyberpunk") || lowerBase.contains("neon") -> {
+                "vibrant neon glow, volumetric smoke, raytracing reflections, highly detailed, 8k resolution, cinematic lighting, masterpiece"
+            }
+            lowerBase.contains("space") || lowerBase.contains("planet") || lowerBase.contains("galaxy") -> {
+                "nebula colors, deep space telescope photography, cosmic dust, photorealistic, 8k resolution, cinematic lighting, majestic view"
+            }
+            else -> {
+                "highly detailed, photorealistic, 8k resolution, cinematic lighting, masterpiece, sharp focus"
+            }
+        }
+
+        return "$baseEnglish, $enrichment"
+    }
+
+    /**
      * Dispatches an Image Generation request.
      */
     suspend fun dispatchImageRequest(
@@ -109,57 +222,58 @@ object DynamicMediaBroker {
         val isArabic = intent.isArabic
 
         val prefs = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
-        val userWidth = prefs.getInt("sd_width", 256).let { if (it <= 0) 256 else it }
-        val userHeight = prefs.getInt("sd_height", 256).let { if (it <= 0) 256 else it }
+        val userWidth = prefs.getInt("sd_width", 512).let { if (it <= 0) 512 else it }
+        val userHeight = prefs.getInt("sd_height", 512).let { if (it <= 0) 512 else it }
 
-        // Authentic Neural Diffusion (SD-Turbo / SD1.5 GGUF via sd-cli)
-        // Step 1: On-Demand Dynamic Discovery
-        var model = GgufCapabilityRegistry.getBestImageModel(context)
-        if (model == null) {
+        // Step 1: Resilient Dynamic Discovery
+        var modelDesc = GgufCapabilityRegistry.getBestImageModel(context)
+        if (modelDesc == null) {
             Log.i(TAG, "No image model registered in cache. Triggering live on-demand storage scan...")
             GgufCapabilityRegistry.scanStorage(context, forceRefresh = true)
-            model = GgufCapabilityRegistry.getBestImageModel(context)
+            modelDesc = GgufCapabilityRegistry.getBestImageModel(context)
         }
 
+        val modelFile: File? = modelDesc?.file ?: findAnyDiffusionModel(context)
+        val isAllInOne: Boolean = modelDesc?.isAllInOne ?: true
+
         // Step 2: Graceful Conversational Fallback if missing
-        if (model == null) {
+        if (modelFile == null || !modelFile.exists()) {
             Log.w(TAG, "No compatible Image Diffusion GGUF found on device.")
             return@withContext MediaResult.FallbackMessage(
-                messageEn = "Local Image Diffusion model (e.g. sd_turbo-f16.gguf) not found in storage. Please place the model in /sdcard/Download or /sdcard/Medlam-Ai/models.",
-                messageAr = "لم يتم العثور على نموذج توليد الصور المحلي (مثل sd_turbo-f16.gguf) في وحدة التخزين. يرجى وضع النموذج في مجلد التنزيلات أو Medlam-Ai/models للتوليد عبر المعالج (CPU) أو كارت الشاشة (GPU).",
+                messageEn = "Local Image Diffusion model not found in storage. Please place your .gguf model in /sdcard/Download or /sdcard/Medlam-Ai/models.",
+                messageAr = "لم يتم العثور على نموذج توليد الصور في وحدة التخزين. يرجى وضع نموذج الـ GGUF في مجلد التنزيلات أو Medlam-Ai/models.",
                 isArabicPrompt = isArabic
             )
         }
 
-        Log.i(TAG, "Selected Image Diffusion Model: ${model.file.name} (MobileScore=${model.mobileScore}, AllInOne=${model.isAllInOne})")
+        Log.i(TAG, "Selected Image Diffusion Model: ${modelFile.name} (AllInOne=$isAllInOne)")
 
-        // Step 3: Multilingual Prompt Translation & Enrichment
-        val enrichedPrompt = MediaIntentClassifier.enrichAndTranslatePrompt(rawPrompt, isArabic)
+        // Step 3: Multilingual Prompt Translation & Semantic Conditioning
+        val enrichedPrompt = translateAndEnrichPrompt(rawPrompt, isArabic)
         Log.i(TAG, "Executing Image Generation for: \"$enrichedPrompt\" (Raw: \"$rawPrompt\")")
 
         // Step 4: Smart Adaptive Parameter Calculation
         val userSteps = prefs.getInt("sd_steps", 0)
         val userCfg = prefs.getFloat("sd_cfg_scale", 0f)
         val numThreads = prefs.getInt("sd_threads", 4).let { if (it <= 0) 4 else it }
-        val lowMemMode = prefs.getBoolean("sd_low_memory_mode", true)
 
-        val modelNameLower = model.file.name.lowercase()
+        val modelNameLower = modelFile.name.lowercase()
         val isFastModel = modelNameLower.contains("turbo") ||
                           modelNameLower.contains("lcm") ||
                           modelNameLower.contains("lightning") ||
+                          modelNameLower.contains("tiny") ||
                           modelNameLower.contains("xs") ||
                           modelNameLower.contains("qwen-image")
 
         val effectiveSteps = if (userSteps > 0) userSteps else (if (isFastModel) 1 else 15)
         val effectiveCfg = if (userCfg > 0f) userCfg else (if (isFastModel) 1.0f else 7.0f)
 
-        Log.i(TAG, "Inference Parameters: steps=$effectiveSteps, cfg=$effectiveCfg, dim=${userWidth}x${userHeight}, threads=$numThreads, lowMem=$lowMemMode (FastModel=$isFastModel, UserOverride=${userSteps > 0})")
+        Log.i(TAG, "Inference Parameters: steps=$effectiveSteps, cfg=$effectiveCfg, dim=${userWidth}x${userHeight}, threads=$numThreads (FastModel=$isFastModel)")
 
         // Step 5: Storage-Streamed Execution with Kernel Page Management
-        val modelPath = model.file.absolutePath
+        val modelPath = modelFile.absolutePath
         try {
             PageCacheAdvisor.assert64BitArchitecture()
-            // Mitigate LowMemoryKiller: Advise LLM pages to idle so kernel reclaims physical memory bandwidth
             try {
                 PageCacheAdvisor.adviseModelIdle()
                 System.gc()
@@ -170,10 +284,10 @@ object DynamicMediaBroker {
 
             PageCacheAdvisor.adviseModelActive(modelPath)
 
-            // Real Native Execution via sd.cpp
             executeNativeStableDiffusion(
                 context = context,
-                model = model,
+                modelFile = modelFile,
+                isAllInOne = isAllInOne,
                 prompt = enrichedPrompt,
                 width = userWidth,
                 height = userHeight,
@@ -186,13 +300,11 @@ object DynamicMediaBroker {
             Log.e(TAG, "Image generation error: ${t.message}", t)
             MediaResult.Error("Image synthesis failure: ${t.message}")
         } finally {
-            // Reclaim clean model pages immediately without disk writes
             try {
                 PageCacheAdvisor.adviseModelIdle(modelPath)
                 if (RootShellManager.isRootAvailable()) {
                     RootShellManager.exec("echo 3 > /proc/sys/vm/drop_caches")
                 }
-                // Warm active LLM model back up for smooth conversational response
                 val activeLlmPath = prefs.getString("local_model_path", null)
                 if (!activeLlmPath.isNullOrBlank() && File(activeLlmPath).exists()) {
                     PageCacheAdvisor.adviseModelActive(activeLlmPath)
@@ -210,7 +322,6 @@ object DynamicMediaBroker {
     ): MediaResult = withContext(Dispatchers.Default) {
         val isArabic = intent.isArabic
 
-        // Step 1: On-Demand Dynamic Discovery
         var model = GgufCapabilityRegistry.getBestVideoModel(context)
         if (model == null) {
             Log.i(TAG, "No video model registered in cache. Triggering live on-demand storage scan...")
@@ -218,7 +329,6 @@ object DynamicMediaBroker {
             model = GgufCapabilityRegistry.getBestVideoModel(context)
         }
 
-        // Step 2: Graceful Conversational Fallback if missing
         if (model == null) {
             Log.w(TAG, "No compatible Video Diffusion GGUF found on device.")
             return@withContext MediaResult.FallbackMessage(
@@ -235,7 +345,6 @@ object DynamicMediaBroker {
             PageCacheAdvisor.assert64BitArchitecture()
             PageCacheAdvisor.adviseModelActive(modelPath)
 
-            // Video animation pipeline stub
             MediaResult.FallbackMessage(
                 messageEn = "Video model (${model.file.name}) recognized. Preparing video frames...",
                 messageAr = "تم التعرف على نموذج الفيديو (${model.file.name}). جاري إعداد إطارات الحركة...",
@@ -250,13 +359,12 @@ object DynamicMediaBroker {
 
     /**
      * Executes authentic neural diffusion inference using compiled native stable-diffusion.cpp (sd-cli).
-     *
-     * Captures real engine execution, streaming status, and prints exact native stderr / C++ exceptions
-     * to the UI console if execution fails or if companion models (VAE, Text Encoder) are required.
+     * Enforces Zero-RAM mmap CPU streaming, VAE tiling, and Dynamic Latent Seed Randomization.
      */
     private suspend fun executeNativeStableDiffusion(
         context: Context,
-        model: GgufModelDescriptor,
+        modelFile: File,
+        isAllInOne: Boolean,
         prompt: String,
         width: Int,
         height: Int,
@@ -265,13 +373,8 @@ object DynamicMediaBroker {
         numThreads: Int,
         onStatusUpdate: ((String) -> Unit)?
     ): MediaResult = withContext(Dispatchers.IO) {
-        val prefs = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
-        val lowMemMode = prefs.getBoolean("sd_low_memory_mode", true)
-        val computeDevice = prefs.getString("sd_compute_device", "CPU") ?: "CPU"
-        val isGpu = computeDevice.equals("GPU", ignoreCase = true)
-        val deviceLabel = if (isGpu) "GPU (Vulkan Adreno 610)" else "CPU (SIMD NEON)"
-
-        onStatusUpdate?.invoke("Denoising steps via $deviceLabel...")
+        val deviceLabel = "CPU (SIMD NEON)"
+        onStatusUpdate?.invoke("Denoising via $deviceLabel (Zero-RAM mmap)...")
 
         // 1. Locate native sd-cli binary
         val sdBinary = locateSdCliBinary(context)
@@ -288,11 +391,13 @@ object DynamicMediaBroker {
         // 2. Prepare output file
         val outputImage = File(context.cacheDir, "sd_out_${System.currentTimeMillis()}.png")
 
-        // 3. Assemble CLI arguments
+        // 3. Assemble CLI arguments with Dynamic Random Seed
+        val randomSeed = Random.nextLong(1000L, 999999999L)
+
         val cmd = mutableListOf<String>()
         cmd.add(sdBinary.absolutePath)
         cmd.add("-m")
-        cmd.add(model.file.absolutePath)
+        cmd.add(modelFile.absolutePath)
         cmd.add("-p")
         cmd.add(prompt)
         cmd.add("-o")
@@ -308,41 +413,26 @@ object DynamicMediaBroker {
         cmd.add("--cfg-scale")
         cmd.add(cfgScale.toString())
 
-        // Compute Backend: CPU vs GPU (Vulkan)
-        if (isGpu) {
-            Log.i(TAG, "Configuring GPU (Vulkan) compute backend for sd-cli")
-            cmd.add("--backend")
-            cmd.add("diffusion=vulkan0,vae=vulkan0")
-        } else {
-            Log.i(TAG, "Configuring CPU (SIMD NEON) compute backend for sd-cli")
-            cmd.add("--backend")
-            cmd.add("cpu")
-        }
+        // Pass dynamic seed to ensure non-repetitive angles and varied compositions
+        cmd.add("--seed")
+        cmd.add(randomSeed.toString())
 
-        // Storage Streaming vs RAM Mode (Zero-Forced-RAM Execution)
-        if (lowMemMode) {
-            cmd.add("--params-backend")
-            cmd.add("disk")
-        } else {
-            cmd.add("--mmap")
-        }
+        // Compute Backend: Strictly CPU for zero-RAM stability
+        cmd.add("--backend")
+        cmd.add("cpu")
 
-        // Hardware-accelerated direct convolutions & flash attention
+        // Enforce hardware memory mapping (--mmap) unconditionally to prevent RAM allocation
+        cmd.add("--mmap")
+
+        // Hardware-accelerated direct convolutions
         cmd.add("--vae-conv-direct")
         cmd.add("--diffusion-conv-direct")
-        cmd.add("--fa")
 
-        // Adaptive VAE Tiling: small resolutions (<=256) run monolithically without tile seams; large resolutions tile
-        if (width > 256 || height > 256) {
-            cmd.add("--vae-tiling")
-            cmd.add("--vae-tile-size")
-            cmd.add("32x32")
-            cmd.add("--vae-tile-overlap")
-            cmd.add("0.1")
-        }
+        // Enforce VAE Tiling to prevent RAM spike during pixel decoding
+        cmd.add("--vae-tiling")
 
         // Look for companion VAE / CLIP weights in user storage if model is not all-in-one
-        if (!model.isAllInOne) {
+        if (!isAllInOne) {
             findCompanionWeights(context)?.let { (vaePath, clipPath) ->
                 if (vaePath != null) {
                     cmd.add("--vae")
@@ -360,9 +450,8 @@ object DynamicMediaBroker {
         val shellScript = "export LD_LIBRARY_PATH=\"$ldPath:\$LD_LIBRARY_PATH\" && export OMP_NUM_THREADS=$numThreads && export OMP_WAIT_POLICY=passive && export KMP_BLOCKTIME=0 && taskset f0 nice -n -10 \"$@\""
         val fullCmd = listOf("/system/bin/sh", "-c", shellScript, "sh") + cmd
 
-        Log.i(TAG, "Starting authentic native sd.cpp inference: ${cmd.joinToString(" ")}")
+        Log.i(TAG, "Starting Zero-RAM native sd.cpp inference (seed=$randomSeed): ${cmd.joinToString(" ")}")
 
-        // LowMemoryKiller Shield: Protect host process and reclaim clean memory
         try {
             if (RootShellManager.isRootAvailable()) {
                 RootShellManager.exec("echo -900 > /proc/${android.os.Process.myPid()}/oom_score_adj")
@@ -380,7 +469,6 @@ object DynamicMediaBroker {
             val process = processBuilder.start()
             activeProcess = process
 
-            // Shield subprocess from LowMemoryKiller
             try {
                 if (RootShellManager.isRootAvailable()) {
                     RootShellManager.exec("pgrep -f sd-cli | while read p; do echo -800 > /proc/\$p/oom_score_adj; done")
@@ -396,11 +484,11 @@ object DynamicMediaBroker {
                 Log.d(TAG, "[sd.cpp] $l")
 
                 if (l.contains("loading tensors", ignoreCase = true) || l.contains("tensors in", ignoreCase = true)) {
-                    onStatusUpdate?.invoke("Loading model weights (Storage-streamed)...")
+                    onStatusUpdate?.invoke("Streaming tensors via Zero-RAM mmap...")
                 } else if (l.contains("sampling", ignoreCase = true) || l.contains("generating image", ignoreCase = true) || l.contains("step", ignoreCase = true)) {
-                    onStatusUpdate?.invoke("Denoising visual concepts via CPU SIMD...")
+                    onStatusUpdate?.invoke("Denoising visual concepts via Big Cores CPU...")
                 } else if (l.contains("decoding", ignoreCase = true) || l.contains("vae", ignoreCase = true) || l.contains("latent", ignoreCase = true)) {
-                    onStatusUpdate?.invoke("Decoding VAE latents into RGB pixels...")
+                    onStatusUpdate?.invoke("Decoding VAE tiles into RGB pixels...")
                 } else if (l.contains("save result image", ignoreCase = true)) {
                     onStatusUpdate?.invoke("Finalizing and saving rendered visual...")
                 }
@@ -416,16 +504,14 @@ object DynamicMediaBroker {
                 activeProcess?.destroyForcibly()
             } catch (_: Exception) {}
             activeProcess = null
-            // Reset OOM score and purge cache
             try {
                 if (RootShellManager.isRootAvailable()) {
                     RootShellManager.exec("echo 0 > /proc/${android.os.Process.myPid()}/oom_score_adj")
                     RootShellManager.exec("echo 3 > /proc/sys/vm/drop_caches")
                 }
             } catch (_: Exception) {}
-            // Drop mapped diffusion pages from RAM immediately
             try {
-                PageCacheAdvisor.adviseModelIdle(model.file.absolutePath)
+                PageCacheAdvisor.adviseModelIdle(modelFile.absolutePath)
             } catch (_: Exception) {}
             System.gc()
         }
@@ -438,7 +524,7 @@ object DynamicMediaBroker {
                 imageBytes = imageBytes,
                 mimeType = "image/png",
                 prompt = prompt,
-                modelUsed = "${model.file.name} ($deviceLabel)"
+                modelUsed = "${modelFile.name} ($deviceLabel)"
             )
         } else {
             val rawErr = outputLog.toString().trim()
@@ -450,6 +536,30 @@ object DynamicMediaBroker {
             Log.e(TAG, finalErrMsg)
             return@withContext MediaResult.Error(finalErrMsg)
         }
+    }
+
+    private fun findAnyDiffusionModel(context: Context): File? {
+        val searchDirs = listOf(
+            File("/sdcard/Medlam-Ai/models"),
+            File("/sdcard/Medlam-Ai"),
+            File("/sdcard/Download"),
+            File("/storage/emulated/0/Download"),
+            File(context.filesDir, "models")
+        )
+
+        for (dir in searchDirs) {
+            if (dir.exists() && dir.isDirectory) {
+                val match = dir.listFiles { f ->
+                    val n = f.name.lowercase()
+                    f.isFile && n.endsWith(".gguf") && (
+                        n.contains("turbo") || n.contains("sd") || n.contains("diffusion") ||
+                        n.contains("tiny") || n.contains("dreamshaper") || n.contains("lcm")
+                    )
+                }?.maxByOrNull { it.length() }
+                if (match != null) return match
+            }
+        }
+        return null
     }
 
     private fun locateSdCliBinary(context: Context): File? {
