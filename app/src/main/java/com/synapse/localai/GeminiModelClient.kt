@@ -325,8 +325,8 @@ class GeminiModelClient(
             }
 
             try {
-                // Strict 5-Second SLA Timeout Window for initial connection & response chunk
-                val firstChunk = withTimeoutOrNull(5000L) {
+                // 30-Second timeout for initial connection & response chunk (Gemini thinking mode may take up to 15s to emit first token)
+                val firstChunk = withTimeoutOrNull(30_000L) {
                     val res = channel.receiveCatching()
                     if (res.isClosed) {
                         val cause = res.exceptionOrNull()
@@ -340,13 +340,13 @@ class GeminiModelClient(
                 if (firstChunk == null) {
                     if (!channel.isClosedForReceive) {
                         streamJob.cancel()
-                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 5-second SLA timeout: zero response chunks received within 5000ms")
+                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 30-second timeout: zero response chunks received within 30000ms")
                     } else {
                         throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty response stream")
                     }
                 }
 
-                // First byte received within 5-second SLA: Validate key & persist immediately
+                // First byte received: Validate key & persist immediately
                 markKeySuccess(keyIdx)
                 emit(firstChunk)
 
@@ -561,8 +561,8 @@ class GeminiModelClient(
             }
 
             try {
-                // Strict 5-Second SLA Timeout Window for initial connection & response chunk
-                val firstChunk = withTimeoutOrNull(5000L) {
+                // 30-Second timeout for initial connection & response chunk (Gemini thinking mode may take up to 15s to emit first token)
+                val firstChunk = withTimeoutOrNull(30_000L) {
                     val res = channel.receiveCatching()
                     if (res.isClosed) {
                         val cause = res.exceptionOrNull()
@@ -576,13 +576,13 @@ class GeminiModelClient(
                 if (firstChunk == null) {
                     if (!channel.isClosedForReceive) {
                         streamJob.cancel()
-                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 5-second SLA timeout: zero response chunks received within 5000ms")
+                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 30-second timeout: zero response chunks received within 30000ms")
                     } else {
                         throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty response stream")
                     }
                 }
 
-                // First byte received within 5-second SLA: Validate key & persist immediately
+                // First byte received: Validate key & persist immediately
                 markKeySuccess(keyIdx)
                 emit(firstChunk)
 
