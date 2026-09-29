@@ -383,6 +383,18 @@ class GeminiModelClient(
 
                 fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
+                val isBadRequest = lowerError.contains("400") ||
+                    lowerError.contains("bad request") ||
+                    lowerError.contains("invalid_argument") ||
+                    lowerError.contains("invalid argument")
+
+                // HTTP 400 Bad Request = protocol/payload error, NOT a key issue.
+                // Rotating keys would cause an infinite loop. Throw immediately.
+                if (isBadRequest) {
+                    fileLog("HTTP 400 Bad Request on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
+                    throw RuntimeException("Gemini API Error 400 (Bad Request): $errorMsg")
+                }
+
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
                     lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
 
@@ -618,6 +630,18 @@ class GeminiModelClient(
                 val lowerError = errorMsg.lowercase()
 
                 fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
+
+                val isBadRequest = lowerError.contains("400") ||
+                    lowerError.contains("bad request") ||
+                    lowerError.contains("invalid_argument") ||
+                    lowerError.contains("invalid argument")
+
+                // HTTP 400 Bad Request = protocol/payload error, NOT a key issue.
+                // Rotating keys would cause an infinite loop. Throw immediately.
+                if (isBadRequest) {
+                    fileLog("HTTP 400 Bad Request on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
+                    throw RuntimeException("Gemini API Error 400 (Bad Request): $errorMsg")
+                }
 
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
                     lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")

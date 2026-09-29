@@ -2435,8 +2435,13 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                 }
                                 ModelType.GEMINI -> {
                                     val json = JSONArray()
-                                    historyCopy.forEachIndexed { idx, (r, c) ->
-                                        val m = JSONObject().put("role", r).put("content", c)
+                                    // Normalize roles: Gemini API only accepts "user" or "model"
+                                    historyCopy.forEachIndexed { idx, (role, content) ->
+                                        val geminiRole = when (role.lowercase()) {
+                                            "assistant", "model" -> "model"
+                                            else -> "user"
+                                        }
+                                        val m = JSONObject().put("role", geminiRole).put("content", content)
                                         if (idx == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
                                             m.put("images", JSONArray(imageBase64List))
                                         }
@@ -2447,23 +2452,17 @@ You are an autonomous on-device CLI execution agent. You operate headlessly via 
                                         json.put(JSONObject().put("role", "user").put("content", continuationPromptPayload))
                                     }
 
-                                    val activeCall = lastExecutedToolCall
-                                    if (activeCall != null && iterationCount > 1) {
-                                        lastExecutedToolCall = null
-                                        geminiClient!!.sendFunctionResponseStream(
-                                            name = activeCall.first,
-                                            sanitizedOutput = activeCall.second.second,
-                                            exitCode = activeCall.second.first,
-                                            fallbackMessages = json,
-                                            systemPrompt = systemPrompt
-                                        )
-                                    } else {
-                                        geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
-                                            if (continuationCycle == 1) {
-                                                responseSb.setLength(0)
-                                                liveDiskStreamer.reset()
-                                                pushUiUpdate("")
-                                            }
+                                    // UNIFIED ReAct TEXT FLOW: never call sendFunctionResponseStream.
+                                    // Tool observations are already injected as <observation> text in
+                                    // conversationHistory (role="user") — just forward the full history.
+                                    // This avoids HTTP 400 Bad Request caused by sending a native
+                                    // functionResponse when no native functionCall was issued.
+                                    lastExecutedToolCall = null
+                                    geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
+                                        if (continuationCycle == 1) {
+                                            responseSb.setLength(0)
+                                            liveDiskStreamer.reset()
+                                            pushUiUpdate("")
                                         }
                                     }
                                 }
@@ -2689,7 +2688,8 @@ SYSTEM STATE GUARDRAIL: Analyze the command observation above. You must strictly
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
-                                        conversationHistory.add("assistant" to assistantTurn)
+                                        // Use "model" role — Gemini API requires "user"/"model", not "assistant"
+                                        conversationHistory.add("model" to assistantTurn)
                                         conversationHistory.add("user" to observationMsg)
                                         trimConversationHistoryToContextLimit()
                                     }
@@ -2735,7 +2735,8 @@ Please analyze the search results above and provide your complete response to th
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
-                                        conversationHistory.add("assistant" to assistantTurn)
+                                        // Use "model" role — Gemini API requires "user"/"model", not "assistant"
+                                        conversationHistory.add("model" to assistantTurn)
                                         conversationHistory.add("user" to observationMsg)
                                         trimConversationHistoryToContextLimit()
                                     }
