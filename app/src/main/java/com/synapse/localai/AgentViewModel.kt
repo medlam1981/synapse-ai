@@ -49,6 +49,8 @@ import java.util.*
 import com.synapse.localai.tools.YouTubeTool
 import com.synapse.localai.tools.DocumentTool
 import com.synapse.localai.tools.WebSearchTool
+import com.synapse.localai.tools.PythonTool
+import com.synapse.localai.tools.ContentReaderTool
 import com.synapse.localai.repository.ImageGenerator
 import com.synapse.localai.repository.ImageRepository
 import com.synapse.localai.repository.ImageResult
@@ -518,6 +520,9 @@ class AgentViewModel : ViewModel() {
         text = text.replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<function_calls>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<observation>[\s\S]*?</observation>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<observation>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""SYSTEM MANDATORY INSTRUCTION:[\s\S]*$""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<terminal_frame[\s\S]*?</terminal_frame>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<terminal_frame[\s\S]*$""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""Shell output \(`[^`]+`\):\s*```(?:bash|sh)?\r?\n[\s\S]*?```""", RegexOption.IGNORE_CASE), "")
@@ -532,6 +537,9 @@ class AgentViewModel : ViewModel() {
         text = text.replace(Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<observation>[\s\S]*?</observation>""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""<observation>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
+        text = text.replace(Regex("""SYSTEM MANDATORY INSTRUCTION:[\s\S]*$""", RegexOption.IGNORE_CASE), "")
         text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
         return text.trim()
     }
@@ -568,7 +576,7 @@ class AgentViewModel : ViewModel() {
         if (trimmed.isEmpty()) return "[No search data found]"
         val lines = trimmed.lines()
         val lineCapped = if (lines.size > maxLines) lines.take(maxLines).joinToString("\n") else trimmed
-        val charCapped = if (lineCapped.length > maxChars) lineCapped.take(maxChars) else lineCapped
+        val charCapped = if (lineCapped.length > maxChars) lineCapped.takeLast(maxChars) else lineCapped
         return charCapped.trim().ifEmpty { "[No search data found]" }
     }
 
@@ -1123,18 +1131,21 @@ class AgentViewModel : ViewModel() {
 1. HOST OS vs EXTERNAL WORLD:
    - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
    - Use `web_search(query)` for ALL real-world facts, current events, live prices, documentation, sports, weather, entity queries, and online knowledge.
+   - Use `fetch_web_content(url)` to retrieve clean, in-depth text content from URLs found via web search.
+   - Use `run_python(script)` to calculate algebra, integrals, calculus, and scientific computations locally with zero hallucination.
+   - Use `read_file_range(path, start_line, line_count)` to inspect large files efficiently without exhausting memory.
 2. MANDATORY SYNTHESIS TURN (CRITICAL):
-   - You must NOT emit redundant tool calls. Once observation is provided, you are STRICTLY FORBIDDEN from calling the tool again.
-   - You MUST analyze the observation and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly.
+   - You must NOT emit redundant tool calls. Once findings are provided, you are STRICTLY FORBIDDEN from calling the tool again.
+   - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates or XML tags back to the user.
 """.trimIndent()
 
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
             return """$effectivePersona
-Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query).
+Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>
 SYNCHRONOUS REACT RULE: Halt text generation immediately when calling tools.
-SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</observation>, synthesize facts immediately.$custom$antiMonologueDirective$universalGroundingDirective""".trimIndent()
+SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts directly in natural language.$custom$antiMonologueDirective$universalGroundingDirective""".trimIndent()
         }
 
         val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest"
@@ -1143,12 +1154,12 @@ SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</obse
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
-- Conclude with verified facts directly from tool observations.
+- Conclude with verified facts directly in natural language without echoing tools or system directives.
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
@@ -1299,7 +1310,7 @@ SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</obse
                 var iterationCount = 0
                 var toolsUsedThisTurn = false
                 var toolCallCount = 0
-                val MAX_TOOL_CALLS = 3
+                val MAX_TOOL_CALLS = 4
                 var forceFinalTurn = false
                 var activeGgufPromptPrefix: String? = null
 
@@ -1348,7 +1359,7 @@ SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</obse
                                 val lastIdx = updatedLogs.indexOfLast { it.id == liveLogId }
                                 if (lastIdx >= 0) {
                                     updatedLogs[lastIdx] = updatedLogs[lastIdx].copy(
-                                        text = rawText,
+                                        text = cleanVisibleText(rawText),
                                         thinkingText = demuxed.thinkingText,
                                         isThinking = demuxed.isThinking
                                     )
@@ -1481,6 +1492,18 @@ SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</obse
                                 val c = call.params["command"] ?: call.params["cmd"] ?: call.params.values.firstOrNull() ?: ""
                                 c.trim().isNotBlank()
                             }
+                            "run_python", "python", "py_eval" -> {
+                                val s = call.params["script"] ?: call.params["code"] ?: call.params.values.firstOrNull() ?: ""
+                                s.trim().isNotBlank()
+                            }
+                            "fetch_web_content", "fetch_url", "read_url" -> {
+                                val u = call.params["url"] ?: call.params.values.firstOrNull() ?: ""
+                                u.trim().isNotBlank()
+                            }
+                            "read_file_range", "read_lines" -> {
+                                val p = call.params["path"] ?: call.params["file"] ?: ""
+                                p.trim().isNotBlank()
+                            }
                             else -> true
                         }
                     }
@@ -1491,7 +1514,7 @@ SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</obse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val displayText = if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
                             _uiState.update { state ->
-                                val updated = state.logs.map { log -> if (log.id == liveLogId) log.copy(text = displayText, thinkingText = demuxedFull.thinkingText, isThinking = false) else log }
+                                val updated = state.logs.map { log -> if (log.id == liveLogId) log.copy(text = cleanVisibleText(displayText), thinkingText = demuxedFull.thinkingText, isThinking = false) else log }
                                 state.copy(logs = updated)
                             }
                             keepGoing = false
@@ -1528,12 +1551,10 @@ SYSTEM STATE GUARDRAIL: When observations are provided in <observation>...</obse
                                         refreshSessions()
                                     }
 
-                                    val observationMsg = """<observation>
-[Process completed with exit code $exitCode]
+                                    val observationMsg = """[Command Output (Exit code $exitCode)]:
 $output
-</observation>
 
-SYSTEM MANDATORY INSTRUCTION: Analyze the command observation above and report verified metrics directly to the user now. Do not call further tools."""
+Respond directly to the user now with the final answer. Do not call more tools."""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1561,12 +1582,10 @@ SYSTEM MANDATORY INSTRUCTION: Analyze the command observation above and report v
                                     }
 
                                     val truncatedSearch = truncateSearchObservation(searchData, maxChars = 1500, maxLines = 25)
-                                    val observationMsg = """<observation>
-[SEARCH RESULTS for "$searchQuery"]:
+                                    val observationMsg = """[Web Search Results for "$searchQuery"]:
 $truncatedSearch
-</observation>
 
-SYSTEM MANDATORY INSTRUCTION: Analyze the search results above and deliver your final, comprehensive answer directly to the user now. State real scores, weather, and verified facts. Do not call any further tools."""
+Instructions: Present a complete, organized response to the user based on the verified findings above in Arabic. Do not repeat this instruction."""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1595,12 +1614,11 @@ SYSTEM MANDATORY INSTRUCTION: Analyze the search results above and deliver your 
                                         refreshSessions()
                                     }
 
-                                    val truncatedSummary = sanitizeProcessOutput(cleanSummary, maxChars = 800, maxLines = 15)
-                                    val observationMsg = """<observation>
+                                    val truncatedSummary = sanitizeProcessOutput(cleanSummary, maxChars = 1200, maxLines = 25)
+                                    val observationMsg = """[Tool Execution Findings]:
 $truncatedSummary
-</observation>
 
-SYSTEM INSTRUCTION: Analyze the observation above and provide your complete final response directly to the user."""
+Instructions: Answer the user's request directly based on these findings. Do not call any further tools."""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1617,12 +1635,13 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
                             val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
+                            val cleanDisplay = cleanVisibleText(cleanHistoryReply)
                             _uiState.update { state ->
-                                val updated = state.logs.map { log -> if (log.id == liveLogId) log.copy(text = cleanHistoryReply, thinkingText = demuxedFull.thinkingText, isThinking = false) else log }
+                                val updated = state.logs.map { log -> if (log.id == liveLogId) log.copy(text = cleanDisplay, thinkingText = demuxedFull.thinkingText, isThinking = false) else log }
                                 state.copy(logs = updated)
                             }
                             val sid = currentSessionId.value
-                            val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$cleanHistoryReply" else cleanHistoryReply
+                            val dbText = if (demuxedFull.thinkingText.isNotBlank()) "<think>${demuxedFull.thinkingText}</think>\n$cleanDisplay" else cleanDisplay
                             viewModelScope.launch(Dispatchers.IO) {
                                 chatDb?.insertMessage(ChatMessageEntity(id = liveLogId, sessionId = sid, sender = "AGENT", text = dbText, timestamp = System.currentTimeMillis()))
                                 refreshSessions()
@@ -1631,7 +1650,7 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
                                 EpistemicMemoryManager.recordInteraction(actualContext, command, fullResponse, detectedPath)
                             }
                             synchronized(conversationHistory) {
-                                conversationHistory.add("model" to cleanHistoryReply)
+                                conversationHistory.add("model" to cleanDisplay)
                                 trimConversationHistoryToContextLimit()
                             }
                             keepGoing = false
@@ -1855,6 +1874,35 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
                                 summaries.add("🔍 Web Search: ${q.trim()}\n\n[RESULTS]:\n$truncatedSearch")
                             }
                         }
+                        "run_python", "python", "py_eval" -> {
+                            val script = params["script"] ?: params["code"] ?: params.values.firstOrNull() ?: ""
+                            if (script.isNotBlank()) {
+                                actionToolUsed = true
+                                val output = PythonTool.execute(script)
+                                summaries.add("✔ Tool(run_python) ─── [EXECUTED]\n$output")
+                                addSystemLog("Python execution completed")
+                            }
+                        }
+                        "fetch_web_content", "fetch_url", "read_url" -> {
+                            val url = params["url"] ?: params.values.firstOrNull() ?: ""
+                            if (url.isNotBlank()) {
+                                actionToolUsed = true
+                                val content = ContentReaderTool.fetchUrl(url)
+                                summaries.add("✔ Tool(fetch_web_content: $url) ─── [FETCHED]\n$content")
+                                addSystemLog("Fetched URL: $url")
+                            }
+                        }
+                        "read_file_range", "read_lines" -> {
+                            val path = params["path"] ?: params["file"] ?: ""
+                            val start = params["start_line"]?.toIntOrNull() ?: 1
+                            val count = params["line_count"]?.toIntOrNull() ?: 60
+                            if (path.isNotBlank()) {
+                                actionToolUsed = true
+                                val range = ContentReaderTool.readFileRange(path, start, count)
+                                summaries.add("✔ Tool(read_file_range: $path [$start..${start + count}])\n$range")
+                                addSystemLog("Read range from: $path")
+                            }
+                        }
                         "complete" -> {
                             val s = params["summary"] ?: params.values.firstOrNull() ?: ""
                             if (s.isNotBlank()) summaries.add(s)
@@ -1890,16 +1938,6 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
         ) }
     }
 
-    fun consolidateWorkspaceDirectories() {
-        try {
-            val rootDir = File("/sdcard/Medlam-Ai")
-            if (!rootDir.exists()) rootDir.mkdirs()
-            val oldCheckpoint = File("/sdcard/Medlam-Ai/memory/agent_checkpoint.json")
-            if (oldCheckpoint.exists()) oldCheckpoint.delete()
-            ZramOptimizer.ensureNoMedia()
-        } catch (_: Exception) {}
-    }
-
     fun refreshSessions() {
         viewModelScope.launch(Dispatchers.IO) {
             chatSessions.value = chatDb?.getAllSessions() ?: emptyList()
@@ -1913,7 +1951,6 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
         _uiState.update { it.copy(logs = emptyList(), resumptionNotice = null, activeWorkspacePath = null) }
         conversationHistory.clear()
         viewModelScope.launch(Dispatchers.IO) {
-            chatDb?.cleanupEmptySessions(exceptSessionId = newId)
             chatDb?.insertSession(ChatSessionEntity(id = newId, title = "New Session", createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis()))
             refreshSessions()
         }
@@ -1943,7 +1980,7 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
                 LogEntry(
                     id = msg.id,
                     sender = msg.sender,
-                    text = logText,
+                    text = cleanVisibleText(logText),
                     isError = msg.isError,
                     timestamp = msg.timestamp,
                     thinkingText = parsed.thought,
@@ -2033,10 +2070,6 @@ SYSTEM INSTRUCTION: Analyze the observation above and provide your complete fina
     fun addSystemLog(text: String) { Log.i(TAG, "SystemLog: $text") }
     private fun prefs(context: Context) = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
     private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
-
-    fun dismissResumptionNotice() {
-        _uiState.update { it.copy(resumptionNotice = null) }
-    }
 
     override fun onCleared() { 
         super.onCleared()
