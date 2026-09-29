@@ -1,3 +1,8 @@
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.ui.ExperimentalComposeUiApi::class
+)
+
 package com.synapse.localai
 
 import android.content.ComponentCallbacks2
@@ -7,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
@@ -17,6 +23,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
@@ -46,6 +53,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -56,6 +65,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -257,6 +267,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         instance = this
 
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         setupGlobalCrashHandler()
 
         try {
@@ -402,7 +413,7 @@ private data class SlashCommandItem(
     val action: () -> Unit
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val isDark = isSystemInDarkTheme()
@@ -416,6 +427,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     var textInput by remember { mutableStateOf("") }
     var viewingImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     val slashCommands = remember(context) {
         listOf(
@@ -754,7 +767,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     }
 
                     val inputIsArabic = isArabic(textInput)
-                    val isInputReady = uiState.initPhase == InitializationPhase.SYSTEM_READY && !uiState.localModelLoading && !uiState.isProcessing
+                    val isInputReady = !uiState.isProcessing
                     val canSend = isInputReady && (textInput.isNotBlank() || selectedFileUri != null)
 
                     CompositionLocalProvider(
@@ -779,7 +792,14 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .padding(vertical = 6.dp),
+                                        .padding(vertical = 6.dp)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            focusRequester.requestFocus()
+                                            keyboardController?.show()
+                                        },
                                     contentAlignment = Alignment.CenterStart
                                 ) {
                                     BasicTextField(
@@ -794,35 +814,42 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         ),
                                         cursorBrush = SolidColor(cyanAccent),
                                         maxLines = 4,
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .focusRequester(focusRequester),
                                         decorationBox = { inner ->
-                                            if (textInput.isEmpty()) {
-                                                val placeholderText = when {
-                                                    uiState.initPhase == InitializationPhase.ALLOCATING_MEMORY || uiState.localModelLoading -> {
-                                                        if (inputIsArabic) "جارٍ تخصيص الذاكرة وتحميل النموذج..." else "Allocating Memory..."
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                contentAlignment = Alignment.CenterStart
+                                            ) {
+                                                if (textInput.isEmpty()) {
+                                                    val placeholderText = when {
+                                                        uiState.isProcessing -> {
+                                                            if (inputIsArabic) "الوكيل يقوم بالتفكير والتنفيذ..." else "Agent is thinking / executing..."
+                                                        }
+                                                        uiState.initPhase == InitializationPhase.ALLOCATING_MEMORY || uiState.localModelLoading -> {
+                                                            if (inputIsArabic) "جارٍ تخصيص الذاكرة وتحميل النموذج..." else "Allocating Memory..."
+                                                        }
+                                                        uiState.initPhase == InitializationPhase.PARSING_PERSONA -> {
+                                                            if (inputIsArabic) "جارٍ تهيئة الشخصية والذاكرة المؤقتة..." else "Parsing Persona..."
+                                                        }
+                                                        else -> {
+                                                            if (inputIsArabic) "رسالة إلى وكيل ATLAS-AI..." else "Message ATLAS-AI Agent..."
+                                                        }
                                                     }
-                                                    uiState.initPhase == InitializationPhase.PARSING_PERSONA -> {
-                                                        if (inputIsArabic) "جارٍ تهيئة الشخصية والذاكرة المؤقتة..." else "Parsing Persona..."
-                                                    }
-                                                    uiState.isProcessing -> {
-                                                        if (inputIsArabic) "الوكيل يقوم بالتفكير والتنفيذ..." else "Agent is thinking / executing..."
-                                                    }
-                                                    else -> {
-                                                        if (inputIsArabic) "رسالة إلى وكيل ATLAS-AI..." else "Message ATLAS-AI Agent..."
-                                                    }
+                                                    Text(
+                                                        text = placeholderText,
+                                                        style = TextStyle(
+                                                            color = textDim,
+                                                            fontSize = 12.sp,
+                                                            fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
+                                                            textAlign = TextAlign.Start
+                                                        ),
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    )
                                                 }
-                                                Text(
-                                                    text = placeholderText,
-                                                    style = TextStyle(
-                                                        color = textDim,
-                                                        fontSize = 12.sp,
-                                                        fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
-                                                        textAlign = TextAlign.Start
-                                                    ),
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
+                                                inner()
                                             }
-                                            inner()
                                         }
                                     )
                                 }
@@ -1136,7 +1163,6 @@ fun ConsolidatedMasterHeader(
     onOpenDrawer: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
-
     val headerBg = MaterialTheme.colorScheme.surfaceContainer
     val subCardBg = MaterialTheme.colorScheme.surfaceContainerHigh
     val textBright = MaterialTheme.colorScheme.onSurface
@@ -1267,7 +1293,6 @@ fun ConsolidatedMasterHeader(
 
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
             val isLocalMode = !isCloudMode
-            val isMtpDisabledByMmap = false 
             val effectiveDraftPath = uiState.activeDraftModelPath ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
             val hasMtp = isLocalMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
             val draftFile = if (hasMtp && effectiveDraftPath != null) File(effectiveDraftPath) else null
@@ -1309,8 +1334,6 @@ fun ConsolidatedMasterHeader(
                 "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
             } else if (hasMtp && draftTag != null) {
                 "$cleanBaseName • MTP: $draftTag$tpsSuffix"
-            } else if (isMtpDisabledByMmap) {
-                "$cleanBaseName • STANDALONE (MMAP LOCK)$tpsSuffix"
             } else {
                 "$cleanBaseName • STANDALONE$tpsSuffix"
             }
@@ -2602,7 +2625,6 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                 continue
             }
 
-            // Check if trimmed starts a multi-line block math formula ($$...$$)
             if (trimmed.startsWith("$$") && !trimmed.removePrefix("$$").contains("$$")) {
                 val blockMathLines = mutableListOf<String>()
                 blockMathLines.add(line)
