@@ -54,3 +54,9 @@ releases/*.apk
 releases/*.apk.idsig
 check_gemini_headers.py
 original_viewmodel.kt
+
+*.pid
+scratch/
+Replying...
+STANDALONE
+Thinking & Planning...
