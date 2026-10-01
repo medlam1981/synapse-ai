@@ -2,9 +2,12 @@ package com.synapse.localai
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 
@@ -61,7 +64,8 @@ object LlamaNativeEngine {
             try { System.loadLibrary("stable-diffusion") } catch (_: Throwable) {}
             try { System.loadLibrary("sd-cli") } catch (_: Throwable) {}
 
-            // 6. JNI Bridge (FIXED: loads synapse_bridge instead of medlam_engine)
+            // 6. JNI Bridge
+            try { System.loadLibrary("medlam_engine") } catch (_: Throwable) {}
             System.loadLibrary("synapse_bridge")
 
             isLoaded = true
@@ -186,7 +190,10 @@ object LlamaNativeEngine {
     fun stream(
         prompt: String,
         onMetrics: ((tokens: Int, tokensPerSec: Double) -> Unit)? = null
-    ): Flow<String> = callbackFlow {
+    ): Flow<String> = kotlinx.coroutines.flow.channelFlow {
+        // High-capacity lock-free queue to decouple C++ producer from Kotlin consumer
+        val tokenChannel = kotlinx.coroutines.channels.Channel<String>(capacity = kotlinx.coroutines.channels.Channel.UNLIMITED)
+
         // 1. Force hardware binding strictly to Big Cores (Cores 4-7) before generation starts
         try {
             pinToBigCores()
@@ -197,46 +204,121 @@ object LlamaNativeEngine {
 
         resetAbort()
 
+        // 1. The Producer: Non-blocking native callback returning in sub-milliseconds (<0.05ms)
         val callback = object : NativeInferenceCallback {
             override fun onToken(piece: String): Boolean {
-                // Check for stop tokens anywhere in the piece
-                for (stop in STOP_SEQUENCES) {
-                    if (piece.contains(stop)) {
-                        // Strip out the stop token to keep output clean
-                        val cleanPiece = piece.replace(stop, "").replace("<", "").replace(">", "").replace("/", "")
-                        if (cleanPiece.isNotEmpty()) {
-                            trySend(cleanPiece)
-                        }
-                        // Instantly abort native compute loop
-                        abort()
-                        stop_generation()
-                        return false
-                    }
-                }
-                return trySend(piece).isSuccess
+                if (isAborted()) return false
+                val sendResult = tokenChannel.trySend(piece)
+                return !isAborted() && sendResult.isSuccess
             }
 
             override fun onComplete(tokensGenerated: Int, tokensPerSecond: Double) {
                 Log.i(TAG, "Inference complete: $tokensGenerated tokens (%.2f tok/s)".format(tokensPerSecond))
                 onMetrics?.invoke(tokensGenerated, tokensPerSecond)
-                close()
+                tokenChannel.close()
             }
 
             override fun onError(message: String) {
                 Log.e(TAG, "Native inference error: $message")
-                close(RuntimeException(message))
+                tokenChannel.close(RuntimeException(message))
             }
         }
 
-        withContext(Dispatchers.IO) {
-            generate_stream(prompt, callback)
+        // Dedicated Producer Job on Dispatchers.IO running native inference loop
+        val producerJob = launch(Dispatchers.IO) {
+            try {
+                generate_stream(prompt, callback)
+            } finally {
+                tokenChannel.close()
+            }
         }
+
+        // 2. The Consumer: Dedicated background draining coroutine with Micro-Batching (66ms / ~15Hz)
+        launch(Dispatchers.Default) {
+            val batchBuffer = StringBuilder()
+            var lastFlushTime = System.currentTimeMillis()
+            val windowMs = 66L // Strict 15Hz throttling window
+
+            for (token in tokenChannel) {
+                batchBuffer.append(token)
+                val now = System.currentTimeMillis()
+
+                // Check stop sequences in the batch
+                var stopFound: String? = null
+                val batchStr = batchBuffer.toString()
+                for (stop in STOP_SEQUENCES) {
+                    if (batchStr.contains(stop)) {
+                        stopFound = stop
+                        break
+                    }
+                }
+
+                if (stopFound != null) {
+                    var cleanBatch = batchStr.replace(stopFound, "")
+                    for (stop in STOP_SEQUENCES) {
+                        cleanBatch = cleanBatch.replace(stop, "")
+                    }
+                    if (cleanBatch.isNotEmpty()) {
+                        send(cleanBatch)
+                    }
+                    abort()
+                    stop_generation()
+                    break
+                }
+
+                // Micro-batch flush condition: time window expired (10Hz-15Hz) or newline encountered
+                if (now - lastFlushTime >= windowMs || token.contains('\n')) {
+                    send(batchBuffer.toString())
+                    batchBuffer.clear()
+                    lastFlushTime = now
+                }
+            }
+
+            // Flush remaining tokens upon completion
+            if (batchBuffer.isNotEmpty()) {
+                var cleanBatch = batchBuffer.toString()
+                for (stop in STOP_SEQUENCES) {
+                    cleanBatch = cleanBatch.replace(stop, "")
+                }
+                if (cleanBatch.isNotEmpty()) {
+                    send(cleanBatch)
+                }
+                batchBuffer.clear()
+            }
+        }.join()
 
         awaitClose {
             abort()
             stop_generation()
+            producerJob.cancel()
+            tokenChannel.close()
         }
-    }.flowOn(Dispatchers.IO)
+    }.flowOn(Dispatchers.Default)
 }
+
+/**
+ * Decoupled Consumer Extension: Micro-batches incoming streaming token chunks
+ * over a strict time window (e.g. 50ms - 80ms / 12Hz - 15Hz) to prevent
+ * single-token downstream UI recompositions and parsing thrashing.
+ */
+fun Flow<String>.microBatch(windowMs: Long = 66L): Flow<String> = kotlinx.coroutines.flow.channelFlow {
+    val buffer = StringBuilder()
+    var lastFlushTime = System.currentTimeMillis()
+
+    collect { chunk ->
+        buffer.append(chunk)
+        val now = System.currentTimeMillis()
+        if (now - lastFlushTime >= windowMs || chunk.contains('\n')) {
+            send(buffer.toString())
+            buffer.clear()
+            lastFlushTime = now
+        }
+    }
+
+    if (buffer.isNotEmpty()) {
+        send(buffer.toString())
+        buffer.clear()
+    }
+}.flowOn(Dispatchers.Default)
 
 val llamaNativeEngine = LlamaNativeEngine

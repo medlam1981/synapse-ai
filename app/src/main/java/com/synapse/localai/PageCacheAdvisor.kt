@@ -55,29 +55,37 @@ object PageCacheAdvisor {
     }
 
     /**
-     * Informs the Linux kernel to prefetch active model pages into PageCache sequentially.
+     * Informs the Linux kernel that model pages are accessed sequentially without forcing MADV_WILLNEED.
+     * Prevents synchronous kernel page-fault thrashing storms on RAM-constrained devices.
      */
     fun adviseModelActive(pathPattern: String? = null) {
         try {
-            val advisedBytes = nativeAdviseModelMemory(pathPattern, ADVICE_WILLNEED)
+            val advisedBytes = nativeAdviseModelMemory(pathPattern, ADVICE_SEQUENTIAL)
             val mb = advisedBytes / (1024 * 1024)
-            Log.i(TAG, "⚡ [PageCache] Issued madvise(MADV_WILLNEED) on $mb MB of model pages")
+            Log.i(TAG, "⚡ [PageCache] Issued madvise(MADV_SEQUENTIAL) on $mb MB of model pages")
         } catch (t: Throwable) {
             Log.w(TAG, "adviseModelActive notice: ${t.message}")
         }
     }
 
     /**
-     * Informs the Linux kernel that model pages are no longer actively needed.
-     * Drops clean file-backed pages from RAM instantly to avoid kswapd thrashing and LMK triggers.
+     * Preserves warm model pages in RAM across conversational turns.
+     * Dropping pages with MADV_DONTNEED between turns was causing severe 0.1 T/s degradation.
      */
     fun adviseModelIdle(pathPattern: String? = null) {
+        // No-op: keep weights warm in PageCache across conversation turns
+    }
+
+    /**
+     * Explicitly evicts model pages from physical RAM when unloading or switching models.
+     */
+    fun forceEvictModel(pathPattern: String? = null) {
         try {
             val advisedBytes = nativeAdviseModelMemory(pathPattern, ADVICE_DONTNEED)
             val mb = advisedBytes / (1024 * 1024)
-            Log.i(TAG, "⚡ [PageCache] Issued madvise(MADV_DONTNEED) on $mb MB of model pages (reclaimed)")
+            Log.i(TAG, "⚡ [PageCache] Explicitly evicted $mb MB of model pages from RAM")
         } catch (t: Throwable) {
-            Log.w(TAG, "adviseModelIdle notice: ${t.message}")
+            Log.w(TAG, "forceEvictModel notice: ${t.message}")
         }
     }
 

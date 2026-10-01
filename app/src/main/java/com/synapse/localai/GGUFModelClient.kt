@@ -90,14 +90,14 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 4096
+    var contextLength: Int = 2048
     var threadCount: Int = 4
     var maxTokens: Int = 2048
-    var temperature: Float = 0.4f
+    var temperature: Float = 0.30f
     var topP: Float = 0.90f
     var topK: Int = 40
-    var repeatPenalty: Float = 1.15f
-    var repeatLastN: Int = 64
+    var repeatPenalty: Float = 1.18f
+    var repeatLastN: Int = 128
     var frequencyPenalty: Float = 0.0f
     var presencePenalty: Float = 0.0f
     var draftModelPath: String? = null
@@ -469,7 +469,7 @@ class GGUFModelClient {
                 RootShellManager.exec("echo 4096 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null || echo 4096 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null")
             } catch (_: Exception) {}
 
-            val internalLogDir = appContext?.filesDir ?: File("/sdcard/Medlam-Ai")
+            val internalLogDir = File("/sdcard/Medlam-Ai")
             if (!internalLogDir.exists()) internalLogDir.mkdirs()
             val logFile = File(internalLogDir, "native_log.txt")
             try { logFile.delete() } catch (_: Exception) {}
@@ -482,15 +482,12 @@ class GGUFModelClient {
 
             val freeRam = getAvailableRamMb()
             val modelSizeMb = modelFile.length() / (1024 * 1024)
+            // Ultra-fast f16 KV cache: zero runtime dequantization overhead on ARM NEON
             val kvCacheType = "f16"
 
-            // Compute Allocation: prioritize performance (big) cores strictly
-            val effectiveThreads = if (this@GGUFModelClient.threadCount in 1..32) {
-                this@GGUFModelClient.threadCount
-            } else {
-                hw?.let { DeviceProfile.optimalThreads(it) } ?: 4
-            }
-            val effectiveBatchThreads = effectiveThreads
+            // Compute Allocation: strictly dedicate all 4 Kryo Gold Big performance cores (Cores 4-7)
+            val effectiveThreads = hw?.let { DeviceProfile.optimalThreads(it) }?.coerceIn(4, 8) ?: 4
+            val effectiveBatchThreads = hw?.let { DeviceProfile.optimalBatchThreads(it) }?.coerceIn(4, 8) ?: 4
             val resolvedCtx = (this@GGUFModelClient.contextLength).coerceIn(1024, 4096)
             var effectiveGpuLayers = this@GGUFModelClient.gpuLayers.coerceAtLeast(0)
             if (effectiveGpuLayers > 0) {
@@ -504,8 +501,9 @@ class GGUFModelClient {
             }
 
             val effectiveBatch = 512
-            val effectiveUbatch = 256
-            val flashAttnArg = if (effectiveGpuLayers > 0) "auto" else "off"
+            val effectiveUbatch = 128
+            // CPU inference: Flash Attention disabled on ARM Cortex-A73 to avoid tiling overhead
+            val flashAttnArg = "off"
 
             val effectiveMmap = determineEffectiveMmap(resolvedPath, useMmap)
             val estKvCacheMb = (resolvedCtx.toLong() * 20L * 1024L * 9L) / (16L * 1024L * 1024L)
@@ -524,6 +522,7 @@ class GGUFModelClient {
                 "--n-gpu-layers", effectiveGpuLayers.toString(),
                 "--cache-type-k", kvCacheType,
                 "--cache-type-v", kvCacheType,
+                "--cache-ram", "0",
                 "--defrag-thold", "0.1",
                 "--context-shift",
                 "-fa", flashAttnArg,
@@ -555,10 +554,15 @@ class GGUFModelClient {
             // Speculative Decoding Configuration
             var activeDraftPath = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
             if (draftModelPath != "STANDALONE" && activeDraftPath.isNullOrBlank()) {
-                val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
-                if (matched != null && matched.exists()) {
-                    activeDraftPath = matched.absolutePath
-                    fileLog("⚡ Auto-linked companion Gemma MTP draft: ${matched.name}")
+                // Safeguard: Only auto-link companion MTP draft if physical RAM is sufficient (>= 1500MB available)
+                if (freeRam >= 1500L) {
+                    val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
+                    if (matched != null && matched.exists()) {
+                        activeDraftPath = matched.absolutePath
+                        fileLog("⚡ Auto-linked companion Gemma MTP draft: ${matched.name}")
+                    }
+                } else {
+                    fileLog("ℹ️ Memory Guard: ${freeRam}MB RAM available (< 1500MB). Running base model in standalone mode to avoid page thrashing.")
                 }
             }
 
@@ -593,7 +597,7 @@ class GGUFModelClient {
             fileLog("Launch args: ${trialArgs.joinToString(" ")}")
 
             try {
-                RootShellManager.exec("chmod 644 /sys/devices/system/cpu/cpu*/online 2>/dev/null; for i in 0 1 2 3 4 5 6 7; do echo 1 > /sys/devices/system/cpu/cpu\$i/online 2>/dev/null; done")
+                /* Thermal Safety: Core forcing disabled */
             } catch (_: Exception) {}
 
             val nativeReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
@@ -762,7 +766,7 @@ class GGUFModelClient {
         onStatus("Launching High-Speed Base Model (STANDALONE)... ⏳")
 
         try {
-            RootShellManager.exec("chmod 644 /sys/devices/system/cpu/cpu*/online 2>/dev/null; for i in 0 1 2 3 4 5 6 7; do echo 1 > /sys/devices/system/cpu/cpu\$i/online 2>/dev/null; done; echo 4096 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null || echo 4096 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null")
+            /* Thermal Safety: Core forcing disabled */
         } catch (_: Exception) {}
         try { LlamaServerJNI.stop() } catch (_: Throwable) {}
         try {
@@ -1028,11 +1032,11 @@ class GGUFModelClient {
         }
 
         val targetMaxTokens = if (maxTokens in 1..2048) maxTokens else 2048
-        val targetTemp = overrideTemperature ?: 0.4f
-        val targetTopP = 0.90f
-        val targetTopK = 40
-        val targetRepeatPenalty = 1.15f
-        val targetRepeatLastN = 64
+        val targetTemp = overrideTemperature ?: this@GGUFModelClient.temperature
+        val targetTopP = this@GGUFModelClient.topP
+        val targetTopK = this@GGUFModelClient.topK
+        val targetRepeatPenalty = this@GGUFModelClient.repeatPenalty
+        val targetRepeatLastN = this@GGUFModelClient.repeatLastN
 
         val body = JSONObject()
             .put("prompt", promptText)
@@ -1047,7 +1051,7 @@ class GGUFModelClient {
             .put("cache_prompt", true)
             .put("stop", stopArray)
 
-        val bodyBytes = body.toString().toByteArray()
+        val bodyBytes: ByteArray = body.toString().toByteArray(java.nio.charset.StandardCharsets.UTF_8)
         var conn: HttpURLConnection? = null
         var responseCode = -1
 
@@ -1057,7 +1061,6 @@ class GGUFModelClient {
             LlamaNativeEngine.pinToBigCores()
             LlamaServerJNI.safeBindPerformanceCores()
             ZramOptimizer.pinToPerformanceCores("f0")
-            PageCacheAdvisor.adviseModelActive(modelPath ?: globalLoadedPath)
         } catch (_: Exception) {}
 
         var attempts = 0
@@ -1251,7 +1254,8 @@ class GGUFModelClient {
                             lineBuffer.append(chunkToEmit)
                             fullStreamText.append(chunkToEmit)
 
-                            if (StreamDemultiplexer.hasCompletedToolCall(fullStreamText.toString())) {
+                            if ((chunkToEmit.contains('>') || chunkToEmit.contains('}')) &&
+                                StreamDemultiplexer.hasCompletedToolCall(fullStreamText.toString())) {
                                 Log.i(TAG, "GGUFModelClient: Synchronous ReAct Barrier triggered, halting llama.cpp text generation immediately.")
                                 lastFinishReason = "STOP"
                                 break
@@ -1288,9 +1292,6 @@ class GGUFModelClient {
             lastTokenCount = tokenCount
             reader.close()
             conn.disconnect()
-            try {
-                PageCacheAdvisor.adviseModelIdle(modelPath ?: globalLoadedPath)
-            } catch (_: Exception) {}
         }
     }.flowOn(Dispatchers.IO)
 

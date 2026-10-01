@@ -23,7 +23,11 @@ object PersonaDataStore {
         if (prompt.contains("Worker 1") ||
             prompt.contains("Worker 2") ||
             prompt.contains("ChatGPT") ||
-            !prompt.contains("ATLAS-AI")) {
+            !prompt.contains("ATLAS-AI") ||
+            !prompt.contains("GREETINGS") ||
+            !prompt.contains("STRICT LANGUAGE RULE FOR GREETINGS") ||
+            !prompt.contains("CORE OPERATIONAL DOCTRINE") ||
+            !prompt.contains("TERMINAL COMMAND EXECUTION")) {
             return true
         }
         return false

@@ -305,8 +305,8 @@ void MedlamInferenceEngine::check_thermal_status() {
     int temp = read_soc_temperature();
     if (temp <= 0) return;
 
-    if (temp > 65 && m_current_threads > 2) {
-        LOGW("Dynamic Thermal Guard: SoC temp is %d°C (> 65°C). Throttling worker threads from %d to 2 to eliminate thermal throttling.",
+    if (temp > 82 && m_current_threads > 2) {
+        LOGW("Dynamic Thermal Guard: SoC temp is %d°C (> 82°C). Throttling worker threads from %d to 2 to eliminate thermal throttling.",
              temp, m_current_threads);
         m_current_threads = 2;
         if (m_target_ctx) {
@@ -315,8 +315,8 @@ void MedlamInferenceEngine::check_thermal_status() {
         if (m_draft_ctx) {
             llama_set_n_threads(m_draft_ctx, 2, 2);
         }
-    } else if (temp < 58 && m_current_threads < 4) {
-        LOGI("Dynamic Thermal Guard: SoC temp cooled down to %d°C (< 58°C). Restoring worker threads from %d to 4.",
+    } else if (temp < 74 && m_current_threads < 4) {
+        LOGI("Dynamic Thermal Guard: SoC temp cooled down to %d°C (< 74°C). Restoring worker threads from %d to 4.",
              temp, m_current_threads);
         m_current_threads = 4;
         if (m_target_ctx) {

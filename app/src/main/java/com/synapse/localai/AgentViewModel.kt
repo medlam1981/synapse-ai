@@ -5,7 +5,6 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
-import com.synapse.localai.audio.CascadeStreamInterceptor
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import kotlinx.coroutines.flow.collectLatest
@@ -134,10 +133,10 @@ data class AgentConfig(
     val geminiModelName: String = "gemini-2.0-flash",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 8088,
-    val contextLength: Int = 4096,
+    val contextLength: Int = 2048,
     val threadCount: Int = 4,
     val maxTokens: Int = 2048,
-    val temperature: Float = 0.4f,
+    val temperature: Float = 0.30f,
     val enableVisualHistory: Boolean = false,
     val enableNeuralReflexes: Boolean = false,
     val enabledSpecializedAgents: Set<String> = emptySet(),
@@ -146,13 +145,13 @@ data class AgentConfig(
     val showApiKeyTracker: Boolean = true,
     val activePersona: String = PersonaManager.DEFAULT_PERSONA,
     val activePersonas: Set<String> = PersonaManager.DEFAULT_PERSONAS_SET,
-    val ttsEnabled: Boolean = true,
+    val ttsEnabled: Boolean = false,
     val ttsEngineType: String = "HUMAN_NEURAL",
     val ttsVoiceLanguage: String = "AUTO",
     val ttsSpeechRate: Float = 1.0f,
     val ttsPitch: Float = 0.88f,
-    val customAcousticModelPath: String = "/sdcard/Medlam-Ai/tts/qwen3_tts_acoustic_int8.onnx",
-    val customVocoderModelPath: String = "/sdcard/Medlam-Ai/tts/qwen3_tts_vocoder_fp16.onnx",
+    val customAcousticModelPath: String = "",
+    val customVocoderModelPath: String = "",
     val customSpeakerEmbeddingPath: String = "",
     val sdSteps: Int = 0,
     val sdCfgScale: Float = 0f,
@@ -211,7 +210,7 @@ data class AgentUiState(
     val isLiveCanvasOpen: Boolean = false,
     val activeDraftModelPath: String? = null,
     val hardwareWarning: String? = null,
-    val isTtsEnabled: Boolean = true
+    val isTtsEnabled: Boolean = false
 ) {
     val engineState: EngineState
         get() = if (isProcessing) EngineState.RUNNING else EngineState.IDLE
@@ -243,6 +242,25 @@ class AgentViewModel : ViewModel() {
             "rust", "rs", "go", "golang",
             "sql", "php", "ruby", "rb", "swift", "dart", "lua", "r"
         )
+
+        // Pre-compiled static regex patterns to eliminate allocation storms in text sanitization
+        private val RE_THINK_FENCED = Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE)
+        private val RE_THINK_TAGS = Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE)
+        private val RE_THINK_OPEN = Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE)
+        private val RE_FUNC_CALLS = Regex("""<function_calls>[\s\S]*?</function_calls>""", RegexOption.IGNORE_CASE)
+        private val RE_INVOKE = Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE)
+        private val RE_FUNC_CALLS_OPEN = Regex("""<function_calls>[\s\S]*$""", RegexOption.IGNORE_CASE)
+        private val RE_INVOKE_OPEN = Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE)
+        private val RE_OBSERVATION = Regex("""<observation>[\s\S]*?</observation>""", RegexOption.IGNORE_CASE)
+        private val RE_OBSERVATION_OPEN = Regex("""<observation>[\s\S]*$""", RegexOption.IGNORE_CASE)
+        private val RE_SYS_INSTRUCTION = Regex("""SYSTEM MANDATORY INSTRUCTION:[\s\S]*$""", RegexOption.IGNORE_CASE)
+        private val RE_TERMINAL = Regex("""<terminal_frame[\s\S]*?</terminal_frame>""", RegexOption.IGNORE_CASE)
+        private val RE_TERMINAL_OPEN = Regex("""<terminal_frame[\s\S]*$""", RegexOption.IGNORE_CASE)
+        private val RE_SHELL_OUT = Regex("""Shell output \(`[^`]+`\):\s*```(?:bash|sh)?\r?\n[\s\S]*?```""", RegexOption.IGNORE_CASE)
+        private val RE_THINK_TAG_SOLO = Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE)
+        private val RE_TERMINAL_TAG_SOLO = Regex("""</?terminal_frame>""", RegexOption.IGNORE_CASE)
+        private val RE_THOUGHT_EMOJI = Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL)
+        private val RE_CODE_FENCE_COMPACT = Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")
     }
 
     init {
@@ -286,31 +304,13 @@ class AgentViewModel : ViewModel() {
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
     private var geminiClient: GeminiModelClient? = null
-    private var cascadeInterceptor: CascadeStreamInterceptor? = null
 
-    fun getOrCreateCascadeInterceptor(context: Context): CascadeStreamInterceptor {
-        return cascadeInterceptor ?: synchronized(this) {
-            cascadeInterceptor ?: CascadeStreamInterceptor(context.applicationContext).also {
-                cascadeInterceptor = it
-            }
-        }
-    }
-
-    fun toggleTts() {
-        _uiState.update { current ->
-            val next = !current.isTtsEnabled
-            cascadeInterceptor?.setEnabled(next)
-            current.copy(isTtsEnabled = next)
-        }
-    }
-
-    fun testVoice(context: Context, sampleText: String? = null) {
-        getOrCreateCascadeInterceptor(context).testVoice(sampleText)
-    }
-
-    fun getAcousticModels(context: Context): List<File> = ModelScanner.getAcousticModels(context)
-    fun getVocoderModels(context: Context): List<File> = ModelScanner.getVocoderModels(context)
-    fun getSpeakerEmbeddings(context: Context): List<File> = ModelScanner.getSpeakerEmbeddings(context)
+    // دوال توافقية فارغة لضمان عدم حدوث أي خطأ في البناء
+    fun toggleTts() {}
+    fun testVoice(context: Context, sampleText: String? = null) {}
+    fun getAcousticModels(context: Context): List<File> = emptyList()
+    fun getVocoderModels(context: Context): List<File> = emptyList()
+    fun getSpeakerEmbeddings(context: Context): List<File> = emptyList()
 
     private val _imageState = MutableStateFlow<ImageState>(ImageState.Idle)
     val imageState: StateFlow<ImageState> = _imageState.asStateFlow()
@@ -344,22 +344,6 @@ class AgentViewModel : ViewModel() {
             file
         } catch (e: Exception) {
             Log.w(TAG, "Failed to save generated image to disk: ${e.message}")
-            null
-        }
-    }
-
-    private fun saveVideoToDisk(bytes: ByteArray, prompt: String): File? {
-        return try {
-            val baseDir = File("/sdcard/Movies/SynapseAI").takeIf { it.exists() || it.mkdirs() }
-                ?: File("/sdcard/Download").takeIf { it.exists() || it.mkdirs() }
-                ?: File("/sdcard/Medlam-Ai").apply { if (!exists()) mkdirs() }
-            val safePrompt = prompt.take(20).replace(Regex("[^a-zA-Z0-9_-]"), "_").trim('_')
-            val fileName = "vid_${System.currentTimeMillis()}${if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.mp4"
-            val file = File(baseDir, fileName)
-            file.writeBytes(bytes)
-            file
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to save generated video to disk: ${e.message}")
             null
         }
     }
@@ -470,11 +454,9 @@ class AgentViewModel : ViewModel() {
 
     private var currentJob: Job? = null
     private var schedulerJob: Job? = null
-    private var visualMemoryJob: Job? = null
     private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
     private val workflows = Collections.synchronizedMap(mutableMapOf<String, String>())
     private val pendingCommands = Collections.synchronizedList(mutableListOf<String>())
-    private var coreMission: String = ""
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
     private fun trimConversationHistoryToContextLimit(targetTokenCeiling: Int? = null) {
@@ -503,51 +485,54 @@ class AgentViewModel : ViewModel() {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    fun resolvePackageName(target: String, pm: PackageManager?): String = AppLauncherManager.resolvePackageName(target, pm)
-
-    fun launchApplication(target: String, context: Context? = null): Pair<Boolean, String> {
-        val ctx = context ?: appContext ?: MainActivity.instance
-        val res = AppLauncherManager.launch(target, ctx)
-        return res.success to (if (res.success) res.appLabel else (res.errorMessage ?: "Failed to launch application"))
-    }
-
     private fun cleanVisibleText(raw: String): String {
+        // Fast-path: if text contains no special tags or backticks, return directly without running regexes
+        if (!raw.contains('<') && !raw.contains('`') && !raw.contains("💭") && !raw.contains("SYSTEM MANDATORY") && !raw.contains("Shell output")) {
+            return raw.trim()
+        }
         var text = raw
-        text = text.replace(Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<function_calls>[\s\S]*?</function_calls>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<invoke[\s\S]*?</invoke>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<function_calls>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<invoke[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<observation>[\s\S]*?</observation>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<observation>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""SYSTEM MANDATORY INSTRUCTION:[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<terminal_frame[\s\S]*?</terminal_frame>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<terminal_frame[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""Shell output \(`[^`]+`\):\s*```(?:bash|sh)?\r?\n[\s\S]*?```""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""</?terminal_frame>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL), "")
+        if (text.contains("```")) text = text.replace(RE_THINK_FENCED, "")
+        if (text.contains('<')) {
+            text = text.replace(RE_THINK_TAGS, "")
+                .replace(RE_THINK_OPEN, "")
+                .replace(RE_FUNC_CALLS, "")
+                .replace(RE_INVOKE, "")
+                .replace(RE_FUNC_CALLS_OPEN, "")
+                .replace(RE_INVOKE_OPEN, "")
+                .replace(RE_OBSERVATION, "")
+                .replace(RE_OBSERVATION_OPEN, "")
+                .replace(RE_TERMINAL, "")
+                .replace(RE_TERMINAL_OPEN, "")
+                .replace(RE_THINK_TAG_SOLO, "")
+                .replace(RE_TERMINAL_TAG_SOLO, "")
+        }
+        if (text.contains("Shell output")) text = text.replace(RE_SHELL_OUT, "")
+        if (text.contains("SYSTEM MANDATORY")) text = text.replace(RE_SYS_INSTRUCTION, "")
+        if (text.startsWith("💭")) text = text.replace(RE_THOUGHT_EMOJI, "")
         return text.trim()
     }
 
     private fun stripThinkingForHistory(raw: String): String {
+        if (!raw.contains('<') && !raw.contains('`') && !raw.contains("SYSTEM MANDATORY")) {
+            return raw.trim()
+        }
         var text = raw
-        text = text.replace(Regex("""```(?:thought|thinking|reasoning)\r?\n[\s\S]*?(?:```|$)""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*?</\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<\|?(?:think|thought|reasoning)\|?>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<observation>[\s\S]*?</observation>""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""<observation>[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""SYSTEM MANDATORY INSTRUCTION:[\s\S]*$""", RegexOption.IGNORE_CASE), "")
-        text = text.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+        if (text.contains("```")) text = text.replace(RE_THINK_FENCED, "")
+        if (text.contains('<')) {
+            text = text.replace(RE_THINK_TAGS, "")
+                .replace(RE_THINK_OPEN, "")
+                .replace(RE_OBSERVATION, "")
+                .replace(RE_OBSERVATION_OPEN, "")
+                .replace(RE_THINK_TAG_SOLO, "")
+        }
+        if (text.contains("SYSTEM MANDATORY")) text = text.replace(RE_SYS_INSTRUCTION, "")
         return text.trim()
     }
 
     private fun compactHistoryForQuota(content: String): String {
         val maxLen = if (_uiState.value.config.contextLength >= 16384) 16000 else 2400
         if (!content.contains("```")) return content.take(maxLen)
-        return content.replace(Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")) { mr ->
+        return content.replace(RE_CODE_FENCE_COMPACT) { mr ->
             val lang = mr.groupValues[1]
             val code = mr.groupValues[2]
             if (code.length > 2000) {
@@ -568,8 +553,6 @@ class AgentViewModel : ViewModel() {
         val charCapped = if (lineCapped.length > maxChars) lineCapped.takeLast(maxChars) else lineCapped
         return charCapped.trim().ifEmpty { "[Process completed with no output]" }
     }
-
-    fun truncateObservation(raw: String, maxChars: Int = 800, maxLines: Int = 20): String = sanitizeProcessOutput(raw, maxChars, maxLines)
 
     fun truncateSearchObservation(raw: String, maxChars: Int = 1500, maxLines: Int = 25): String {
         val trimmed = raw.trim()
@@ -634,7 +617,7 @@ class AgentViewModel : ViewModel() {
             val dynamicPersona = getEffectivePersonaPrompt(context)
             val isLocal = _uiState.value.activeModelType == ModelType.GGUF || _uiState.value.config.preferredModelType == ModelType.GGUF
             val systemPrompt = buildSystemPrompt(context, forLocalModel = isLocal, dynamicPersonaPrompt = dynamicPersona)
-            withTimeoutOrNull(10_000L) { ggufClient?.warmupPersonaKVCache(systemPrompt) }
+            withTimeoutOrNull(30_000L) { ggufClient?.warmupPersonaKVCache(systemPrompt) }
         }
     }
 
@@ -647,13 +630,9 @@ class AgentViewModel : ViewModel() {
             val dynamicPersona = getEffectivePersonaPrompt(context)
             val isLocal = _uiState.value.activeModelType == ModelType.GGUF || _uiState.value.config.preferredModelType == ModelType.GGUF
             val systemPrompt = buildSystemPrompt(context, forLocalModel = isLocal, dynamicPersonaPrompt = dynamicPersona)
-            withTimeoutOrNull(10_000L) { ggufClient?.warmupPersonaKVCache(systemPrompt) }
+            withTimeoutOrNull(30_000L) { ggufClient?.warmupPersonaKVCache(systemPrompt) }
         }
     }
-
-    fun setActivePersona(personaName: String, context: Context) = togglePersona(personaName, context)
-    fun togglePersonaQuick(personaName: String, context: Context) = togglePersona(personaName, context)
-    fun switchPersonaQuick(personaName: String, context: Context) = togglePersona(personaName, context)
 
     fun openLiveCanvas() { _uiState.update { it.copy(isLiveCanvasOpen = true) } }
     fun closeLiveCanvas() { _uiState.update { it.copy(isLiveCanvasOpen = false) } }
@@ -685,17 +664,6 @@ class AgentViewModel : ViewModel() {
     fun rescanModels(context: Context): Pair<List<File>, List<File>> {
         val (base, mtp) = ModelScanner.rescanModels(context)
         return Pair(base, mtp)
-    }
-
-    fun scanSpecializedAgents() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val dir = File(AGENTS_DIR)
-                if (!dir.exists()) dir.mkdirs()
-                val files = dir.listFiles { f: File -> f.extension.lowercase() == "md" }?.toList() ?: emptyList<File>()
-                _uiState.update { it.copy(specializedAgents = files) }
-            } catch (_: Exception) {}
-        }
     }
 
     private var appContext: Context? = null
@@ -760,7 +728,8 @@ class AgentViewModel : ViewModel() {
         val finalConfig = config.copy(
             contextLength = config.contextLength.coerceIn(2048, 8192),
             gpuLayers = config.gpuLayers.coerceAtLeast(0),
-            threadCount = if (config.threadCount in 1..32) config.threadCount else 4
+            threadCount = if (config.threadCount in 1..32) config.threadCount else 4,
+            ttsEnabled = false
         )
         val oldConfig = _uiState.value.config
         val activeKeys = finalConfig.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -773,10 +742,9 @@ class AgentViewModel : ViewModel() {
                 totalKeys = activeKeys.size,
                 activeDraftModelPath = newDraftPath,
                 activeModelName = baseModelName,
-                isTtsEnabled = finalConfig.ttsEnabled
+                isTtsEnabled = false
             ) 
         }
-        getOrCreateCascadeInterceptor(context).applyConfig(finalConfig)
         AgentSettingsRepository.saveConfig(context, finalConfig)
 
         val prefs = prefs(context)
@@ -796,11 +764,12 @@ class AgentViewModel : ViewModel() {
             putInt("thread_count", finalConfig.threadCount)
             putInt("max_tokens", finalConfig.maxTokens)
             putFloat("temperature", finalConfig.temperature)
-            putBoolean("tts_enabled", finalConfig.ttsEnabled)
+            putBoolean("tts_enabled", false)
             apply()
         }
 
         if (finalConfig.preferredModelType == ModelType.GGUF) {
+            ggufClient?.temperature = finalConfig.temperature
             if (finalConfig.localModelPath != oldConfig.localModelPath || finalConfig.draftModelPath != oldConfig.draftModelPath || !isModelLoaded()) {
                 closeAllModels()
                 viewModelScope.launch(Dispatchers.IO) {
@@ -809,6 +778,7 @@ class AgentViewModel : ViewModel() {
                 }
             }
         } else if (finalConfig.preferredModelType == ModelType.GEMINI) {
+            geminiClient?.temperature = finalConfig.temperature
             GGUFModelClient.stopGlobalServer()
             if (finalConfig.geminiApiKeys != oldConfig.geminiApiKeys || !isModelLoaded()) {
                 closeAllModels()
@@ -838,7 +808,6 @@ class AgentViewModel : ViewModel() {
             }
         }
     }
-    fun toggleMmapState(enableMmap: Boolean) = toggleMmapState(enableMmap, null)
 
     fun toggleDraftMmapState(enableMmap: Boolean, context: Context? = null) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -859,7 +828,6 @@ class AgentViewModel : ViewModel() {
             }
         }
     }
-    fun toggleDraftMmapState(enableMmap: Boolean) = toggleDraftMmapState(enableMmap, null)
 
     fun togglePinModelInRam(enable: Boolean, context: Context? = null) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -882,7 +850,6 @@ class AgentViewModel : ViewModel() {
             }
         }
     }
-    fun togglePinModelInRam(enable: Boolean) = togglePinModelInRam(enable, null)
 
     fun loadConfig(context: Context) {
         appContext = context.applicationContext
@@ -949,12 +916,12 @@ class AgentViewModel : ViewModel() {
                     contextLength = savedContext,
                     threadCount = prefs.getInt("thread_count", 4).coerceIn(1, 32),
                     systemPrompt = prefs.getString("system_prompt", "") ?: "",
+                    temperature = prefs.getFloat("temperature", 0.30f),
                     activePersona = activePersonaName,
                     activePersonas = activePersonasSet,
-                    ttsEnabled = prefs.getBoolean("tts_enabled", true)
+                    ttsEnabled = false
                 )
 
-                getOrCreateCascadeInterceptor(context).applyConfig(config)
                 val savedKeyIndex = prefs.getInt("current_key_index", 0).coerceIn(0, (activeKeysList.size - 1).coerceAtLeast(0))
 
                 _uiState.update { 
@@ -966,7 +933,7 @@ class AgentViewModel : ViewModel() {
                         activePersonas = activePersonasSet,
                         availablePersonas = cachedPersonasList,
                         activeModelName = if (localPath.isNotBlank()) File(localPath).nameWithoutExtension else "GEMMA-4-E2B Q4",
-                        isTtsEnabled = config.ttsEnabled
+                        isTtsEnabled = false
                     ) 
                 }
 
@@ -1002,8 +969,8 @@ class AgentViewModel : ViewModel() {
                 val client = GGUFModelClient().apply {
                     serverHost = config.serverHost
                     serverPort = config.serverPort
-                    contextLength = config.contextLength.coerceIn(2048, 8192)
-                    threadCount = config.threadCount
+                    contextLength = config.contextLength.coerceIn(1024, 4096)
+                    threadCount = config.threadCount.coerceIn(4, 8)
                     maxTokens = 2048
                     temperature = config.temperature
                     useMmap = config.useMmap
@@ -1059,6 +1026,7 @@ class AgentViewModel : ViewModel() {
             }
         )
         geminiClient?.modelName = modelName
+        geminiClient?.temperature = _uiState.value.config.temperature
         geminiClient?.isLoaded = true
 
         _uiState.update { it.copy(
@@ -1087,14 +1055,16 @@ class AgentViewModel : ViewModel() {
     @Volatile private var cachedStaticPrefix: String? = null
     @Volatile private var cachedPrefixKey: String = ""
 
-    fun isChatPersonaActive(): Boolean = false
-
     fun isSimpleGreeting(text: String): Boolean {
-        val clean = text.trim().lowercase(Locale.ROOT).replace("!", "").replace(".", "").replace("?", "").trim()
+        val clean = text.trim().lowercase(Locale.ROOT)
+            .replace("!", "").replace(".", "").replace("?", "").replace("،", "").replace(",", "")
+            .trim()
         val greetings = setOf(
-            "hello", "hi", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening",
-            "مرحبا", "اهلا", "أهلا", "سلام", "السلام عليكم", "صباح الخير", "مساء الخير",
-            "bonjour", "salut", "coucou", "bonsoir", "hola", "yo"
+            "hello", "hi", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening", "how are you",
+            "مرحبا", "مرحباً", "اهلا", "أهلا", "أهلاً", "سلام", "سلام عليكم", "السلام عليكم", "السلام عليكم ورحمة الله",
+            "صباح الخير", "مساء الخير", "تحياتي", "أهلا وسهلا", "اهلاً وسهلاً", "هلا", "كيف حالك", "كيفك", "شخبارك",
+            "من انت", "من أنت", "who are you",
+            "bonjour", "salut", "coucou", "bonsoir", "hola", "yo", "ca va", "ça va"
         )
         return clean in greetings || (clean.startsWith("hello") && clean.length < 10) || (clean.startsWith("hi") && clean.length < 5)
     }
@@ -1104,15 +1074,37 @@ class AgentViewModel : ViewModel() {
     private fun isCodeRequest(prompt: String): Boolean {
         if (isSimpleGreeting(prompt)) return false
         val lower = prompt.lowercase(Locale.ROOT)
-        val arabicKeywords = listOf("كود", "برمج", "تطبيق", "صفحة", "موقع", "أنشئ", "اصنع", "اكتب", "برنامج", "حاسبة", "لعبة", "طور")
-        return arabicKeywords.any { lower.contains(it) } || lower.contains("write code") || lower.contains("html")
+
+        // Exclude terminal and operational execution requests
+        val terminalExecutionKeywords = listOf(
+            "باش", "ترمنال", "طرفية", "سطر الأوامر", "نفذ", "شغل", "افحص", "تفقد", "امسح", "نظف", "تحقق",
+            "bash", "terminal", "shell", "run", "execute", "exec", "check", "inspect"
+        )
+        val isExplicitWriting = listOf("اكتب كود", "أنشئ تطبيق", "اصنع تطبيق", "طور تطبيق", "write code", "create app", "develop app").any { lower.contains(it) }
+
+        if (terminalExecutionKeywords.any { lower.contains(it) } && !isExplicitWriting) {
+            return false
+        }
+
+        val arabicKeywords = listOf(
+            "كود", "برمج", "تطبيق", "صفحة", "موقع", "أنشئ", "اصنع", "اكتب", "برنامج",
+            "حاسبة", "لعبة", "طور", "دالة", "خوارزمية", "بايثون"
+        )
+        val englishKeywords = listOf(
+            "code", "function", "class", "algorithm", "implement", "program",
+            "develop", "app", "html", "css", "javascript", "python", "kotlin",
+            "java", "sql", "write code"
+        )
+        return arabicKeywords.any { lower.contains(it) } || englishKeywords.any { lower.contains(it) }
     }
 
     private fun buildSystemPrompt(
         context: Context? = null,
         forLocalModel: Boolean = false,
         dynamicPersonaPrompt: String? = null,
-        isCodeRequest: Boolean = false
+        isCodeRequest: Boolean = false,
+        isGreeting: Boolean = false,
+        userPrompt: String = ""
     ): String {
         val config = _uiState.value.config
         val actualContext = context ?: appContext ?: MainActivity.instance
@@ -1121,8 +1113,26 @@ class AgentViewModel : ViewModel() {
             actualContext?.let { PersonaDataStore.getCustomPersonaPromptSync(it) } ?: PersonaDataStore.DEFAULT_PROMPT
         }).trim()
 
+        val isArabicUser = userPrompt.any { it in '\u0600'..'\u06FF' }
+
         val antiMonologueDirective = if (isCodeRequest) {
             "\n\nCRITICAL: For code generation, bypass reasoning and start immediately with markdown fence."
+        } else ""
+
+        val greetingDirective = if (isGreeting) {
+            if (isArabicUser) {
+                "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in Arabic ('$userPrompt'). Return the greeting warmly and concisely in pure Arabic (e.g. 'أهلاً بك! أنا ATLAS-AI، مهندسك ومساعدك الذكي. كيف يمكنني مساعدتك اليوم؟'). Do not call tools or execute diagnostics."
+            } else {
+                "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in English ('$userPrompt'). Return the greeting warmly and concisely in pure ENGLISH ONLY (e.g. 'Hello! I am ATLAS-AI, your AI engineer and technical assistant. How can I assist you today?'). NEVER use Arabic words or letters when addressed in English! Do not call tools or execute diagnostics."
+            }
+        } else ""
+
+        val languageEnforcement = if (userPrompt.isNotBlank()) {
+            if (isArabicUser) {
+                "\n\n[MANDATORY LANGUAGE]: User prompt is in Arabic. Reply completely in Arabic."
+            } else {
+                "\n\n[MANDATORY LANGUAGE]: User prompt is in English. Reply strictly in ENGLISH ONLY. NEVER output Arabic letters or words."
+            }
         } else ""
 
         val universalGroundingDirective = """
@@ -1141,14 +1151,16 @@ class AgentViewModel : ViewModel() {
 
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            return """$effectivePersona
+            val localGreetingNote = if (isGreeting) "\n$greetingDirective" else "\n$languageEnforcement"
+            return """$effectivePersona$localGreetingNote
 Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
-Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>
-SYNCHRONOUS REACT RULE: Halt text generation immediately when calling tools.
-SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts directly in natural language.$custom$antiMonologueDirective$universalGroundingDirective""".trimIndent()
+Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
+CRITICAL EXECUTION RULES:
+- TERMINAL ACTIONS: To run shell/bash commands or inspect system resources, you MUST ALWAYS invoke run_shell: <invoke name="run_shell"><parameter name="command">command</parameter></invoke>. NEVER wrap bash commands in markdown code blocks!
+- PROGRAMMING CODE: Only wrap programming code (Python, Kotlin, HTML, JS) in markdown triple backticks (```language ... ```) when writing software artifacts.""".trimIndent()
         }
 
-        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest"
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|$isArabicUser"
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) return cachedStaticPrefix!!
 
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
@@ -1163,7 +1175,7 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$universalGroundingDirective"
+        val compiled = "$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1173,7 +1185,6 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
         if (command.isBlank() && fileUri == null) return
         val actualContext = context ?: MainActivity.instance
         val trimmed = command.trim()
-        cascadeInterceptor?.stopAndFlush()
 
         if (trimmed.startsWith("$")) {
             val shellCmd = trimmed.removePrefix("$").trim()
@@ -1303,8 +1314,9 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                 }
 
                 val dynamicPersona = getEffectivePersonaPrompt(actualContext)
-                val isCode = !isGreeting(finalCommand) && isCodeRequest(finalCommand)
-                val systemPrompt = buildSystemPrompt(actualContext, modelType == ModelType.GGUF, dynamicPersona, isCode)
+                val isGreetingPrompt = isGreeting(finalCommand)
+                val isCode = !isGreetingPrompt && isCodeRequest(finalCommand)
+                val systemPrompt = buildSystemPrompt(actualContext, modelType == ModelType.GGUF, dynamicPersona, isCode, isGreeting = isGreetingPrompt, userPrompt = finalCommand)
 
                 var keepGoing = true
                 var iterationCount = 0
@@ -1316,6 +1328,9 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
 
                 while (keepGoing && iterationCount < MAX_TASK_ITERATIONS) {
                     iterationCount++
+                    if (iterationCount > 1) {
+                        activeGgufPromptPrefix = null
+                    }
                     val responseSb = StringBuilder()
                     val liveLogId = UUID.randomUUID().toString()
                     var streamInterrupted = false
@@ -1351,7 +1366,7 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                         var lastUiUpdateTime = 0L
 
                         val pushUiUpdate = { rawText: String ->
-                            val demuxed = StreamDemultiplexer.demux(rawText)
+                            val (fastThinkingText, fastIsThinking) = StreamDemultiplexer.extractStreamThinkingFast(rawText)
                             liveDiskStreamer.onChunk(rawText)
 
                             _uiState.update { state ->
@@ -1360,8 +1375,8 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                                 if (lastIdx >= 0) {
                                     updatedLogs[lastIdx] = updatedLogs[lastIdx].copy(
                                         text = cleanVisibleText(rawText),
-                                        thinkingText = demuxed.thinkingText,
-                                        isThinking = demuxed.isThinking
+                                        thinkingText = fastThinkingText,
+                                        isThinking = fastIsThinking
                                     )
                                 }
                                 state.copy(logs = updatedLogs)
@@ -1382,7 +1397,8 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                                     } else {
                                         (activeGgufPromptPrefix ?: "") + responseSb.toString() + ChatTemplateEngine.formatContinuationTurn(activeArch, continuationPromptPayload)
                                     }
-                                    ggufClient!!.generateStreamWithRawPrompt(ggufPrompt, overrideTemperature = if (isCode) 0.15f else null) { tps ->
+                                    val turnTemp = if (isCode) 0.15f else if (isSecondTurnAnalysis) 0.20f else null
+                                    ggufClient!!.generateStreamWithRawPrompt(ggufPrompt, overrideTemperature = turnTemp) { tps ->
                                         _uiState.update { it.copy(tokensPerSecond = tps) }
                                     }
                                 }
@@ -1425,15 +1441,20 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                             }
 
                             try {
-                                stream.collect { chunk ->
+                                // Decoupled Consumer: Micro-batches stream over 66ms (10Hz-15Hz) windows
+                                stream.microBatch(windowMs = 66L).collect { chunk ->
                                     responseSb.append(chunk)
+
                                     val now = System.currentTimeMillis()
-                                    if (now - lastUiUpdateTime >= 50L) {
+                                    if (now - lastUiUpdateTime >= 66L) {
                                         lastUiUpdateTime = now
                                         pushUiUpdate(responseSb.toString())
                                     }
 
-                                    if (modelType == ModelType.GGUF && !forceFinalTurn && StreamDemultiplexer.hasCompletedToolCall(responseSb.toString())) {
+                                    // Fast-path: only check tool call barrier when chunk contains closing delimiter '>', '}', or '`'
+                                    if (modelType == ModelType.GGUF && !forceFinalTurn &&
+                                        (chunk.contains('>') || chunk.contains('}') || chunk.contains('`')) &&
+                                        StreamDemultiplexer.hasCompletedToolCall(responseSb.takeLast(350).toString())) {
                                         throw SynchronousToolBarrierException()
                                     }
                                 }
@@ -1443,7 +1464,7 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                                 } else throw e
                             }
 
-                            if (!forceFinalTurn && StreamDemultiplexer.hasCompletedToolCall(responseSb.toString())) {
+                            if (!forceFinalTurn && StreamDemultiplexer.hasCompletedToolCall(responseSb.takeLast(350).toString())) {
                                 val truncated = StreamDemultiplexer.truncateAfterToolCall(responseSb.toString())
                                 responseSb.setLength(0)
                                 responseSb.append(truncated)
@@ -1464,7 +1485,7 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                         val lowerErr = (e.message ?: "").lowercase()
                         val isTokenCeiling = lowerErr.contains("max_tokens") || lowerErr.contains("token limit")
                         val isCancellation = lowerErr.contains("cancel") || lowerErr.contains("closed")
-                        val hasToolCall = StreamDemultiplexer.hasCompletedToolCall(responseSb.toString())
+                        val hasToolCall = StreamDemultiplexer.hasCompletedToolCall(responseSb.takeLast(350).toString())
 
                         if (isTokenCeiling) {
                             Log.i(TAG, "Suppressed single-turn token error banner: ${e.message}")
@@ -1482,7 +1503,7 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                     val writtenFilesFromStream = liveDiskStreamer.closeAll(fullResponse)
 
                     val parsedToolCalls = StreamDemultiplexer.parseAllToolCalls(fullResponse)
-                    val validToolCalls = parsedToolCalls.filter { call ->
+                    val validToolCalls = if (isGreetingPrompt) emptyList() else parsedToolCalls.filter { call ->
                         when (call.name.trim().lowercase()) {
                             "web_search", "search", "google_search" -> {
                                 val q = call.params["query"] ?: call.params["q"] ?: call.params.values.firstOrNull() ?: ""
@@ -1523,8 +1544,27 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                             val primaryCall = validToolCalls.first()
                             val action = primaryCall.name.trim().lowercase()
                             val params = primaryCall.params
-                            val explanatoryText = StreamDemultiplexer.extractPreambleProse(fullResponse, primaryCall.rawMatch)
+                            val rawExplanatoryText = StreamDemultiplexer.extractPreambleProse(fullResponse, primaryCall.rawMatch)
                             toolCallCount++
+
+                            val isArabicUser = command.any { it in '\u0600'..'\u06FF' }
+                            val explanatoryText = if (rawExplanatoryText.isNotBlank()) {
+                                cleanVisibleText(rawExplanatoryText)
+                            } else {
+                                if (isArabicUser) {
+                                    when (action) {
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "سأقوم بتنفيذ الأمر وفحص النظام الآن:"
+                                        "web_search", "search", "google_search" -> "سأقوم بالبحث والتحقق من المصادر الآن:"
+                                        else -> "جاري تنفيذ العملية المطلوبة:"
+                                    }
+                                } else {
+                                    when (action) {
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Executing system diagnostic command now:"
+                                        "web_search", "search", "google_search" -> "Searching for verified information now:"
+                                        else -> "Executing requested operation:"
+                                    }
+                                }
+                            }
 
                             when (action) {
                                 "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
@@ -1554,7 +1594,9 @@ SYSTEM STATE GUARDRAIL: When tool findings are provided, synthesize facts direct
                                     val observationMsg = """[Command Output (Exit code $exitCode)]:
 $output
 
-Respond directly to the user now with the final answer. Do not call more tools."""
+MANDATORY INSTRUCTION: The command execution is finished. Do NOT invoke any tools or execute shell commands again.
+Deliver your final, comprehensive, and wise analysis directly to the user now in their language.
+Summarize the metrics, explain what the numbers mean clearly, and provide the final conclusion."""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1585,7 +1627,8 @@ Respond directly to the user now with the final answer. Do not call more tools."
                                     val observationMsg = """[Web Search Results for "$searchQuery"]:
 $truncatedSearch
 
-Instructions: Present a complete, organized response to the user based on the verified findings above in Arabic. Do not repeat this instruction."""
+MANDATORY INSTRUCTION: Web search is complete. Do NOT call any more tools.
+Present your complete, organized response to the user based on the verified findings above in their language."""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1618,7 +1661,8 @@ Instructions: Present a complete, organized response to the user based on the ve
                                     val observationMsg = """[Tool Execution Findings]:
 $truncatedSummary
 
-Instructions: Answer the user's request directly based on these findings. Do not call any further tools."""
+MANDATORY INSTRUCTION: Tool execution is finished. Do NOT call any further tools.
+Answer the user's request directly based on these findings in their language."""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1629,7 +1673,8 @@ Instructions: Answer the user's request directly based on these findings. Do not
                                 }
                             }
 
-                            if (toolCallCount >= MAX_TOOL_CALLS) forceFinalTurn = true
+                            forceFinalTurn = true
+                            activeGgufPromptPrefix = null
                             keepGoing = true
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
@@ -2063,7 +2108,6 @@ Instructions: Answer the user's request directly based on these findings. Do not
     fun stopAgent() { 
         currentJob?.cancel()
         currentJob = null
-        cascadeInterceptor?.stopAndFlush()
         _uiState.update { it.copy(isProcessing = false) } 
     }
 
@@ -2074,8 +2118,6 @@ Instructions: Answer the user's request directly based on these findings. Do not
     override fun onCleared() { 
         super.onCleared()
         taskEngine?.stop()
-        cascadeInterceptor?.release()
-        cascadeInterceptor = null
         closeAllModels() 
     }
 }

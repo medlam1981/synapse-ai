@@ -247,10 +247,22 @@ fun SettingsScreenContent(
                             Text("Local GGUF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
 
-                    // Cloud Credentials Section (Auto-Saving)
-                    if (config.preferredModelType == ModelType.GEMINI) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // ==========================================
+            // GEMINI CLOUD EXCLUSIVE SECTIONS
+            // ==========================================
+            if (config.preferredModelType == ModelType.GEMINI) {
+                // ==========================================
+                // CARD 2: GEMINI CLOUD ENGINE
+                // ==========================================
+                SettingsCard(
+                    title = "2. GEMINI CLOUD ENGINE",
+                    titleColor = primary,
+                    statusText = config.geminiModelName.ifBlank { "OFFLINE" }
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             // Collapsible API Key Pool Drawer (Accordion Pattern)
                             val activeKeysList = remember(config.geminiApiKeys) {
                                 config.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -565,13 +577,91 @@ fun SettingsScreenContent(
                             }
                         }
                     }
-                }
-            }
 
-            // ==========================================
-            // LOCAL GGUF ENGINE EXCLUSIVE SETTINGS
-            // ==========================================
-            if (config.preferredModelType == ModelType.GGUF) {
+                    // ==========================================
+                    // CARD 3: CLOUD INFERENCE PARAMETERS
+                    // ==========================================
+                    SettingsCard(
+                        title = "3. CLOUD INFERENCE PARAMETERS",
+                        titleColor = primary
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Temperature (سياق الحرارة والتركيز)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    val tempDesc = when {
+                                        temperatureState <= 0.20f -> "🎯 تركيز دقيق وحاسم للأوامر (Hyper-Focused)"
+                                        temperatureState <= 0.40f -> "⚡ تركيز ذكي ومنطقي موصى به (Optimal 0.30)"
+                                        temperatureState <= 0.70f -> "⚖️ متوازن للنقاشات العامة (Balanced)"
+                                        else -> "🎨 إبداعي عالي (High Creativity)"
+                                    }
+                                    Text(tempDesc, color = primary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                                }
+                                Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = primary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            }
+                            Slider(
+                                value = temperatureState,
+                                onValueChange = { temperatureState = it },
+                                onValueChangeFinished = {
+                                    val newConfig = config.copy(temperature = temperatureState)
+                                    viewModel.saveConfig(context, newConfig)
+                                },
+                                valueRange = 0.0f..1.0f,
+                                colors = SliderDefaults.colors(thumbColor = primary, activeTrackColor = primary)
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(
+                                    Triple("0.15 دقيق", 0.15f, false),
+                                    Triple("0.30 حكيم (موصى به)", 0.30f, true),
+                                    Triple("0.60 متوازن", 0.60f, false)
+                                ).forEach { (label, value, _) ->
+                                    val isSelected = Math.abs(temperatureState - value) < 0.05f
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (isSelected) primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                                        border = if (isSelected) BorderStroke(1.dp, primary) else null,
+                                        modifier = Modifier.weight(1f).clickable {
+                                            temperatureState = value
+                                            val newConfig = config.copy(temperature = value)
+                                            viewModel.saveConfig(context, newConfig)
+                                        }
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            modifier = Modifier.padding(vertical = 6.dp),
+                                            textAlign = TextAlign.Center,
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ==========================================
+                    // CARD 4: UNIFIED INTERNAL PERSONA (GOD MODE)
+                    // ==========================================
+                    UnifiedPersonaCard(
+                        cardNumber = 4,
+                        primary = primary,
+                        surfaceContainer = surfaceContainer,
+                        settingsViewModel = settingsViewModel,
+                        viewModel = viewModel,
+                        context = context
+                    )
+                } else {
+                    // ==========================================
+                    // LOCAL GGUF ENGINE EXCLUSIVE SECTIONS
+                    // ==========================================
 
             // ==========================================
             // CARD 2: LOCAL NEURAL CORE (GGUF + MTP)
@@ -990,7 +1080,7 @@ fun SettingsScreenContent(
                                 vocoderModels = ModelScanner.getVocoderModels(context, forceRescan = false)
                                 speakerModels = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
                                 isScanning = false
-                                Toast.makeText(context, "Discovered ${freshBase.size} base, ${freshMtp.size} MTP, ${acousticModels.size} acoustic, ${vocoderModels.size} vocoder", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Discovered ${freshBase.size} base, ${freshMtp.size} MTP", Toast.LENGTH_SHORT).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -1018,25 +1108,25 @@ fun SettingsScreenContent(
             }
 
             // ==========================================
-            // CARD 3: INFERENCE PARAMETERS (AUTO-SAVING)
+            // CARD 3: LOCAL INFERENCE TUNING (AUTO-SAVING)
             // ==========================================
             SettingsCard(
-                title = "3. INFERENCE PARAMETERS",
+                title = "3. LOCAL INFERENCE TUNING",
                 titleColor = primary
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Context Length Presets (up to 32K)
+                    // Context Length Presets (1K - 8K)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("CONTEXT WINDOW HORIZON (UP TO 32K):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        Text("CONTEXT WINDOW HORIZON (PRESETS):", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            listOf(4096, 8192, 16384, 32768).forEach { size ->
-                                val label = if (size == 32768) "32K" else if (size == 16384) "16K" else if (size == 8192) "8K" else "4K"
+                            listOf(1024, 2048, 4096, 8192).forEach { size ->
+                                val label = if (size == 8192) "8K" else if (size == 4096) "4K" else if (size == 2048) "2K" else "1K"
                                 val isSelected = config.contextLength == size
                                 Surface(
                                     modifier = Modifier.weight(1f).clickable {
@@ -1144,14 +1234,23 @@ fun SettingsScreenContent(
                         )
                     }
                     
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Temperature", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = primary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Column {
+                                Text("Temperature (سياق الحرارة والتركيز المحلي)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                val tempDesc = when {
+                                    temperatureState <= 0.20f -> "🎯 تركيز دقيق وحاسم للأوامر والترمنال (Hyper-Focused)"
+                                    temperatureState <= 0.40f -> "⚡ تركيز ذكي ومنطقي موصى به للنموذج (Optimal 0.30)"
+                                    temperatureState <= 0.70f -> "⚖️ متوازن للنقاشات العامة (Balanced)"
+                                    else -> "🎨 إبداعي عالي (High Creativity)"
+                                }
+                                Text(tempDesc, color = primary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                            }
+                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = primary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                         Slider(
                             value = temperatureState,
@@ -1160,595 +1259,49 @@ fun SettingsScreenContent(
                                 val newConfig = config.copy(temperature = temperatureState)
                                 viewModel.saveConfig(context, newConfig)
                             },
-                            valueRange = 0f..1.5f,
+                            valueRange = 0.0f..1.0f,
                             colors = SliderDefaults.colors(thumbColor = primary, activeTrackColor = primary)
                         )
-                    }
-                }
-            }
-            }
-
-            // ==========================================
-            // CARD 4: UNIFIED INTERNAL PERSONA (GOD MODE)
-            // ==========================================
-            SettingsCard(
-                title = "4. UNIFIED INTERNAL PERSONA",
-                titleColor = primary,
-                statusText = "GOD MODE ACTIVE",
-                isCollapsible = true,
-                initialExpanded = false
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = surfaceContainer
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "Medlam-AI Unified Core Engine",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Text(
-                                text = "Autonomous AI engineer and Android OS administrator. Unified God Mode covers high-precision coding, deep OS/shell control, inline SVG graphics, and dialect-aware reasoning with zero token bloat.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 10.sp,
-                                lineHeight = 14.sp
-                            )
-                        }
-                    }
-
-                    // Module 4: Dynamic Editable Persona Prompt
-                    val customPersonaPromptValue by settingsViewModel.customPersonaPrompt.collectAsState()
-                    var personaPromptInput by remember(customPersonaPromptValue) { mutableStateOf(customPersonaPromptValue) }
-
-                    OutlinedTextField(
-                        value = personaPromptInput,
-                        onValueChange = {
-                            personaPromptInput = it
-                            settingsViewModel.updatePersonaPrompt(it)
-                            viewModel.updateCustomPersonaPrompt(it, context)
-                        },
-                        label = {
-                            Text(
-                                "Core Persona & System Prompt",
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 200.dp, max = 380.dp),
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            lineHeight = 14.5.sp,
-                            color = Color(0xFF79C0FF)
-                        ),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = Color(0xFF30363D),
-                            focusedTextColor = Color(0xFF79C0FF),
-                            unfocusedTextColor = Color(0xFF79C0FF),
-                            cursorColor = MaterialTheme.colorScheme.primary,
-                            focusedContainerColor = Color(0xFF090D12),
-                            unfocusedContainerColor = Color(0xFF090D12)
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Subtle Auto-Save Indicator with Checkmark Icon
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = "Saved",
-                                tint = Color(0xFF10B981).copy(alpha = 0.85f),
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = "Auto-saved to DataStore",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-
-                        // Material 3 OutlinedButton with Refresh Icon
-                        OutlinedButton(
-                            onClick = {
-                                val def = PersonaDataStore.DEFAULT_PROMPT
-                                personaPromptInput = def
-                                settingsViewModel.resetPersonaPromptToDefault()
-                                viewModel.resetCustomPersonaPrompt(context)
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Reset Defaults",
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                text = "Reset Defaults",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-            }
-
-            // ==========================================
-            // CARD 5: VOICE & AUDIO ENGINE
-            // ==========================================
-            SettingsCard(
-                title = "5. VOICE & AUDIO ENGINE",
-                titleColor = primary,
-                statusDot = if (config.ttsEnabled) primary else MaterialTheme.colorScheme.outlineVariant,
-                statusText = if (config.ttsEnabled) {
-                    when (config.ttsEngineType) {
-                        "HUMAN_NEURAL" -> "NEURAL HUMAN"
-                        "EDGE_ONNX" -> "EDGE ONNX"
-                        else -> "SYSTEM TTS"
-                    }
-                } else "MUTED"
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    // 1. Enable / Mute TTS Master Switch
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(surfaceContainer)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "REAL-TIME SPEECH SYNTHESIS (TTS)",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Text(
-                                if (config.ttsEnabled) "Pipelined voice streaming active on assistant responses" else "Voice generation muted",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 9.5.sp
-                            )
-                        }
-                        Switch(
-                            checked = config.ttsEnabled,
-                            onCheckedChange = { isEnabled ->
-                                viewModel.saveConfig(context, config.copy(ttsEnabled = isEnabled))
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = onPrimary,
-                                checkedTrackColor = primary
-                            )
-                        )
-                    }
-
-                    // 2. Voice Engine Mode Selector
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "VOICE SYNTHESIS ENGINE:",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                "HUMAN_NEURAL" to "Human Neural\n(Google/WaveNet)",
-                                "EDGE_ONNX" to "Edge ONNX\n(Qwen3 0.6B)",
-                                "SYSTEM_DEFAULT" to "System\nStandard"
-                            ).forEach { (engineId, label) ->
-                                val isSelected = config.ttsEngineType == engineId
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(ttsEngineType = engineId))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 8.dp, horizontal = 4.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                            fontSize = 9.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            textAlign = TextAlign.Center,
-                                            lineHeight = 12.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. Language Selector
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "VOCAL LANGUAGE DETECTION:",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "AUTO" to "Auto (تلقائي)",
-                                "ARABIC" to "Arabic (العربية)",
-                                "ENGLISH" to "English (US)"
-                            ).forEach { (langId, label) ->
-                                val isSelected = config.ttsVoiceLanguage == langId
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(ttsVoiceLanguage = langId))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 8.dp, horizontal = 4.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                            fontSize = 10.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 4. Sliders for Speed & Pitch
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Speech Rate (Speed)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "SPEECH SPEED / TEMPO:",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Text(
-                                "${String.format("%.2f", config.ttsSpeechRate)}x",
-                                color = primary,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                        Slider(
-                            value = config.ttsSpeechRate,
-                            onValueChange = { newRate ->
-                                viewModel.saveConfig(context, config.copy(ttsSpeechRate = newRate))
-                            },
-                            valueRange = 0.7f..1.5f,
-                            steps = 7,
-                            colors = SliderDefaults.colors(
-                                thumbColor = primary,
-                                activeTrackColor = primary,
-                                inactiveTrackColor = surfaceContainer
-                            )
-                        )
-
-                        // Voice Pitch
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "VOICE PITCH / TONE:",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Text(
-                                "${String.format("%.2f", config.ttsPitch)}x",
-                                color = primary,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                        Slider(
-                            value = config.ttsPitch,
-                            onValueChange = { newPitch ->
-                                viewModel.saveConfig(context, config.copy(ttsPitch = newPitch))
-                            },
-                            valueRange = 0.8f..1.2f,
-                            steps = 7,
-                            colors = SliderDefaults.colors(
-                                thumbColor = primary,
-                                activeTrackColor = primary,
-                                inactiveTrackColor = surfaceContainer
-                            )
-                        )
-                    }
-
-                    // 5. Test Voice Button
-                    Button(
-                        onClick = {
-                            val testMsg = if (config.ttsVoiceLanguage == "ENGLISH") {
-                                "Hello! I am your intelligent assistant running locally with high-fidelity speech."
-                            } else {
-                                "مرحباً بك، أنا وكيلك الذكي بنظام Medlam AI. الصوت يعمل بنجاح وبدقة عالية."
-                            }
-                            viewModel.testVoice(context, testMsg)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = primaryContainer,
-                            contentColor = onPrimaryContainer
-                        )
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("TEST VOICE / تجربة الصوت", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-
-                    // 6. Custom Edge Audio Models Selection (Customizable like GGUF & MTP)
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            "CUSTOMIZABLE EDGE AUDIO MODELS (/sdcard/Medlam-Ai/tts):",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-
-                        val isSingleStageActive = remember(config.customAcousticModelPath) {
-                            if (config.customAcousticModelPath.isBlank()) false
-                            else ModelScanner.isPiperVitsModel(File(config.customAcousticModelPath))
-                        }
-
-                        // Acoustic Model (.onnx)
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("ACOUSTIC / END-TO-END MODEL (.onnx):", color = primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            if (acousticModels.isEmpty()) {
-                                Text("No custom .onnx found. Using default: qwen3_tts_acoustic_int8.onnx", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
-                            } else {
-                                acousticModels.forEach { file ->
-                                    val isSelected = config.customAcousticModelPath == file.absolutePath
-                                    val isSingle = ModelScanner.isPiperVitsModel(file)
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(if (isSelected) primaryContainer else surfaceContainer)
-                                            .clickable {
-                                                viewModel.saveConfig(context, config.copy(customAcousticModelPath = file.absolutePath))
-                                            }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        RadioButton(
-                                            selected = isSelected,
-                                            onClick = {
-                                                viewModel.saveConfig(context, config.copy(customAcousticModelPath = file.absolutePath))
-                                            },
-                                            colors = RadioButtonDefaults.colors(selectedColor = primary)
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Column {
-                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                if (isSingle) {
-                                                    Surface(
-                                                        shape = RoundedCornerShape(3.dp),
-                                                        color = primary.copy(alpha = 0.15f)
-                                                    ) {
-                                                        Text("Single-Stage E2E", color = primary, fontSize = 7.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp))
-                                                    }
-                                                }
-                                            }
-                                            val typeLabel = if (isSingle) "⚡ Piper VITS (Vocoder Bypassed)" else "Two-Stage Acoustic"
-                                            Text("$typeLabel • ${formatSize(file.length())} • ${file.parent}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Vocoder Model (.onnx)
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("VOCODER NEURAL SYNTHESIZER (.onnx):", color = primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            if (isSingleStageActive) {
+                                Triple("0.15 دقيق", 0.15f, false),
+                                Triple("0.30 حكيم (موصى به)", 0.30f, true),
+                                Triple("0.60 متوازن", 0.60f, false)
+                            ).forEach { (label, value, _) ->
+                                val isSelected = Math.abs(temperatureState - value) < 0.05f
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
-                                    color = surfaceContainer,
-                                    modifier = Modifier.fillMaxWidth()
+                                    color = if (isSelected) primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = if (isSelected) BorderStroke(1.dp, primary) else null,
+                                    modifier = Modifier.weight(1f).clickable {
+                                        temperatureState = value
+                                        val newConfig = config.copy(temperature = value)
+                                        viewModel.saveConfig(context, newConfig)
+                                    }
                                 ) {
                                     Text(
-                                        "⚡ Vocoder Bypassed: Active model is Single-Stage Piper VITS. Audio is synthesized and streamed directly from the model output with zero vocoder overhead.",
-                                        color = primary,
-                                        fontSize = 9.sp,
-                                        modifier = Modifier.padding(8.dp)
+                                        text = label,
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        textAlign = TextAlign.Center,
+                                        fontSize = 10.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                            } else if (vocoderModels.isEmpty()) {
-                                Text("No custom .onnx found. Using default: qwen3_tts_vocoder_fp16.onnx", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
-                            } else {
-                                vocoderModels.forEach { file ->
-                                    val isSelected = config.customVocoderModelPath == file.absolutePath
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(if (isSelected) primaryContainer else surfaceContainer)
-                                            .clickable {
-                                                viewModel.saveConfig(context, config.copy(customVocoderModelPath = file.absolutePath))
-                                            }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        RadioButton(
-                                            selected = isSelected,
-                                            onClick = {
-                                                viewModel.saveConfig(context, config.copy(customVocoderModelPath = file.absolutePath))
-                                            },
-                                            colors = RadioButtonDefaults.colors(selectedColor = primary)
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Column {
-                                            Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                            Text("${formatSize(file.length())} • ${file.parent}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
-                                        }
-                                    }
-                                }
                             }
-                        }
-
-                        // Speaker Embedding Profile (.bin / .npy)
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("SPEAKER IDENTITY PROFILE (.bin / .npy):", color = primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            if (speakerModels.isEmpty()) {
-                                Text("Using default: speaker_embedding.bin (Baked in APK)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.5.sp)
-                            } else {
-                                speakerModels.forEach { file ->
-                                    val isSelected = config.customSpeakerEmbeddingPath == file.absolutePath
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(if (isSelected) primaryContainer else surfaceContainer)
-                                            .clickable {
-                                                viewModel.saveConfig(context, config.copy(customSpeakerEmbeddingPath = file.absolutePath))
-                                            }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        RadioButton(
-                                            selected = isSelected,
-                                            onClick = {
-                                                viewModel.saveConfig(context, config.copy(customSpeakerEmbeddingPath = file.absolutePath))
-                                            },
-                                            colors = RadioButtonDefaults.colors(selectedColor = primary)
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Column {
-                                            Text(file.name, color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                            Text("${formatSize(file.length())} • ${file.parent}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 0.5.dp)
-
-                    // 7. Embedded APK Assets Status Badge
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = surfaceContainer
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = primary, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    "PERMANENT APK ASSETS (BUILT-IN):",
-                                    color = primary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                            Text(
-                                "✓ config.json (4.4KB) • ✓ vocab.json (2.7MB) • ✓ merges.txt (1.6MB)\n✓ mel_basis.bin (257KB) • ✓ speaker_embedding.bin (6.1MB)",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 9.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                lineHeight = 14.sp
-                            )
-                            Text(
-                                "All static audio assets are permanently baked inside the APK. 100% offline, guaranteed preserved even if storage is formatted.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                fontSize = 8.5.sp
-                            )
                         }
                     }
                 }
             }
 
             // ==========================================
-            // CARD 6: IMAGE GENERATION & DIFFUSION (ADAPTIVE ENGINE)
+            // CARD 4: LOCAL IMAGE GENERATION & DIFFUSION (SD TURBO)
             // ==========================================
             SettingsCard(
-                title = "6. IMAGE GENERATION & DIFFUSION",
+                title = "4. LOCAL IMAGE GENERATION & DIFFUSION",
                 titleColor = primary,
                 statusDot = primary,
                 statusText = "${config.sdComputeDevice} • " + (if (config.sdSteps == 0) "AUTO-ADAPTIVE" else "${config.sdSteps} STEPS")
@@ -2086,7 +1639,161 @@ fun SettingsScreenContent(
                 }
             }
 
+            // ==========================================
+            // CARD 5: UNIFIED INTERNAL PERSONA (GOD MODE)
+            // ==========================================
+            UnifiedPersonaCard(
+                cardNumber = 5,
+                primary = primary,
+                surfaceContainer = surfaceContainer,
+                settingsViewModel = settingsViewModel,
+                viewModel = viewModel,
+                context = context
+            )
+        } // End of Local GGUF else block
+
             Spacer(modifier = Modifier.height(40.dp))
+        }
+    }
+}
+
+@Composable
+private fun UnifiedPersonaCard(
+    cardNumber: Int,
+    primary: Color,
+    surfaceContainer: Color,
+    settingsViewModel: SettingsViewModel,
+    viewModel: AgentViewModel,
+    context: Context
+) {
+    SettingsCard(
+        title = "$cardNumber. UNIFIED INTERNAL PERSONA",
+        titleColor = primary,
+        statusText = "GOD MODE ACTIVE",
+        isCollapsible = true,
+        initialExpanded = false
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = surfaceContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Medlam-AI Unified Core Engine",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "Autonomous AI engineer and Android OS administrator. Unified God Mode covers high-precision coding, deep OS/shell control, inline SVG graphics, and dialect-aware reasoning with zero token bloat.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+            }
+
+            val customPersonaPromptValue by settingsViewModel.customPersonaPrompt.collectAsState()
+            var personaPromptInput by remember(customPersonaPromptValue) { mutableStateOf(customPersonaPromptValue) }
+
+            OutlinedTextField(
+                value = personaPromptInput,
+                onValueChange = {
+                    personaPromptInput = it
+                    settingsViewModel.updatePersonaPrompt(it)
+                    viewModel.updateCustomPersonaPrompt(it, context)
+                },
+                label = {
+                    Text(
+                        "Core Persona & System Prompt",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 200.dp, max = 380.dp),
+                textStyle = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    lineHeight = 14.5.sp,
+                    color = Color(0xFF79C0FF)
+                ),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = Color(0xFF30363D),
+                    focusedTextColor = Color(0xFF79C0FF),
+                    unfocusedTextColor = Color(0xFF79C0FF),
+                    cursorColor = MaterialTheme.colorScheme.primary,
+                    focusedContainerColor = Color(0xFF090D12),
+                    unfocusedContainerColor = Color(0xFF090D12)
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Saved",
+                        tint = Color(0xFF10B981).copy(alpha = 0.85f),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = "Auto-saved to DataStore",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val def = PersonaDataStore.DEFAULT_PROMPT
+                        personaPromptInput = def
+                        settingsViewModel.resetPersonaPromptToDefault()
+                        viewModel.resetCustomPersonaPrompt(context)
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.primary
+                    ),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reset Defaults",
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        text = "Reset Defaults",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
     }
 }

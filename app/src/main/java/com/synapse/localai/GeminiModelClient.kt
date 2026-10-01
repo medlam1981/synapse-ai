@@ -50,7 +50,7 @@ class GeminiModelClient(
 
     var modelName: String = "gemini-1.5-flash"
     var maxTokens: Int = 8192 // Maximized API ceiling to 8192 for unbounded output streaming
-    var temperature: Float = 0.7f
+    var temperature: Float = 0.30f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
 
     @Volatile var lastFinishReason: String? = null

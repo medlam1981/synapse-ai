@@ -279,24 +279,23 @@ Java_com_synapse_localai_LlamaNativeEngine_generate_1stream(
             return false;
         }
 
-        JNIEnv* current_env = nullptr;
-        bool attached = false;
-        int get_env_res = jvm->GetEnv(reinterpret_cast<void**>(&current_env), JNI_VERSION_1_6);
-
-        if (get_env_res == JNI_EDETACHED) {
-            if (jvm->AttachCurrentThread(&current_env, nullptr) != JNI_OK) {
-                return false;
+        thread_local static JNIEnv* tls_env = nullptr;
+        if (!tls_env) {
+            int get_env_res = jvm->GetEnv(reinterpret_cast<void**>(&tls_env), JNI_VERSION_1_6);
+            if (get_env_res == JNI_EDETACHED) {
+                if (jvm->AttachCurrentThread(&tls_env, nullptr) != JNI_OK) {
+                    tls_env = nullptr;
+                    return false;
+                }
             }
-            attached = true;
         }
 
-        jstring jpiece = current_env->NewStringUTF(piece.c_str());
-        jboolean cont = current_env->CallBooleanMethod(global_cb, on_token_mid, jpiece);
-        current_env->DeleteLocalRef(jpiece);
+        if (!tls_env) return false;
 
-        if (attached) {
-            jvm->DetachCurrentThread();
-        }
+        jstring jpiece = tls_env->NewStringUTF(piece.c_str());
+        jboolean cont = tls_env->CallBooleanMethod(global_cb, on_token_mid, jpiece);
+        tls_env->DeleteLocalRef(jpiece);
+
         return (cont == JNI_TRUE);
     };
 
@@ -826,7 +825,7 @@ Java_com_synapse_localai_PageCacheAdvisor_nativeAdviseModelMemory(
 
     int advice = MADV_NORMAL;
     switch (advice_code) {
-        case 1: advice = MADV_WILLNEED; break;
+        case 1: advice = MADV_SEQUENTIAL; break; // Safeguard: Sequential access instead of kernel-blocking WILLNEED
         case 2: advice = MADV_DONTNEED; break;
         case 3: advice = MADV_SEQUENTIAL; break;
         default: advice = MADV_NORMAL; break;

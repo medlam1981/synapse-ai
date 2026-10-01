@@ -81,6 +81,62 @@ object StreamDemultiplexer {
         ThinkTagDef("<|reasoning|>", "<|/reasoning|>")
     )
 
+    // Pre-compiled static regex patterns to eliminate runtime allocation storms and O(N^2) recompilations
+    private val RE_FENCED_THOUGHT = Regex("""```(?:thought|thinking|reasoning)\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
+    private val RE_TRAILING_OPEN_TAG = Regex("""</?[a-zA-Z0-9_|]*$""")
+    private val RE_ALL_THINK_TAGS = Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE)
+    private val RE_TRAILING_THINK_OPEN = Regex("""<\|?(?:th(?:i(?:n(?:k\|?)?)?)?|th(?:o(?:u(?:g(?:h(?:t\|?)?)?)?)?)?|re(?:a(?:s(?:o(?:n(?:i(?:n(?:g\|?)?)?)?)?)?)?)?)$""", RegexOption.IGNORE_CASE)
+    private val RE_HEADER_PATH = Regex("""(?:filepath|path)=["']?([^"'\s]+)["']?""", RegexOption.IGNORE_CASE)
+    private val RE_PARAM_TAG = Regex("""<parameter\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)</parameter>""", RegexOption.IGNORE_CASE)
+    private val RE_KV_PAIR = Regex("""(?:^|\n)\s*([a-zA-Z0-9_-]+)\s*[:=]\s*["']?([\s\S]*?)["']?\s*(?:$|\n)""")
+    private val RE_JSON_NAME = Regex("""\"(?:name|tool|action)\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE)
+    private val RE_JSON_FUNC_NAME = Regex("""\"function\"\s*:\s*\{\s*\"name\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE)
+    private val RE_JSON_PARAM_PAIRS = Regex("""\"([a-zA-Z0-9_-]+)\"\s*:\s*(?:\"((?:\\\"|[^\"])*)\"|(\d+|true|false))""")
+    private val RE_JSON_CONTENT = Regex("""\"content\"\s*:\s*\"([\s\S]*?)(?:\"\s*,\s*\"[a-zA-Z0-9_-]+\"|\"\s*\}|$)""")
+    private val RE_ARG_PAIRS = Regex("""([a-zA-Z0-9_-]+)\s*=\s*(["'])(.*?)\2""")
+    private val RE_TOOL_CALL = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|$)""", RegexOption.IGNORE_CASE)
+    private val RE_FUNCTION_CALL = Regex("""<function_call\b[^>]*>([\s\S]*?)(?:</function_call>|$)""", RegexOption.IGNORE_CASE)
+    private val RE_INVOKE = Regex("""<invoke\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)(?:</invoke>|$)""", RegexOption.IGNORE_CASE)
+    private val RE_FENCED_JSON = Regex("""```(?:json)?\s*\n?(\{[\s\S]*?\}|\[[\s\S]*?\])\s*\n?```""", RegexOption.IGNORE_CASE)
+    private val RE_RAW_JSON = Regex("""(?:\A|\n)\s*(\{\s*\"(?:name|tool|action|type)\"\s*:[\s\S]*?(?:\}\s*(?:\n|\Z)|$))""")
+    private val RE_DEMUX_PLACEHOLDER = Regex("""___DEMUX_BLOCK_([a-zA-Z0-9_\-]+)___""")
+    private val RE_FENCED_TOOL_JSON = Regex("""```(?:json)?\s*\{[\s\S]*?\"(?:name|tool|action)\"\s*:[\s\S]*?\}\s*```""")
+    private val RE_RAW_TOOL_JSON = Regex("""(?:\A|\n)\s*\{\s*\"(?:name|tool|action)\"\s*:\s*\"[^\"]+\"[\s\S]*?\}\s*(?:\n|\Z)""")
+    private val RE_TERMINAL_FRAME = Regex("""<terminal_frame([^>]*)>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
+    private val RE_ATTR_PAIR = Regex("""([a-zA-Z0-9_-]+)=(["'])(.*?)\2""")
+    private val RE_LEGACY_SHELL = Regex("""Shell output \(`([^`]+)`\):\s*```(?:bash|sh)?\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
+    private val RE_FENCED_BASH_BLOCK = Regex("""```(?:bash|sh|shell)\r?\n([\s\S]*?)```""", RegexOption.IGNORE_CASE)
+    private val RE_SYS_TOOL_OUTPUT = Regex("""\[System Tool Execution Output\]:?\r?\n?""")
+    private val RE_TRAILING_TOOL_CALLS = Regex("""<(?:tool_calls|function_calls)\b.*""")
+    private val RE_TERMINAL_TAG_STRIP = Regex("""<terminal_frame[^>]*>""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Ultra-fast O(N) streaming thought extractor using simple index scanning.
+     * Avoids heavy Regex compilation and full-string allocations during streaming.
+     */
+    fun extractStreamThinkingFast(rawText: String): Pair<String, Boolean> {
+        if (rawText.isEmpty()) return "" to false
+        for (tagDef in THINK_TAGS) {
+            val openIdx = rawText.indexOf(tagDef.open, ignoreCase = true)
+            if (openIdx != -1) {
+                val contentStart = openIdx + tagDef.open.length
+                val closeIdx = rawText.indexOf(tagDef.close, contentStart, ignoreCase = true)
+                return if (closeIdx != -1) {
+                    rawText.substring(contentStart, closeIdx).trim() to false
+                } else {
+                    rawText.substring(contentStart).trim() to true
+                }
+            }
+        }
+        val fencedMatch = RE_FENCED_THOUGHT.find(rawText)
+        if (fencedMatch != null) {
+            val content = fencedMatch.groupValues[1].trim()
+            val isClosed = fencedMatch.value.endsWith("```")
+            return content to !isClosed
+        }
+        return "" to false
+    }
+
     /**
      * Parse raw incoming stream text or completed response turn through
      * the real-time look-ahead state machine.
@@ -107,8 +163,7 @@ object StreamDemultiplexer {
 
         var continueScanning = true
         while (continueScanning && workingText.isNotEmpty()) {
-            val fencedRegex = Regex("""```(?:thought|thinking|reasoning)\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
-            val fencedMatch = fencedRegex.find(workingText)
+            val fencedMatch = RE_FENCED_THOUGHT.find(workingText)
 
             var earliestTagDef: ThinkTagDef? = null
             var earliestTagIdx = -1
@@ -145,7 +200,7 @@ object StreamDemultiplexer {
                 val closeIdx = afterOpen.indexOf(tagDef.close, ignoreCase = true)
                 if (closeIdx == -1) {
                     val rawThought = afterOpen.trimStart()
-                    val cleanThought = rawThought.replace(Regex("""</?[a-zA-Z0-9_|]*$"""), "").trim()
+                    val cleanThought = rawThought.replace(RE_TRAILING_OPEN_TAG, "").trim()
                     if (cleanThought.isNotEmpty()) {
                         thoughts.add(cleanThought)
                     }
@@ -170,12 +225,11 @@ object StreamDemultiplexer {
             workingText = workingText.replace(tagDef.open, "", ignoreCase = true).replace(tagDef.close, "", ignoreCase = true)
         }
         workingText = workingText
-            .replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
+            .replace(RE_ALL_THINK_TAGS, "")
             .trim()
 
-        val trailingOpenTagRegex = Regex("""<\|?(?:th(?:i(?:n(?:k\|?)?)?)?|th(?:o(?:u(?:g(?:h(?:t\|?)?)?)?)?)?|re(?:a(?:s(?:o(?:n(?:i(?:n(?:g\|?)?)?)?)?)?)?)?)$""", RegexOption.IGNORE_CASE)
-        if (trailingOpenTagRegex.containsMatchIn(workingText)) {
-            workingText = workingText.replace(trailingOpenTagRegex, "").trimEnd()
+        if (RE_TRAILING_THINK_OPEN.containsMatchIn(workingText)) {
+            workingText = workingText.replace(RE_TRAILING_THINK_OPEN, "").trimEnd()
             currentlyThinking = true
         }
 
@@ -240,8 +294,7 @@ object StreamDemultiplexer {
             }
 
             val headerLine = afterOpening.substring(0, newlineIdx).trim()
-            val pathFromHeader = Regex("""(?:filepath|path)=["']?([^"'\s]+)["']?""", RegexOption.IGNORE_CASE)
-                .find(headerLine)?.groupValues?.get(1)
+            val pathFromHeader = RE_HEADER_PATH.find(headerLine)?.groupValues?.get(1)
             val rawLang = headerLine.substringBefore(" ").trim().lowercase()
             val codeStartIdx = fenceIdx + 3 + newlineIdx + 1
 
@@ -318,8 +371,7 @@ object StreamDemultiplexer {
     fun extractToolParams(rawBody: String): Map<String, String> {
         val params = mutableMapOf<String, String>()
 
-        val paramTagRegex = Regex("""<parameter\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)</parameter>""", RegexOption.IGNORE_CASE)
-        for (m in paramTagRegex.findAll(rawBody)) {
+        for (m in RE_PARAM_TAG.findAll(rawBody)) {
             val k = m.groupValues[1].trim().lowercase()
             val v = unescapeXml(m.groupValues[2].trim())
             if (k.isNotBlank() && v.isNotBlank()) {
@@ -341,8 +393,7 @@ object StreamDemultiplexer {
             } catch (_: Exception) {}
         }
 
-        val kvRegex = Regex("""(?:^|\n)\s*([a-zA-Z0-9_-]+)\s*[:=]\s*["']?([\s\S]*?)["']?\s*(?:$|\n)""")
-        kvRegex.findAll(rawBody).forEach { kv ->
+        RE_KV_PAIR.findAll(rawBody).forEach { kv ->
             val k = kv.groupValues[1].trim().lowercase()
             val v = kv.groupValues[2].trim().removeSurrounding("\"").removeSurrounding("'")
             if (k in listOf("command", "cmd", "query", "q", "description", "desc", "delay_minutes", "summary", "package_name", "path", "content") && v.isNotBlank()) {
@@ -438,13 +489,12 @@ object StreamDemultiplexer {
         } catch (_: Exception) {}
 
         try {
-            val nameMatch = Regex("""\"(?:name|tool|action)\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(trimmed)
-                ?: Regex("""\"function\"\s*:\s*\{\s*\"name\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(trimmed)
+            val nameMatch = RE_JSON_NAME.find(trimmed) ?: RE_JSON_FUNC_NAME.find(trimmed)
             if (nameMatch == null) return null
             val toolName = nameMatch.groupValues[1].trim().lowercase()
 
             val params = mutableMapOf<String, String>()
-            val paramPairs = Regex("""\"([a-zA-Z0-9_-]+)\"\s*:\s*(?:\"((?:\\\"|[^\"])*)\"|(\d+|true|false))""").findAll(trimmed)
+            val paramPairs = RE_JSON_PARAM_PAIRS.findAll(trimmed)
             for (p in paramPairs) {
                 val key = p.groupValues[1].lowercase()
                 if (key !in listOf("name", "tool", "action", "function", "type")) {
@@ -458,7 +508,7 @@ object StreamDemultiplexer {
             }
 
             if (!params.containsKey("content")) {
-                val contentMatch = Regex("""\"content\"\s*:\s*\"([\s\S]*?)(?:\"\s*,\s*\"[a-zA-Z0-9_-]+\"|\"\s*\}|$)""").find(trimmed)
+                val contentMatch = RE_JSON_CONTENT.find(trimmed)
                 if (contentMatch != null) {
                     params["content"] = contentMatch.groupValues[1].replace("\\\"", "\"")
                 }
@@ -491,8 +541,7 @@ object StreamDemultiplexer {
 
     fun parsePythonArgs(argsStr: String): Map<String, String> {
         val params = mutableMapOf<String, String>()
-        val argRegex = Regex("""([a-zA-Z0-9_-]+)\s*=\s*(["'])(.*?)\2""")
-        for (m in argRegex.findAll(argsStr)) {
+        for (m in RE_ARG_PAIRS.findAll(argsStr)) {
             params[m.groupValues[1].lowercase()] = m.groupValues[3]
         }
         if (params.isEmpty() && argsStr.isNotBlank()) {
@@ -508,8 +557,7 @@ object StreamDemultiplexer {
         val seen = mutableSetOf<String>()
 
         // 0. Explicit <tool_call> JSON tags (ATLAS / Gemma standard)
-        val toolCallRegex = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|$)""", RegexOption.IGNORE_CASE)
-        for (m in toolCallRegex.findAll(text)) {
+        for (m in RE_TOOL_CALL.findAll(text)) {
             val inner = m.groupValues[1].trim()
             val isClosed = m.value.contains("</tool_call>")
             parseJsonOrArrayToolCalls(inner).forEach { call ->
@@ -522,8 +570,7 @@ object StreamDemultiplexer {
         }
 
         // 0.1 Explicit <function_call> tags
-        val functionCallRegex = Regex("""<function_call\b[^>]*>([\s\S]*?)(?:</function_call>|$)""", RegexOption.IGNORE_CASE)
-        for (m in functionCallRegex.findAll(text)) {
+        for (m in RE_FUNCTION_CALL.findAll(text)) {
             val inner = m.groupValues[1].trim()
             val isClosed = m.value.contains("</function_call>")
             parseJsonOrArrayToolCalls(inner).forEach { call ->
@@ -536,8 +583,7 @@ object StreamDemultiplexer {
         }
 
         // 1. XML <invoke name="..."> or <function_calls> parsing
-        val invokeRegex = Regex("""<invoke\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)(?:</invoke>|$)""", RegexOption.IGNORE_CASE)
-        for (m in invokeRegex.findAll(text)) {
+        for (m in RE_INVOKE.findAll(text)) {
             val toolName = m.groupValues[1].trim()
             val innerBody = m.groupValues[2]
             val params = extractToolParams(innerBody)
@@ -550,8 +596,7 @@ object StreamDemultiplexer {
         }
 
         // 2. Fenced ```json ... ``` tool calls (FIXED: Using raw multiline string pattern)
-        val fencedJsonRegex = Regex("""```(?:json)?\s*\n?(\{[\s\S]*?\}|\[[\s\S]*?\])\s*\n?```""", RegexOption.IGNORE_CASE)
-        for (m in fencedJsonRegex.findAll(text)) {
+        for (m in RE_FENCED_JSON.findAll(text)) {
             val jsonStr = m.groupValues[1].trim()
             parseJsonOrArrayToolCalls(jsonStr).forEach { call ->
                 val key = "${call.name}:${call.params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
@@ -563,14 +608,29 @@ object StreamDemultiplexer {
         }
 
         // 3. Raw unfenced JSON tool calls (Intercepts write_file, path, content, command even when multiline)
-        val rawJsonRegex = Regex("""(?:\A|\n)\s*(\{\s*\"(?:name|tool|action|type)\"\s*:[\s\S]*?(?:\}\s*(?:\n|\Z)|$))""")
-        for (m in rawJsonRegex.findAll(text)) {
+        for (m in RE_RAW_JSON.findAll(text)) {
             val jsonStr = m.groupValues[1].trim()
             parseJsonToolCall(jsonStr)?.let { call ->
                 val key = "${call.name}:${call.params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
                 if (!seen.contains(key)) {
                     seen.add(key)
                     results.add(call.copy(rawMatch = m.value))
+                }
+            }
+        }
+
+        // 4. Fallback: Fenced ```bash ... ``` or ```sh ... ``` commands
+        // If the model generated a bash code block instead of invoking run_shell,
+        // intercept it cleanly and execute it in the terminal frame!
+        if (results.isEmpty()) {
+            for (m in RE_FENCED_BASH_BLOCK.findAll(text)) {
+                val script = m.groupValues[1].trim()
+                if (script.isNotBlank() && !script.startsWith("#!") && script.lines().none { it.startsWith("fun ") || it.startsWith("def ") || it.startsWith("class ") }) {
+                    val key = "run_shell:command=$script"
+                    if (!seen.contains(key)) {
+                        seen.add(key)
+                        results.add(ParsedToolCall(name = "run_shell", params = mapOf("command" to script), isClosed = true, rawMatch = m.value))
+                    }
                 }
             }
         }
@@ -584,9 +644,8 @@ object StreamDemultiplexer {
         placedBlockIds: MutableSet<String>,
         targetBlocks: MutableList<DemuxBlock>
     ) {
-        val placeholderRegex = Regex("""___DEMUX_BLOCK_([a-zA-Z0-9_\-]+)___""")
         var currentIdx = 0
-        val matches = placeholderRegex.findAll(rawText).toList()
+        val matches = RE_DEMUX_PLACEHOLDER.findAll(rawText).toList()
         if (matches.isEmpty()) {
             val clean = sanitizeProse(rawText)
             if (clean.isNotBlank()) {
@@ -625,13 +684,15 @@ object StreamDemultiplexer {
      * Synchronous ReAct Barrier: Detects if incoming token text has reached a completed tool call.
      */
     fun hasCompletedToolCall(text: String): Boolean {
+        if (!text.contains('>') && !text.contains('}') && !text.contains("```")) return false
         if (text.contains("</tool_call>", ignoreCase = true) && text.contains("<tool_call", ignoreCase = true)) return true
         if (text.contains("</invoke>", ignoreCase = true) && text.contains("<invoke", ignoreCase = true)) return true
         if (text.contains("</function_call>", ignoreCase = true) && text.contains("<function_call", ignoreCase = true)) return true
         if (text.contains("</function_calls>", ignoreCase = true) && text.contains("<function_calls", ignoreCase = true)) return true
         if (text.contains("</terminal_frame>", ignoreCase = true) && text.contains("<terminal_frame", ignoreCase = true)) return true
-        if (Regex("""```(?:json)?\s*\{[\s\S]*?\"(?:name|tool|action)\"\s*:[\s\S]*?\}\s*```""").containsMatchIn(text)) return true
-        if (Regex("""(?:\A|\n)\s*\{\s*\"(?:name|tool|action)\"\s*:\s*\"[^\"]+\"[\s\S]*?\}\s*(?:\n|\Z)""").containsMatchIn(text)) return true
+        if (text.contains("```") && RE_FENCED_TOOL_JSON.containsMatchIn(text)) return true
+        if (text.contains("```") && RE_FENCED_BASH_BLOCK.containsMatchIn(text)) return true
+        if (text.contains('{') && RE_RAW_TOOL_JSON.containsMatchIn(text)) return true
         return false
     }
 
@@ -653,11 +714,15 @@ object StreamDemultiplexer {
         if (earliestEnd != -1) {
             return text.substring(0, earliestEnd).trimEnd()
         }
-        val fencedMatch = Regex("""```(?:json)?\s*\{[\s\S]*?\"(?:name|tool|action)\"\s*:[\s\S]*?\}\s*```""").find(text)
+        val fencedMatch = RE_FENCED_TOOL_JSON.find(text)
         if (fencedMatch != null) {
             return text.substring(0, fencedMatch.range.last + 1).trimEnd()
         }
-        val rawJsonMatch = Regex("""(?:\A|\n)\s*(\{\s*\"(?:name|tool|action)\"\s*:\s*\"[^\"]+\"[\s\S]*?\})\s*(?:\n|\Z)""").find(text)
+        val fencedBashMatch = RE_FENCED_BASH_BLOCK.find(text)
+        if (fencedBashMatch != null) {
+            return text.substring(0, fencedBashMatch.range.last + 1).trimEnd()
+        }
+        val rawJsonMatch = RE_RAW_TOOL_JSON.find(text)
         if (rawJsonMatch != null) {
             return text.substring(0, rawJsonMatch.range.last + 1).trimEnd()
         }
@@ -706,13 +771,10 @@ object StreamDemultiplexer {
         val seenToolCalls = mutableSetOf<String>()
 
         // 1. Intercept explicit <terminal_frame ...>output</terminal_frame>
-        val tfRegex = Regex("""<terminal_frame([^>]*)>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
-        val attrRegex = Regex("""([a-zA-Z0-9_-]+)=(["'])(.*?)\2""")
-
-        cleanText = tfRegex.replace(cleanText) { m ->
+        cleanText = RE_TERMINAL_FRAME.replace(cleanText) { m ->
             val attrs = m.groupValues[1]
             val innerContent = m.groupValues[2]
-            val attrMap = attrRegex.findAll(attrs).associate { it.groupValues[1].lowercase() to it.groupValues[3] }
+            val attrMap = RE_ATTR_PAIR.findAll(attrs).associate { it.groupValues[1].lowercase() to it.groupValues[3] }
 
             val cmd = unescapeXml(attrMap["command"] ?: "")
             val exitCode = attrMap["exit_code"]?.toIntOrNull() ?: 0
@@ -737,8 +799,7 @@ object StreamDemultiplexer {
         }
 
         // 2. Intercept legacy shell output
-        val legacyShellRegex = Regex("""Shell output \(`([^`]+)`\):\s*```(?:bash|sh)?\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
-        cleanText = legacyShellRegex.replace(cleanText) { m ->
+        cleanText = RE_LEGACY_SHELL.replace(cleanText) { m ->
             val cmd = m.groupValues[1].trim()
             val output = m.groupValues[2].trim()
             val isClosed = m.value.endsWith("```")
@@ -757,7 +818,7 @@ object StreamDemultiplexer {
             "\n___DEMUX_BLOCK_${execId}___\n"
         }
 
-        cleanText = cleanText.replace(Regex("""\[System Tool Execution Output\]:?\r?\n?"""), "")
+        cleanText = RE_SYS_TOOL_OUTPUT.replace(cleanText, "")
 
         // 4. Universal Tool Call Parser: Parse XML, JSON, and Python tag invocations
         val parsedCalls = parseAllToolCalls(cleanText)
@@ -811,10 +872,10 @@ object StreamDemultiplexer {
             .replace("</tool_call>", "")
             .replace("<function_call>", "")
             .replace("</function_call>", "")
-            .replace(Regex("""<(?:tool_calls|function_calls)\b.*"""), "")
+            .replace(RE_TRAILING_TOOL_CALLS, "")
             .replace("<terminal_frame>", "")
             .replace("</terminal_frame>", "")
-            .replace(Regex("""(?:\A|\n)\s*\{\s*\"(?:name|tool|action)\"\s*:[\s\S]*?(?:\}\s*(?:\n|\Z)|$)"""), "")
+            .replace(RE_RAW_TOOL_JSON, "")
             .trim()
 
         return cleanText to blockMap
@@ -900,10 +961,8 @@ object StreamDemultiplexer {
                 continue
             }
 
-            if (trimmed.startsWith("```")) continue
-
-            val cleanLine = line.replace(Regex("""</?\|?(?:think|thought|reasoning)\|?>""", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("""<terminal_frame[^>]*>""", RegexOption.IGNORE_CASE), "")
+            val cleanLine = line.replace(RE_ALL_THINK_TAGS, "")
+                .replace(RE_TERMINAL_TAG_STRIP, "")
                 .replace("</terminal_frame>", "", ignoreCase = true)
             if (cleanLine.isNotBlank()) {
                 sanitizedLines.add(cleanLine)

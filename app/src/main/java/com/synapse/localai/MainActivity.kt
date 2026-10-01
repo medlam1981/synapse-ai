@@ -808,7 +808,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         enabled = isInputReady,
                                         textStyle = TextStyle(
                                             color = textBright,
-                                            fontSize = 12.5.sp,
+                                            fontSize = 13.5.sp,
                                             fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
                                             textAlign = TextAlign.Start
                                         ),
@@ -841,7 +841,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                                         text = placeholderText,
                                                         style = TextStyle(
                                                             color = textDim,
-                                                            fontSize = 12.sp,
+                                                            fontSize = 13.sp,
                                                             fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
                                                             textAlign = TextAlign.Start
                                                         ),
@@ -896,20 +896,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         )
                                     }
 
-                                    Box(
-                                        modifier = Modifier
-                                            .size(30.dp)
-                                            .clip(CircleShape)
-                                            .clickable { viewModel.toggleTts() },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (uiState.isTtsEnabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
-                                            contentDescription = "Real-Time TTS Voice",
-                                            tint = if (uiState.isTtsEnabled) cyanAccent else textDim,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                    /* TTS Voice Button Removed */
 
                                     Box(
                                         modifier = Modifier
@@ -1018,13 +1005,17 @@ private fun TelemetryMicroChip(
     accentColor: Color,
     contentDescription: String,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    iconSize: androidx.compose.ui.unit.Dp = 10.5.dp,
+    fontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
+    paddingHorizontal: androidx.compose.ui.unit.Dp = 3.5.dp,
+    paddingVertical: androidx.compose.ui.unit.Dp = 2.5.dp
 ) {
     Surface(
-        shape = RoundedCornerShape(3.5.dp),
+        shape = RoundedCornerShape(4.dp),
         color = accentColor.copy(alpha = 0.08f),
         border = BorderStroke(
-            0.5.dp,
+            0.6.dp,
             Brush.verticalGradient(
                 listOf(accentColor.copy(alpha = 0.40f), accentColor.copy(alpha = 0.12f))
             )
@@ -1032,20 +1023,21 @@ private fun TelemetryMicroChip(
         modifier = modifier
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = paddingHorizontal, vertical = paddingVertical),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+            horizontalArrangement = Arrangement.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
                 tint = accentColor,
-                modifier = Modifier.size(10.dp)
+                modifier = Modifier.size(iconSize)
             )
+            Spacer(Modifier.width(2.5.dp))
             Text(
                 text = text,
                 color = textColor,
-                fontSize = 8.5.sp,
+                fontSize = fontSize,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
@@ -1363,7 +1355,7 @@ fun ConsolidatedMasterHeader(
                     Text(
                         text = specChipText,
                         color = textDim,
-                        fontSize = 8.5.sp,
+                        fontSize = 9.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -1621,10 +1613,10 @@ fun CliThoughtContainer(
                             }
                         },
                         color = traceColor,
-                        fontSize = 10.5.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = FontFamily.Monospace,
                         fontStyle = FontStyle.Italic,
-                        lineHeight = if (isThoughtRtl) 17.sp else 15.5.sp,
+                        lineHeight = if (isThoughtRtl) 18.sp else 16.5.sp,
                         textAlign = TextAlign.Start,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1803,9 +1795,9 @@ fun CliCodeBlockContainer(
                 ) {
                     Text(
                         text = highlighted,
-                        fontSize = 10.5.sp,
+                        fontSize = 11.5.sp,
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 13.5.sp,
+                        lineHeight = 15.5.sp,
                         color = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
                     )
                 }
@@ -2030,7 +2022,7 @@ fun CliLogMessageView(
                             text = if (isLogArabic) "❮" else "❯",
                             color = primaryAccent,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.padding(top = 1.dp)
                         )
@@ -2040,8 +2032,8 @@ fun CliLogMessageView(
                             isDark = isDark,
                             isRtl = isLogArabic,
                             color = textBright,
-                            fontSize = 12.sp,
-                            lineHeight = if (isLogArabic) 17.sp else 16.sp,
+                            fontSize = 13.sp,
+                            lineHeight = if (isLogArabic) 19.sp else 18.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier.weight(1f),
                             markdownStyler = { txt, _, rtl -> AnnotatedString(if (rtl) applyBidiIsolation(txt) else txt) }
@@ -2052,7 +2044,7 @@ fun CliLogMessageView(
                 Text(
                     text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
                     color = textDim.copy(alpha = 0.35f),
-                    fontSize = 8.sp,
+                    fontSize = 8.5.sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier
                         .align(Alignment.End)
@@ -2076,16 +2068,16 @@ fun CliLogMessageView(
                 Text(
                     text = marker,
                     color = bulletColor,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace
                 )
                 Text(
                     text = log.text,
                     color = if (isError) Color(0xFFEF4444) else textDim,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    lineHeight = 14.sp,
+                    lineHeight = 15.sp,
                     modifier = Modifier.weight(1f, fill = false)
                 )
             }
@@ -2698,8 +2690,8 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             isDark = isDark,
                             isRtl = isLineArabic,
                             color = headingColor,
-                            fontSize = 11.5.sp,
-                            lineHeight = if (isLineArabic) 18.sp else 15.sp,
+                            fontSize = 13.5.sp,
+                            lineHeight = if (isLineArabic) 21.sp else 19.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2723,7 +2715,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             Text(
                                 text = bulletMarker,
                                 color = headingColor,
-                                fontSize = 10.5.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.padding(end = 4.dp)
@@ -2733,8 +2725,8 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                                 isDark = isDark,
                                 isRtl = isLineArabic,
                                 color = textBright,
-                                fontSize = 11.sp,
-                                lineHeight = if (isLineArabic) 18.sp else 15.sp,
+                                fontSize = 12.5.sp,
+                                lineHeight = if (isLineArabic) 20.sp else 18.sp,
                                 textAlign = TextAlign.Start,
                                 modifier = Modifier.weight(1f),
                                 markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
@@ -2747,8 +2739,8 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             isDark = isDark,
                             isRtl = isLineArabic,
                             color = textBright,
-                            fontSize = 11.sp,
-                            lineHeight = if (isLineArabic) 18.sp else 15.sp,
+                            fontSize = 12.5.sp,
+                            lineHeight = if (isLineArabic) 20.sp else 18.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier.fillMaxWidth(),
                             markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }

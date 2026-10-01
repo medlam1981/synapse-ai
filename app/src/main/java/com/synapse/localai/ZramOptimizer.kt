@@ -45,12 +45,15 @@ object ZramOptimizer {
         val pid = Process.myPid()
         val script = StringBuilder().apply {
             append("am kill-all 2>/dev/null; ")
-            append("sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; ")
+            // PRESERVE PAGE CACHE: Never drop_caches before or during inference!
             append("echo 1 > /proc/sys/vm/compact_memory 2>/dev/null; ")
             append("for p in /proc/[0-9]*; do adj=\$(cat \$p/oom_score_adj 2>/dev/null); if [ \"\$adj\" -ge 900 ] 2>/dev/null; then kill -9 \$(basename \$p) 2>/dev/null; fi; done; ")
-            append("echo 100 > /proc/sys/vm/swappiness 2>/dev/null; ")
-            append("echo 100 > /proc/sys/vm/watermark_scale_factor 2>/dev/null; ")
-            append("echo 32768 > /proc/sys/vm/extra_free_kbytes 2>/dev/null; ")
+            append("for c in /dev/cpuset /dev/cpuset/*; do [ -f \"\$c/cpus\" ] && echo 0-7 > \"\$c/cpus\" 2>/dev/null; done; ")
+            append("echo $pid > /dev/cpuset/top-app/cgroup.procs 2>/dev/null; ")
+            append("echo $pid > /dev/cpuset/top-app/tasks 2>/dev/null; ")
+            append("echo $pid > /dev/stune/top-app/tasks 2>/dev/null; ")
+            append("echo 60 > /proc/sys/vm/swappiness 2>/dev/null; ")
+            append("echo 20 > /proc/sys/vm/watermark_scale_factor 2>/dev/null; ")
             append("echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null; ")
             append("echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null; ")
             append("if [ -f /sys/block/zram0/disksize ]; then ")
@@ -104,23 +107,29 @@ object ZramOptimizer {
     suspend fun pinToPerformanceCores(mask: String = "f0"): Boolean = withContext(Dispatchers.IO) {
         val pid = Process.myPid()
         val script = """
-            # 1. Unrestrict cpuset cgroups so all 8 cores are accessible
-            echo 0-7 > /dev/cpuset/foreground/cpus 2>/dev/null
-            echo 0-7 > /dev/cpuset/top-app/cpus 2>/dev/null
+            # 1. Unrestrict all cpuset cgroups so all 8 cores are accessible
+            for c in /dev/cpuset /dev/cpuset/*; do
+                [ -f "${'$'}c/cpus" ] && echo 0-7 > "${'$'}c/cpus" 2>/dev/null
+            done
             echo $pid > /dev/cpuset/top-app/cgroup.procs 2>/dev/null
+            echo $pid > /dev/cpuset/top-app/tasks 2>/dev/null
+            echo $pid > /dev/stune/top-app/tasks 2>/dev/null
 
-            # 2. Maximize CPU frequency & performance governor for big cores 4-7
+            # 2. Dynamic Performance EAS scaling for big cores 4-7 (schedutil prevents thermal runaway at 85°C)
             for c in 4 5 6 7; do
-                echo performance > /sys/devices/system/cpu/cpu${'$'}c/cpufreq/scaling_governor 2>/dev/null
-                cat /sys/devices/system/cpu/cpu${'$'}c/cpufreq/scaling_max_freq > /sys/devices/system/cpu/cpu${'$'}c/cpufreq/scaling_min_freq 2>/dev/null
+                echo schedutil > /sys/devices/system/cpu/cpu${'$'}c/cpufreq/scaling_governor 2>/dev/null
+                cat /sys/devices/system/cpu/cpu${'$'}c/cpufreq/cpuinfo_min_freq > /sys/devices/system/cpu/cpu${'$'}c/cpufreq/scaling_min_freq 2>/dev/null
+                cat /sys/devices/system/cpu/cpu${'$'}c/cpufreq/cpuinfo_max_freq > /sys/devices/system/cpu/cpu${'$'}c/cpufreq/scaling_max_freq 2>/dev/null
             done
 
-            # 3. Pin all compute and worker threads strictly to Big Cores 4-7 (mask 0xF0)
+            # 3. Pin compute and worker threads strictly to Big Cores 4-7 (mask 0xF0)
             for t in /proc/$pid/task/*; do
                 tid=${'$'}(basename ${'$'}t)
                 comm=${'$'}(cat ${'$'}t/comm 2>/dev/null)
                 case "${'$'}comm" in
                     *llama*|*server*|*compute*|*ggml*|*omp*|*Dispatch*|*synapse*)
+                        echo ${'$'}tid > /dev/cpuset/top-app/tasks 2>/dev/null
+                        echo ${'$'}tid > /dev/stune/top-app/tasks 2>/dev/null
                         taskset -p $mask ${'$'}tid 2>/dev/null
                         renice -n -10 -p ${'$'}tid 2>/dev/null
                         ;;
@@ -133,7 +142,7 @@ object ZramOptimizer {
         """.trimIndent()
         val ok = executeSuperuserCommand(script)
         if (ok) {
-            Log.i(TAG, "✓ Inference threads pinned to Big Cores 4-7 (mask $mask) with elevated priority")
+            Log.i(TAG, "✓ Inference threads pinned to Big Cores 4-7 (mask $mask) with elevated priority (schedutil EAS)")
         }
         ok
     }
@@ -173,8 +182,6 @@ object ZramOptimizer {
     suspend fun closeCachedCpuProcesses(): Boolean = withContext(Dispatchers.IO) {
         val script = """
             am kill-all 2>/dev/null
-            sync
-            echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
             echo 1 > /proc/sys/vm/compact_memory 2>/dev/null
             for p in /proc/[0-9]*; do
                 if [ -f ${'$'}p/oom_score_adj ]; then
@@ -185,12 +192,10 @@ object ZramOptimizer {
                     fi
                 fi
             done
-            sync
-            echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
         """.trimIndent()
         val ok = executeSuperuserCommand(script)
         if (ok) {
-            Log.i(TAG, "✓ Cached CPU processes terminated and memory caches flushed")
+            Log.i(TAG, "✓ Cached CPU processes terminated and memory compacted")
         }
         ok
     }
