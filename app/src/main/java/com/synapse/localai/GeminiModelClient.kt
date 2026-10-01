@@ -396,7 +396,7 @@ class GeminiModelClient(
 
                 if (isNotFound) {
                     fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Supported models: gemini-3.8-flash, gemini-3.5-flash-lite, gemini-2.5-flash, gemini-2.0-flash.")
+                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
                 }
 
                 val isBadRequest = lowerError.contains("400") ||
@@ -426,7 +426,7 @@ class GeminiModelClient(
                         continue
                     } else {
                         fileLog("Model '$targetModel' 503 high demand persisted after retry. Halting key rotation to avoid futile loops.")
-                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or select another model (e.g. gemini-3.5-flash-lite, gemini-2.5-flash) in Settings.")
+                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or enter another model in Settings.")
                     }
                 }
 
@@ -674,7 +674,7 @@ class GeminiModelClient(
 
                 if (isNotFound) {
                     fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Supported models: gemini-3.8-flash, gemini-3.5-flash-lite, gemini-2.5-flash, gemini-2.0-flash.")
+                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
                 }
 
                 val isBadRequest = lowerError.contains("400") ||
@@ -704,7 +704,7 @@ class GeminiModelClient(
                         continue
                     } else {
                         fileLog("Model '$targetModel' 503 high demand persisted after retry. Halting key rotation to avoid futile loops.")
-                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or select another model (e.g. gemini-3.5-flash-lite, gemini-2.5-flash) in Settings.")
+                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or enter another model in Settings.")
                     }
                 }
 

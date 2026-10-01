@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,7 +120,7 @@ fun SettingsScreenContent(
     // --- LOCAL FORM STATE ---
     var geminiKeysVisible by remember { mutableStateOf(false) }
     var geminiKeyPoolExpanded by remember { mutableStateOf(false) }
-    var geminiModelText by remember(config.geminiModelName) { mutableStateOf(config.geminiModelName) }
+    var geminiModelText by rememberSaveable { mutableStateOf(config.geminiModelName) }
     var contextLengthText by remember(config.contextLength) { mutableStateOf(config.contextLength.toString()) }
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
     var gpuLayersText by remember(config.gpuLayers) { mutableStateOf(config.gpuLayers.toString()) }
@@ -478,9 +479,8 @@ fun SettingsScreenContent(
                             OutlinedTextField(
                                 value = geminiModelText,
                                 onValueChange = { input ->
-                                    val clean = AgentViewModel.sanitizeGeminiModelName(input)
-                                    geminiModelText = if (clean != AgentViewModel.DEFAULT_GEMINI_MODEL && clean.length < input.length) clean else input
-                                    val newConfig = config.copy(geminiModelName = clean)
+                                    geminiModelText = input
+                                    val newConfig = config.copy(geminiModelName = input.trim())
                                     viewModel.saveConfig(context, newConfig)
                                 },
                                 label = { Text("GEMINI MODEL IDENTIFIER", color = primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
