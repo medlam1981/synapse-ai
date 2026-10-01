@@ -263,22 +263,10 @@ class AgentViewModel : ViewModel() {
         private val RE_CODE_FENCE_COMPACT = Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")
 
         const val DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
-        val SUPPORTED_GEMINI_MODELS = listOf(
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-2.5-pro"
-        )
 
         fun sanitizeGeminiModelName(raw: String?): String {
             val clean = (raw ?: "").trim().removePrefix("models/")
-            if (clean.isBlank()) return DEFAULT_GEMINI_MODEL
-            if (clean.contains("3.5") || clean.contains("flash-flash") || clean.length < 5) {
-                return DEFAULT_GEMINI_MODEL
-            }
-            return clean
+            return clean.ifBlank { DEFAULT_GEMINI_MODEL }
         }
     }
 

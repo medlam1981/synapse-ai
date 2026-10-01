@@ -468,98 +468,7 @@ fun SettingsScreenContent(
 
                             val clipboardManager = LocalClipboardManager.current
 
-                            // Quick-Select Verified Official Gemini Models
-                            Text(
-                                text = "VERIFIED OFFICIAL GEMINI MODELS",
-                                color = primary,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf(
-                                    Triple("gemini-2.5-flash", "2.5 Flash", "⚡ الأحدث"),
-                                    Triple("gemini-2.0-flash", "2.0 Flash", "⭐ موصى به"),
-                                    Triple("gemini-1.5-flash", "1.5 Flash", "🛡️ مستقر")
-                                ).forEach { (modelId, shortName, desc) ->
-                                    val isSelected = geminiModelText.equals(modelId, ignoreCase = true)
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isSelected) primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                                        border = if (isSelected) BorderStroke(1.dp, primary) else null,
-                                        modifier = Modifier.weight(1f).clickable {
-                                            geminiModelText = modelId
-                                            val newConfig = config.copy(geminiModelName = modelId)
-                                            viewModel.saveConfig(context, newConfig)
-                                        }
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Text(
-                                                text = shortName,
-                                                fontSize = 11.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) primary else MaterialTheme.colorScheme.onSurface,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                            Text(
-                                                text = desc,
-                                                fontSize = 8.5.sp,
-                                                color = if (isSelected) primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf(
-                                    Triple("gemini-2.0-flash-lite", "2.0 Lite", "💨 فائق السرعة"),
-                                    Triple("gemini-2.5-pro", "2.5 Pro", "🧠 تفكير عميق"),
-                                    Triple("gemini-1.5-pro", "1.5 Pro", "🔬 دقة عالية")
-                                ).forEach { (modelId, shortName, desc) ->
-                                    val isSelected = geminiModelText.equals(modelId, ignoreCase = true)
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isSelected) primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                                        border = if (isSelected) BorderStroke(1.dp, primary) else null,
-                                        modifier = Modifier.weight(1f).clickable {
-                                            geminiModelText = modelId
-                                            val newConfig = config.copy(geminiModelName = modelId)
-                                            viewModel.saveConfig(context, newConfig)
-                                        }
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Text(
-                                                text = shortName,
-                                                fontSize = 11.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) primary else MaterialTheme.colorScheme.onSurface,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                            Text(
-                                                text = desc,
-                                                fontSize = 8.5.sp,
-                                                color = if (isSelected) primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Freeform Manual Model Input Field (Dynamic Custom Model Entry & Zero Client-Side Restrictions)
+                            // Manual Model Input Field (Purely manual model identifier entry)
                             OutlinedTextField(
                                 value = geminiModelText,
                                 onValueChange = { input ->
@@ -567,8 +476,8 @@ fun SettingsScreenContent(
                                     val newConfig = config.copy(geminiModelName = input.trim())
                                     viewModel.saveConfig(context, newConfig)
                                 },
-                                label = { Text("CUSTOM / MANUAL GEMINI MODEL IDENTIFIER", color = primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
-                                placeholder = { Text("e.g. gemini-2.5-flash, gemini-2.0-flash...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                                label = { Text("GEMINI MODEL IDENTIFIER", color = primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
+                                placeholder = { Text("Enter model identifier...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 colors = settingsFieldColors(),

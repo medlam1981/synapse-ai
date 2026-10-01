@@ -228,16 +228,7 @@ class GeminiModelClient(
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
                 try {
-                    val rawTarget = modelName.trim().removePrefix("models/")
-                    val effectiveModelName = when {
-                        rawTarget.isBlank() -> "gemini-2.0-flash"
-                        rawTarget.contains("3.5") || rawTarget.contains("flash-flash") || rawTarget.length < 5 -> "gemini-2.0-flash"
-                        else -> rawTarget
-                    }
-                    if (modelName != effectiveModelName) {
-                        modelName = effectiveModelName
-                        onModelAutoSwitched?.invoke(effectiveModelName)
-                    }
+                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
 
                     val shellTool = Tool(
                         listOf(
@@ -399,17 +390,9 @@ class GeminiModelClient(
                     lowerError.contains("is not supported for generatecontent")
 
                 if (isNotFound) {
-                    val currentTarget = modelName.trim().removePrefix("models/")
-                    val fallback = if (currentTarget != "gemini-2.0-flash") "gemini-2.0-flash" else "gemini-1.5-flash"
-                    fileLog("CRITICAL: Gemini model '$currentTarget' NOT FOUND (404). Auto-switching to '$fallback' on current Key #${keyIdx + 1}/$totalKeys without rotating...")
-                    this@GeminiModelClient.modelName = fallback
-                    onModelAutoSwitched?.invoke(fallback)
-                    if (currentTarget != fallback) {
-                        currentPair = apiKey to keyIdx
-                        continue
-                    } else {
-                        throw RuntimeException("Gemini Model Error 404: Both requested model and fallback failed: $errorMsg")
-                    }
+                    val targetModel = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+                    fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
+                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
                 }
 
                 val isBadRequest = lowerError.contains("400") ||
@@ -509,16 +492,7 @@ class GeminiModelClient(
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
                 try {
-                    val rawTarget = modelName.trim().removePrefix("models/")
-                    val effectiveModelName = when {
-                        rawTarget.isBlank() -> "gemini-2.0-flash"
-                        rawTarget.contains("3.5") || rawTarget.contains("flash-flash") || rawTarget.length < 5 -> "gemini-2.0-flash"
-                        else -> rawTarget
-                    }
-                    if (modelName != effectiveModelName) {
-                        modelName = effectiveModelName
-                        onModelAutoSwitched?.invoke(effectiveModelName)
-                    }
+                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
 
                     val shellTool = Tool(
                         listOf(
@@ -675,17 +649,9 @@ class GeminiModelClient(
                     lowerError.contains("is not supported for generatecontent")
 
                 if (isNotFound) {
-                    val currentTarget = modelName.trim().removePrefix("models/")
-                    val fallback = if (currentTarget != "gemini-2.0-flash") "gemini-2.0-flash" else "gemini-1.5-flash"
-                    fileLog("CRITICAL: Gemini model '$currentTarget' NOT FOUND (404). Auto-switching to '$fallback' on current Key #${keyIdx + 1}/$totalKeys without rotating...")
-                    this@GeminiModelClient.modelName = fallback
-                    onModelAutoSwitched?.invoke(fallback)
-                    if (currentTarget != fallback) {
-                        currentPair = apiKey to keyIdx
-                        continue
-                    } else {
-                        throw RuntimeException("Gemini Model Error 404: Both requested model and fallback failed: $errorMsg")
-                    }
+                    val targetModel = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+                    fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
+                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
                 }
 
                 val isBadRequest = lowerError.contains("400") ||
