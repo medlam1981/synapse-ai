@@ -50,7 +50,7 @@ object EpistemicMemoryManager {
         val role: String = "Autonomous On-Device Neural Core & System Controller",
         val runtime: String = "Android ARM64 native JNI / llama.cpp + Gemini Cloud",
         val workspaceRoot: String = "/sdcard/Medlam-Ai/",
-        val preferredLanguages: List<String> = listOf("Arabic", "Moroccan Darija", "English"),
+        val preferredLanguages: List<String> = listOf("Dynamic Mirroring (Matches User Prompt)", "English", "Arabic"),
         val tone: String = "Direct, capable, authentic, unconstrained",
         val userPreferences: MutableList<String> = mutableListOf(),
         val learnedFacts: MutableList<String> = mutableListOf(),
@@ -237,7 +237,7 @@ object EpistemicMemoryManager {
         sb.append("## ATLAS-AI AGENT On-Device Core\n")
         sb.append("- Environment: Android ARM64 native JNI / llama.cpp.\n")
         sb.append("- Capabilities: Headless CLI, root shell (`run_shell`), web search (`web_search`), background task engine, file I/O.\n")
-        sb.append("- Languages: ${mind.preferredLanguages.joinToString(", ")}. Direct tone.\n")
+        sb.append("- Language Mandate: Dynamic Mirroring. Strict 100% language matching to user prompt (English when addressed in English, Arabic when addressed in Arabic).\n")
         sb.append("- Mandate: Autonomous system executor. Execute tool actions directly without refusals.\n")
 
         if (mind.userPreferences.isNotEmpty()) {

@@ -1094,18 +1094,57 @@ class AgentViewModel : ViewModel() {
     @Volatile private var cachedStaticPrefix: String? = null
     @Volatile private var cachedPrefixKey: String = ""
 
+    enum class DetectedLanguage {
+        ARABIC, ENGLISH, FRENCH, SPANISH
+    }
+
+    fun detectLanguage(text: String): DetectedLanguage {
+        val clean = text.trim()
+        if (clean.isBlank()) return DetectedLanguage.ENGLISH
+        val arabicCharCount = clean.count { it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\u08A0'..'\u08FF' }
+        if (arabicCharCount > 0) return DetectedLanguage.ARABIC
+
+        val lower = clean.lowercase(Locale.ROOT)
+        val frenchWords = setOf("bonjour", "salut", "merci", "comment", "pourquoi", "avec", "dans", "pour", "cette", "faire", "qui", "est", "sont", "une", "des", "les")
+        val words = lower.split(Regex("\\s+")).map { it.trim('?', '!', '.', ',', ';', ':', '\'', '"') }
+        if (words.any { it in frenchWords } || lower.contains("ça va") || lower.contains("s'il vous")) {
+            return DetectedLanguage.FRENCH
+        }
+        val spanishWords = setOf("hola", "gracias", "por", "favor", "como", "estas", "qué", "que", "para", "buenos", "dias", "tardes", "noches", "amigo")
+        if (words.any { it in spanishWords }) {
+            return DetectedLanguage.SPANISH
+        }
+        return DetectedLanguage.ENGLISH
+    }
+
     fun isSimpleGreeting(text: String): Boolean {
         val clean = text.trim().lowercase(Locale.ROOT)
             .replace("!", "").replace(".", "").replace("?", "").replace("،", "").replace(",", "")
             .trim()
-        val greetings = setOf(
-            "hello", "hi", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening", "how are you",
+        val exactGreetings = setOf(
+            "hello", "hi", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening",
+            "how are you", "how are you doing", "hello how are you", "hi how are you", "hey how are you",
+            "hello there", "hi there", "hey there", "who are you", "what is your name",
             "مرحبا", "مرحباً", "اهلا", "أهلا", "أهلاً", "سلام", "سلام عليكم", "السلام عليكم", "السلام عليكم ورحمة الله",
             "صباح الخير", "مساء الخير", "تحياتي", "أهلا وسهلا", "اهلاً وسهلاً", "هلا", "كيف حالك", "كيفك", "شخبارك",
-            "من انت", "من أنت", "who are you",
-            "bonjour", "salut", "coucou", "bonsoir", "hola", "yo", "ca va", "ça va"
+            "مرحبا كيف حالك", "اهلا كيف حالك", "السلام عليكم كيفك", "من انت", "من أنت", "ما اسمك",
+            "bonjour", "salut", "coucou", "bonsoir", "comment vas-tu", "comment allez-vous",
+            "hola", "yo", "ca va", "ça va", "buenas tardes", "buenos dias"
         )
-        return clean in greetings || (clean.startsWith("hello") && clean.length < 10) || (clean.startsWith("hi") && clean.length < 5)
+        if (clean in exactGreetings) return true
+        if (clean.startsWith("hello ") || clean.startsWith("hi ") || clean.startsWith("hey ")) {
+            val words = clean.split(Regex("\\s+"))
+            if (words.size <= 5 && !words.any { it in listOf("run", "code", "file", "app", "shell", "check", "inspect", "search") }) {
+                return true
+            }
+        }
+        if (clean.startsWith("مرحبا") || clean.startsWith("أهلا") || clean.startsWith("اهلا") || clean.startsWith("السلام عليكم")) {
+            val words = clean.split(Regex("\\s+"))
+            if (words.size <= 5 && !words.any { it in listOf("افحص", "كود", "ملف", "تطبيق", "نفذ", "شغل", "ابحث") }) {
+                return true
+            }
+        }
+        return false
     }
 
     fun isGreeting(text: String): Boolean = isSimpleGreeting(text)
@@ -1152,27 +1191,42 @@ class AgentViewModel : ViewModel() {
             actualContext?.let { PersonaDataStore.getCustomPersonaPromptSync(it) } ?: PersonaDataStore.DEFAULT_PROMPT
         }).trim()
 
-        val isArabicUser = userPrompt.any { it in '\u0600'..'\u06FF' }
+        val detectedLang = detectLanguage(userPrompt)
 
         val antiMonologueDirective = if (isCodeRequest) {
             "\n\nCRITICAL: For code generation, bypass reasoning and start immediately with markdown fence."
         } else ""
 
         val greetingDirective = if (isGreeting) {
-            if (isArabicUser) {
-                "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in Arabic ('$userPrompt'). Return the greeting warmly and concisely in pure Arabic (e.g. 'أهلاً بك! أنا ATLAS-AI، مهندسك ومساعدك الذكي. كيف يمكنني مساعدتك اليوم؟'). Do not call tools or execute diagnostics."
-            } else {
-                "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in English ('$userPrompt'). Return the greeting warmly and concisely in pure ENGLISH ONLY (e.g. 'Hello! I am ATLAS-AI, your AI engineer and technical assistant. How can I assist you today?'). NEVER use Arabic words or letters when addressed in English! Do not call tools or execute diagnostics."
+            when (detectedLang) {
+                DetectedLanguage.ARABIC -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in Arabic ('$userPrompt'). Return the greeting warmly and concisely in pure Arabic (e.g. 'أهلاً بك! أنا ATLAS-AI، مهندسك ومساعدك الذكي. كيف يمكنني مساعدتك اليوم؟'). Do not call tools or execute diagnostics."
+                DetectedLanguage.FRENCH -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in French ('$userPrompt'). Return the greeting warmly and concisely in pure French (e.g. 'Bonjour! Je suis ATLAS-AI, votre ingénieur IA et assistant technique. Comment puis-je vous aider aujourd\\'hui?'). Do not call tools or execute diagnostics."
+                DetectedLanguage.SPANISH -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in Spanish ('$userPrompt'). Return the greeting warmly and concisely in pure Spanish (e.g. '¡Hola! Soy ATLAS-AI, tu asistente técnico e ingeniero de IA. ¿Cómo puedo ayudarte hoy?'). Do not call tools or execute diagnostics."
+                DetectedLanguage.ENGLISH -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in English ('$userPrompt'). Return the greeting warmly and concisely in pure ENGLISH ONLY (e.g. 'Hello! I am ATLAS-AI, your AI engineer and technical assistant. How can I assist you today?'). NEVER use Arabic words or letters when addressed in English! Do not call tools or execute diagnostics."
             }
         } else ""
 
-        val languageEnforcement = if (userPrompt.isNotBlank()) {
-            if (isArabicUser) {
-                "\n\n[MANDATORY LANGUAGE]: User prompt is in Arabic. Reply completely in Arabic."
-            } else {
-                "\n\n[MANDATORY LANGUAGE]: User prompt is in English. Reply strictly in ENGLISH ONLY. NEVER output Arabic letters or words."
-            }
-        } else ""
+        val languageEnforcement = when (detectedLang) {
+            DetectedLanguage.ARABIC -> """
+[CRITICAL LANGUAGE DIRECTIVE - ARABIC (ABSOLUTE PRIORITY)]:
+User prompt is in ARABIC. You MUST reply 100% in ARABIC.
+DO NOT use English or other languages except for technical commands/code syntax.
+""".trimIndent()
+            DetectedLanguage.ENGLISH -> """
+[CRITICAL LANGUAGE DIRECTIVE - ENGLISH (ABSOLUTE PRIORITY)]:
+User prompt is in ENGLISH. You MUST reply strictly and 100% in ENGLISH ONLY.
+NEVER OUTPUT ARABIC CHARACTERS, WORDS, OR SENTENCES UNDER ANY CIRCUMSTANCES.
+Even if previous turns or chat history were in Arabic, you MUST ignore past Arabic turns and reply strictly in ENGLISH.
+""".trimIndent()
+            DetectedLanguage.FRENCH -> """
+[CRITICAL LANGUAGE DIRECTIVE - FRENCH (ABSOLUTE PRIORITY)]:
+User prompt is in FRENCH. You MUST reply 100% in FRENCH ONLY.
+""".trimIndent()
+            DetectedLanguage.SPANISH -> """
+[CRITICAL LANGUAGE DIRECTIVE - SPANISH (ABSOLUTE PRIORITY)]:
+User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
+""".trimIndent()
+        }
 
         val universalGroundingDirective = """
 
@@ -1190,16 +1244,20 @@ class AgentViewModel : ViewModel() {
 
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            val localGreetingNote = if (isGreeting) "\n$greetingDirective" else "\n$languageEnforcement"
-            return """$effectivePersona$localGreetingNote
+            val localGreetingNote = if (isGreeting) "\n$greetingDirective" else ""
+            return """$languageEnforcement
+
+$effectivePersona$localGreetingNote
 Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - TERMINAL ACTIONS: To run shell/bash commands or inspect system resources, you MUST ALWAYS invoke run_shell: <invoke name="run_shell"><parameter name="command">command</parameter></invoke>. NEVER wrap bash commands in markdown code blocks!
-- PROGRAMMING CODE: Only wrap programming code (Python, Kotlin, HTML, JS) in markdown triple backticks (```language ... ```) when writing software artifacts.""".trimIndent()
+- PROGRAMMING CODE: Only wrap programming code (Python, Kotlin, HTML, JS) in markdown triple backticks (```language ... ```) when writing software artifacts.
+
+$languageEnforcement""".trimIndent()
         }
 
-        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|$isArabicUser"
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}"
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) return cachedStaticPrefix!!
 
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
@@ -1214,7 +1272,7 @@ CRITICAL EXECUTION RULES:
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1444,16 +1502,28 @@ CRITICAL EXECUTION RULES:
                                 ModelType.GEMINI -> {
                                     val json = JSONArray()
                                     var lastRole = ""
+                                    val turnDetectedLang = detectLanguage(finalCommand)
+                                    val langInstructionSuffix = when (turnDetectedLang) {
+                                        DetectedLanguage.ENGLISH -> "\n\n[System Directive: User query is in English. Reply strictly 100% in English only. Never output Arabic.]"
+                                        DetectedLanguage.ARABIC -> "\n\n[توجيه النظام: رسالة المستخدم بالعربية. أجب باللغة العربية حصراً.]"
+                                        DetectedLanguage.FRENCH -> "\n\n[Directive Système: Message en français. Répondez strictement en français.]"
+                                        DetectedLanguage.SPANISH -> "\n\n[Directiva del Sistema: Mensaje en español. Responda estrictamente en español.]"
+                                    }
                                     historyCopy.forEachIndexed { idx, (role, content) ->
                                         val geminiRole = when (role.lowercase()) {
                                             "assistant", "model" -> "model"
                                             else -> "user"
                                         }
+                                        val finalTurnContent = if (idx == historyCopy.size - 1 && geminiRole == "user") {
+                                            content + langInstructionSuffix
+                                        } else {
+                                            content
+                                        }
                                         if (geminiRole == lastRole && json.length() > 0) {
                                             val prev = json.getJSONObject(json.length() - 1)
-                                            prev.put("content", prev.getString("content") + "\n\n" + content)
+                                            prev.put("content", prev.getString("content") + "\n\n" + finalTurnContent)
                                         } else {
-                                            val m = JSONObject().put("role", geminiRole).put("content", content)
+                                            val m = JSONObject().put("role", geminiRole).put("content", finalTurnContent)
                                             if (idx == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
                                                 m.put("images", JSONArray(imageBase64List))
                                             }
@@ -1466,7 +1536,13 @@ CRITICAL EXECUTION RULES:
                                         json.put(JSONObject().put("role", "user").put("content", continuationPromptPayload))
                                     }
                                     if (json.length() > 0 && json.getJSONObject(json.length() - 1).getString("role") == "model") {
-                                        json.put(JSONObject().put("role", "user").put("content", "Deliver your verified final response now."))
+                                        val finalTurnPrompt = when (turnDetectedLang) {
+                                            DetectedLanguage.ENGLISH -> "Deliver your verified final response now strictly in English only. Do NOT use Arabic."
+                                            DetectedLanguage.ARABIC -> "قدم إجابتك وتحليلك النهائي الآن باللغة العربية."
+                                            DetectedLanguage.FRENCH -> "Présentez votre réponse finale vérifiée en français maintenant."
+                                            DetectedLanguage.SPANISH -> "Entregue su respuesta final verificada en español ahora."
+                                        }
+                                        json.put(JSONObject().put("role", "user").put("content", finalTurnPrompt))
                                     }
 
                                     geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) {
@@ -1593,23 +1669,47 @@ CRITICAL EXECUTION RULES:
                             val rawExplanatoryText = StreamDemultiplexer.extractPreambleProse(fullResponse, primaryCall.rawMatch)
                             toolCallCount++
 
-                            val isArabicUser = command.any { it in '\u0600'..'\u06FF' }
-                            val explanatoryText = if (rawExplanatoryText.isNotBlank()) {
+                            val detectedLang = detectLanguage(command)
+
+                            val hasArabicInPreamble = rawExplanatoryText.any { it in '\u0600'..'\u06FF' }
+                            val isPreambleValidForLanguage = when (detectedLang) {
+                                DetectedLanguage.ENGLISH -> !hasArabicInPreamble
+                                DetectedLanguage.ARABIC -> hasArabicInPreamble
+                                else -> !hasArabicInPreamble
+                            }
+
+                            val explanatoryText = if (rawExplanatoryText.isNotBlank() && isPreambleValidForLanguage) {
                                 cleanVisibleText(rawExplanatoryText)
                             } else {
-                                if (isArabicUser) {
-                                    when (action) {
+                                when (detectedLang) {
+                                    DetectedLanguage.ARABIC -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "سأقوم بتنفيذ الأمر وفحص النظام الآن:"
                                         "web_search", "search", "google_search" -> "سأقوم بالبحث والتحقق من المصادر الآن:"
                                         else -> "جاري تنفيذ العملية المطلوبة:"
                                     }
-                                } else {
-                                    when (action) {
+                                    DetectedLanguage.FRENCH -> when (action) {
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Exécution de la commande système en cours :"
+                                        "web_search", "search", "google_search" -> "Recherche d'informations vérifiées en cours :"
+                                        else -> "Exécution de l'opération demandée :"
+                                    }
+                                    DetectedLanguage.SPANISH -> when (action) {
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Ejecutando comando de diagnóstico del sistema ahora:"
+                                        "web_search", "search", "google_search" -> "Buscando información verificada ahora:"
+                                        else -> "Ejecutando la operación solicitada:"
+                                    }
+                                    DetectedLanguage.ENGLISH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Executing system diagnostic command now:"
                                         "web_search", "search", "google_search" -> "Searching for verified information now:"
                                         else -> "Executing requested operation:"
                                     }
                                 }
+                            }
+
+                            val langFinalInstruction = when (detectedLang) {
+                                DetectedLanguage.ENGLISH -> "Deliver your final, comprehensive, and wise analysis directly to the user strictly in ENGLISH ONLY. Under no circumstances use Arabic words or letters."
+                                DetectedLanguage.ARABIC -> "قدم تحليلك النهائي والشامل والموثوق مباشرة للمستخدم باللغة العربية حصراً."
+                                DetectedLanguage.FRENCH -> "Présentez votre analyse finale et complète directement à l'utilisateur strictement en FRANÇAIS."
+                                DetectedLanguage.SPANISH -> "Entregue su análisis final y completo directamente al usuario estrictamente en ESPAÑOL."
                             }
 
                             when (action) {
@@ -1641,7 +1741,7 @@ CRITICAL EXECUTION RULES:
 $output
 
 MANDATORY INSTRUCTION: The command execution is finished. Do NOT invoke any tools or execute shell commands again.
-Deliver your final, comprehensive, and wise analysis directly to the user now in their language.
+$langFinalInstruction
 Summarize the metrics, explain what the numbers mean clearly, and provide the final conclusion."""
 
                                     synchronized(conversationHistory) {
@@ -1674,7 +1774,7 @@ Summarize the metrics, explain what the numbers mean clearly, and provide the fi
 $truncatedSearch
 
 MANDATORY INSTRUCTION: Web search is complete. Do NOT call any more tools.
-Present your complete, organized response to the user based on the verified findings above in their language."""
+$langFinalInstruction"""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1708,7 +1808,7 @@ Present your complete, organized response to the user based on the verified find
 $truncatedSummary
 
 MANDATORY INSTRUCTION: Tool execution is finished. Do NOT call any further tools.
-Answer the user's request directly based on these findings in their language."""
+$langFinalInstruction"""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1750,11 +1850,21 @@ Answer the user's request directly based on these findings in their language."""
                             activeGgufPromptPrefix = null
                         }
                     } else {
-                        val isArabicUser = command.any { it in '\u0600'..'\u06FF' }
+                        val detectedLang = detectLanguage(command)
                         val errorText = when {
                             streamInterrupted && interruptMsg.isNotBlank() -> "⚠️ $interruptMsg"
-                            streamInterrupted -> if (isArabicUser) "⚠️ انقطع الاتصال بالنموذج قبل الرد. يرجى التحقق من اسم النموذج والمفاتيح والمحاولة مجدداً." else "⚠️ Connection interrupted before model responded. Please verify model name and retry."
-                            else -> if (isArabicUser) "⚠️ لم يتم استلام أي رد من النموذج. تأكد من صحة اسم وإصدار النموذج المكتوب في الإعدادات." else "⚠️ Empty response received from model. Please verify model name in Settings."
+                            streamInterrupted -> when (detectedLang) {
+                                DetectedLanguage.ARABIC -> "⚠️ انقطع الاتصال بالنموذج قبل الرد. يرجى التحقق من اسم النموذج والمفاتيح والمحاولة مجدداً."
+                                DetectedLanguage.FRENCH -> "⚠️ Connexion interrompue avant la réponse du modèle. Veuillez vérifier la clé et le nom du modèle."
+                                DetectedLanguage.SPANISH -> "⚠️ Conexión interrumpida antes de que el modelo respondiera. Verifique el nombre del modelo."
+                                DetectedLanguage.ENGLISH -> "⚠️ Connection interrupted before model responded. Please verify model name and retry."
+                            }
+                            else -> when (detectedLang) {
+                                DetectedLanguage.ARABIC -> "⚠️ لم يتم استلام أي رد من النموذج. تأكد من صحة اسم وإصدار النموذج المكتوب في الإعدادات."
+                                DetectedLanguage.FRENCH -> "⚠️ Aucune réponse reçue du modèle. Veuillez vérifier le nom du modèle dans les paramètres."
+                                DetectedLanguage.SPANISH -> "⚠️ Respuesta vacía recibida del modelo. Verifique el nombre del modelo en los ajustes."
+                                DetectedLanguage.ENGLISH -> "⚠️ Empty response received from model. Please verify model name in Settings."
+                            }
                         }
                         _uiState.update { state ->
                             val updated = state.logs.map { log ->
@@ -1807,7 +1917,7 @@ Answer the user's request directly based on these findings in their language."""
             taskHistory.add("user" to command)
             
             val dynamicPersona = getEffectivePersonaPrompt(ctx)
-            val systemPrompt = buildSystemPrompt(ctx, modelType == ModelType.GGUF, dynamicPersona)
+            val systemPrompt = buildSystemPrompt(ctx, modelType == ModelType.GGUF, dynamicPersona, userPrompt = command)
             val resultSb = StringBuilder()
             var iterations = 0
             var keepGoing = true
