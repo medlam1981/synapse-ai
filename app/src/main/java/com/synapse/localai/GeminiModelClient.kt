@@ -36,7 +36,8 @@ class GeminiModelClient(
     initialKeyIndex: Int = 0,
     private val onKeyRotated: ((Int) -> Unit)? = null,
     private val onKeyUsed: ((String) -> Unit)? = null,
-    private val onKeyValidated: ((Int) -> Unit)? = null
+    private val onKeyValidated: ((Int) -> Unit)? = null,
+    private val onModelAutoSwitched: ((String) -> Unit)? = null
 ) {
 
     companion object {
@@ -227,7 +228,16 @@ class GeminiModelClient(
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
                 try {
-                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+                    val rawTarget = modelName.trim().removePrefix("models/")
+                    val effectiveModelName = when {
+                        rawTarget.isBlank() -> "gemini-2.0-flash"
+                        rawTarget.contains("3.5") || rawTarget.contains("flash-flash") || rawTarget.length < 5 -> "gemini-2.0-flash"
+                        else -> rawTarget
+                    }
+                    if (modelName != effectiveModelName) {
+                        modelName = effectiveModelName
+                        onModelAutoSwitched?.invoke(effectiveModelName)
+                    }
 
                     val shellTool = Tool(
                         listOf(
@@ -383,6 +393,25 @@ class GeminiModelClient(
 
                 fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
+                val isNotFound = lowerError.contains("404") ||
+                    lowerError.contains("not found") ||
+                    lowerError.contains("not_found") ||
+                    lowerError.contains("is not supported for generatecontent")
+
+                if (isNotFound) {
+                    val currentTarget = modelName.trim().removePrefix("models/")
+                    val fallback = if (currentTarget != "gemini-2.0-flash") "gemini-2.0-flash" else "gemini-1.5-flash"
+                    fileLog("CRITICAL: Gemini model '$currentTarget' NOT FOUND (404). Auto-switching to '$fallback' on current Key #${keyIdx + 1}/$totalKeys without rotating...")
+                    this@GeminiModelClient.modelName = fallback
+                    onModelAutoSwitched?.invoke(fallback)
+                    if (currentTarget != fallback) {
+                        currentPair = apiKey to keyIdx
+                        continue
+                    } else {
+                        throw RuntimeException("Gemini Model Error 404: Both requested model and fallback failed: $errorMsg")
+                    }
+                }
+
                 val isBadRequest = lowerError.contains("400") ||
                     lowerError.contains("bad request") ||
                     lowerError.contains("invalid_argument") ||
@@ -401,7 +430,7 @@ class GeminiModelClient(
                 val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
                     lowerError.contains("timeout") ||
                     lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("503") || lowerError.contains("504") ||
-                    t.javaClass.simpleName.contains("ServerException") ||
+                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest) ||
                     lowerError.contains("overloaded") || lowerError.contains("unavailable")
 
                 markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
@@ -480,7 +509,16 @@ class GeminiModelClient(
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
                 try {
-                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+                    val rawTarget = modelName.trim().removePrefix("models/")
+                    val effectiveModelName = when {
+                        rawTarget.isBlank() -> "gemini-2.0-flash"
+                        rawTarget.contains("3.5") || rawTarget.contains("flash-flash") || rawTarget.length < 5 -> "gemini-2.0-flash"
+                        else -> rawTarget
+                    }
+                    if (modelName != effectiveModelName) {
+                        modelName = effectiveModelName
+                        onModelAutoSwitched?.invoke(effectiveModelName)
+                    }
 
                     val shellTool = Tool(
                         listOf(
@@ -631,6 +669,25 @@ class GeminiModelClient(
 
                 fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
+                val isNotFound = lowerError.contains("404") ||
+                    lowerError.contains("not found") ||
+                    lowerError.contains("not_found") ||
+                    lowerError.contains("is not supported for generatecontent")
+
+                if (isNotFound) {
+                    val currentTarget = modelName.trim().removePrefix("models/")
+                    val fallback = if (currentTarget != "gemini-2.0-flash") "gemini-2.0-flash" else "gemini-1.5-flash"
+                    fileLog("CRITICAL: Gemini model '$currentTarget' NOT FOUND (404). Auto-switching to '$fallback' on current Key #${keyIdx + 1}/$totalKeys without rotating...")
+                    this@GeminiModelClient.modelName = fallback
+                    onModelAutoSwitched?.invoke(fallback)
+                    if (currentTarget != fallback) {
+                        currentPair = apiKey to keyIdx
+                        continue
+                    } else {
+                        throw RuntimeException("Gemini Model Error 404: Both requested model and fallback failed: $errorMsg")
+                    }
+                }
+
                 val isBadRequest = lowerError.contains("400") ||
                     lowerError.contains("bad request") ||
                     lowerError.contains("invalid_argument") ||
@@ -649,7 +706,7 @@ class GeminiModelClient(
                 val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
                     lowerError.contains("timeout") ||
                     lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("503") || lowerError.contains("504") ||
-                    t.javaClass.simpleName.contains("ServerException") ||
+                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest) ||
                     lowerError.contains("overloaded") || lowerError.contains("unavailable")
 
                 markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)

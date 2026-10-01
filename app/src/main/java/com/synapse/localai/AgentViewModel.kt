@@ -261,6 +261,25 @@ class AgentViewModel : ViewModel() {
         private val RE_TERMINAL_TAG_SOLO = Regex("""</?terminal_frame>""", RegexOption.IGNORE_CASE)
         private val RE_THOUGHT_EMOJI = Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL)
         private val RE_CODE_FENCE_COMPACT = Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")
+
+        const val DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+        val SUPPORTED_GEMINI_MODELS = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-2.5-pro"
+        )
+
+        fun sanitizeGeminiModelName(raw: String?): String {
+            val clean = (raw ?: "").trim().removePrefix("models/")
+            if (clean.isBlank()) return DEFAULT_GEMINI_MODEL
+            if (clean.contains("3.5") || clean.contains("flash-flash") || clean.length < 5) {
+                return DEFAULT_GEMINI_MODEL
+            }
+            return clean
+        }
     }
 
     init {
@@ -725,11 +744,13 @@ class AgentViewModel : ViewModel() {
     }
 
     fun saveConfig(context: Context, config: AgentConfig) {
+        val sanitizedGeminiModel = sanitizeGeminiModelName(config.geminiModelName)
         val finalConfig = config.copy(
             contextLength = config.contextLength.coerceIn(2048, 8192),
             gpuLayers = config.gpuLayers.coerceAtLeast(0),
             threadCount = if (config.threadCount in 1..32) config.threadCount else 4,
-            ttsEnabled = false
+            ttsEnabled = false,
+            geminiModelName = sanitizedGeminiModel
         )
         val oldConfig = _uiState.value.config
         val activeKeys = finalConfig.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -779,8 +800,9 @@ class AgentViewModel : ViewModel() {
             }
         } else if (finalConfig.preferredModelType == ModelType.GEMINI) {
             geminiClient?.temperature = finalConfig.temperature
+            geminiClient?.modelName = finalConfig.geminiModelName
             GGUFModelClient.stopGlobalServer()
-            if (finalConfig.geminiApiKeys != oldConfig.geminiApiKeys || !isModelLoaded()) {
+            if (finalConfig.geminiApiKeys != oldConfig.geminiApiKeys || finalConfig.geminiModelName != oldConfig.geminiModelName || !isModelLoaded()) {
                 closeAllModels()
                 loadGeminiModel(finalConfig.geminiApiKeys, finalConfig.geminiModelName, context)
             }
@@ -877,7 +899,10 @@ class AgentViewModel : ViewModel() {
                 val modelTypeStr = prefs.getString("preferred_model_type", ModelType.GEMINI.name)
                 val modelType = try { ModelType.valueOf(modelTypeStr!!) } catch (_: Exception) { ModelType.GEMINI }
                 var geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
-                var geminiModel = prefs.getString("gemini_model_name", "gemini-2.0-flash") ?: "gemini-2.0-flash"
+                var geminiModel = sanitizeGeminiModelName(prefs.getString("gemini_model_name", DEFAULT_GEMINI_MODEL))
+                if (prefs.getString("gemini_model_name", "") != geminiModel) {
+                    prefs.edit().putString("gemini_model_name", geminiModel).apply()
+                }
                 ModelScanner.ensureDirectories()
                 val activePersonasSet = PersonaManager.getActivePersonas(context)
                 val activePersonaName = activePersonasSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
@@ -1001,7 +1026,8 @@ class AgentViewModel : ViewModel() {
     @Volatile private var isModelLoadingInProgress = false
     @Volatile private var currentLoadingPath: String? = null
 
-    private fun loadGeminiModel(apiKeysRaw: String, modelName: String = "gemini-2.0-flash", context: Context? = null) {
+    private fun loadGeminiModel(apiKeysRaw: String, modelName: String = DEFAULT_GEMINI_MODEL, context: Context? = null) {
+        val safeModelName = sanitizeGeminiModelName(modelName)
         val keys = apiKeysRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         if (keys.isEmpty()) return
         
@@ -1023,16 +1049,23 @@ class AgentViewModel : ViewModel() {
             },
             onKeyUsed = { key ->
                 targetCtx?.let { KeyUsageManager.incrementUsage(it.applicationContext, key) }
+            },
+            onModelAutoSwitched = { validModelName ->
+                _uiState.update { it.copy(
+                    activeModelName = validModelName,
+                    config = it.config.copy(geminiModelName = validModelName)
+                ) }
+                targetCtx?.let { prefs(it).edit().putString("gemini_model_name", validModelName).apply() }
             }
         )
-        geminiClient?.modelName = modelName
+        geminiClient?.modelName = safeModelName
         geminiClient?.temperature = _uiState.value.config.temperature
         geminiClient?.isLoaded = true
 
         _uiState.update { it.copy(
             initPhase = InitializationPhase.SYSTEM_READY,
             activeModelType = ModelType.GEMINI,
-            activeModelName = modelName,
+            activeModelName = safeModelName,
             totalKeys = keys.size,
             currentKeyIndex = safeInitialIdx,
             modelLoadFailed = false
