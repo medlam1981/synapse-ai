@@ -478,8 +478,9 @@ fun SettingsScreenContent(
                             OutlinedTextField(
                                 value = geminiModelText,
                                 onValueChange = { input ->
-                                    geminiModelText = input
-                                    val newConfig = config.copy(geminiModelName = input.trim())
+                                    val clean = AgentViewModel.sanitizeGeminiModelName(input)
+                                    geminiModelText = if (clean != AgentViewModel.DEFAULT_GEMINI_MODEL && clean.length < input.length) clean else input
+                                    val newConfig = config.copy(geminiModelName = clean)
                                     viewModel.saveConfig(context, newConfig)
                                 },
                                 label = { Text("GEMINI MODEL IDENTIFIER", color = primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
@@ -506,8 +507,9 @@ fun SettingsScreenContent(
                                             onClick = {
                                                 clipboardManager.getText()?.text?.let { pasteText ->
                                                     if (pasteText.isNotBlank()) {
-                                                        geminiModelText = pasteText.trim()
-                                                        val newConfig = config.copy(geminiModelName = geminiModelText)
+                                                        val clean = AgentViewModel.sanitizeGeminiModelName(pasteText)
+                                                        geminiModelText = clean
+                                                        val newConfig = config.copy(geminiModelName = clean)
                                                         viewModel.saveConfig(context, newConfig)
                                                     }
                                                 }

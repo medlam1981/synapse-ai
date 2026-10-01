@@ -49,7 +49,10 @@ class GeminiModelClient(
     private val keyCooldowns = java.util.concurrent.ConcurrentHashMap<Int, Long>()
     private val keyFailureCounts = java.util.concurrent.ConcurrentHashMap<Int, Int>()
 
-    var modelName: String = "gemini-1.5-flash"
+    var modelName: String = AgentViewModel.DEFAULT_GEMINI_MODEL
+        set(value) {
+            field = AgentViewModel.sanitizeGeminiModelName(value)
+        }
     var maxTokens: Int = 8192 // Maximized API ceiling to 8192 for unbounded output streaming
     var temperature: Float = 0.30f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
@@ -207,6 +210,7 @@ class GeminiModelClient(
         }
 
         var attempt = 0
+        var demandRetryCount = 0
         val totalKeys = apiKeys.size
         val maxAttempts = minOf(totalKeys, 6)
         var success = false
@@ -228,7 +232,7 @@ class GeminiModelClient(
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
                 try {
-                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+                    val effectiveModelName = AgentViewModel.sanitizeGeminiModelName(modelName)
 
                     val shellTool = Tool(
                         listOf(
@@ -384,15 +388,15 @@ class GeminiModelClient(
 
                 fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
+                val targetModel = AgentViewModel.sanitizeGeminiModelName(modelName)
                 val isNotFound = lowerError.contains("404") ||
                     lowerError.contains("not found") ||
                     lowerError.contains("not_found") ||
                     lowerError.contains("is not supported for generatecontent")
 
                 if (isNotFound) {
-                    val targetModel = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
                     fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
+                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Supported models: gemini-3.8-flash, gemini-3.5-flash-lite, gemini-2.5-flash, gemini-2.0-flash.")
                 }
 
                 val isBadRequest = lowerError.contains("400") ||
@@ -407,14 +411,32 @@ class GeminiModelClient(
                     throw RuntimeException("Gemini API Error 400 (Bad Request): $errorMsg")
                 }
 
+                val isHighDemand503 = lowerError.contains("503") ||
+                    lowerError.contains("high demand") ||
+                    lowerError.contains("spikes in demand") ||
+                    lowerError.contains("overloaded") ||
+                    (lowerError.contains("unavailable") && !lowerError.contains("not found")) ||
+                    (lowerError.contains("missingfieldexception") && lowerError.contains("details"))
+
+                if (isHighDemand503) {
+                    if (demandRetryCount == 0) {
+                        demandRetryCount++
+                        fileLog("Model '$targetModel' experiencing high demand (503). Retrying once in 2000ms on Key #${keyIdx + 1}/$totalKeys...")
+                        delay(2000L)
+                        continue
+                    } else {
+                        fileLog("Model '$targetModel' 503 high demand persisted after retry. Halting key rotation to avoid futile loops.")
+                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or select another model (e.g. gemini-3.5-flash-lite, gemini-2.5-flash) in Settings.")
+                    }
+                }
+
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
                     lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
 
                 val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
                     lowerError.contains("timeout") ||
-                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("503") || lowerError.contains("504") ||
-                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest) ||
-                    lowerError.contains("overloaded") || lowerError.contains("unavailable")
+                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("504") ||
+                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest)
 
                 markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
 
@@ -471,6 +493,7 @@ class GeminiModelClient(
         val promptText = lastUserMsg.parts.filterIsInstance<com.google.ai.client.generativeai.type.TextPart>().joinToString(" ") { it.text }
 
         var attempt = 0
+        var demandRetryCount = 0
         val totalKeys = apiKeys.size
         val maxAttempts = minOf(totalKeys, 6)
         var success = false
@@ -492,7 +515,7 @@ class GeminiModelClient(
             val streamScope = CoroutineScope(coroutineContext + Job())
             val streamJob = streamScope.launch {
                 try {
-                    val effectiveModelName = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
+                    val effectiveModelName = AgentViewModel.sanitizeGeminiModelName(modelName)
 
                     val shellTool = Tool(
                         listOf(
@@ -643,15 +666,15 @@ class GeminiModelClient(
 
                 fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
 
+                val targetModel = AgentViewModel.sanitizeGeminiModelName(modelName)
                 val isNotFound = lowerError.contains("404") ||
                     lowerError.contains("not found") ||
                     lowerError.contains("not_found") ||
                     lowerError.contains("is not supported for generatecontent")
 
                 if (isNotFound) {
-                    val targetModel = modelName.trim().removePrefix("models/").ifBlank { "gemini-2.0-flash" }
                     fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
+                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Supported models: gemini-3.8-flash, gemini-3.5-flash-lite, gemini-2.5-flash, gemini-2.0-flash.")
                 }
 
                 val isBadRequest = lowerError.contains("400") ||
@@ -666,14 +689,32 @@ class GeminiModelClient(
                     throw RuntimeException("Gemini API Error 400 (Bad Request): $errorMsg")
                 }
 
+                val isHighDemand503 = lowerError.contains("503") ||
+                    lowerError.contains("high demand") ||
+                    lowerError.contains("spikes in demand") ||
+                    lowerError.contains("overloaded") ||
+                    (lowerError.contains("unavailable") && !lowerError.contains("not found")) ||
+                    (lowerError.contains("missingfieldexception") && lowerError.contains("details"))
+
+                if (isHighDemand503) {
+                    if (demandRetryCount == 0) {
+                        demandRetryCount++
+                        fileLog("Model '$targetModel' experiencing high demand (503). Retrying once in 2000ms on Key #${keyIdx + 1}/$totalKeys...")
+                        delay(2000L)
+                        continue
+                    } else {
+                        fileLog("Model '$targetModel' 503 high demand persisted after retry. Halting key rotation to avoid futile loops.")
+                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or select another model (e.g. gemini-3.5-flash-lite, gemini-2.5-flash) in Settings.")
+                    }
+                }
+
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
                     lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
 
                 val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
                     lowerError.contains("timeout") ||
-                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("503") || lowerError.contains("504") ||
-                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest) ||
-                    lowerError.contains("overloaded") || lowerError.contains("unavailable")
+                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("504") ||
+                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest)
 
                 markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
 

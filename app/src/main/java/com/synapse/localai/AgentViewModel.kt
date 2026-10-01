@@ -130,7 +130,7 @@ data class AgentConfig(
     val draftUseMmap: Boolean = true,
     val pinModelInRam: Boolean = false,
     val geminiApiKeys: String = "",
-    val geminiModelName: String = "gemini-2.0-flash",
+    val geminiModelName: String = "gemini-3.8-flash",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 8088,
     val contextLength: Int = 2048,
@@ -262,11 +262,77 @@ class AgentViewModel : ViewModel() {
         private val RE_THOUGHT_EMOJI = Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL)
         private val RE_CODE_FENCE_COMPACT = Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")
 
-        const val DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+        const val DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 
         fun sanitizeGeminiModelName(raw: String?): String {
-            val clean = (raw ?: "").trim().removePrefix("models/")
-            return clean.ifBlank { DEFAULT_GEMINI_MODEL }
+            if (raw.isNullOrBlank()) return DEFAULT_GEMINI_MODEL
+
+            var clean = raw.trim()
+                .removeSurrounding("\"")
+                .removeSurrounding("'")
+                .removeSurrounding("`")
+                .removePrefix("models/")
+                .trim()
+
+            if (clean.isBlank()) return DEFAULT_GEMINI_MODEL
+
+            // 1. Deduplicate doubled strings: e.g. "gemini-3.8-flashgemini-3.8-flash"
+            if (clean.length >= 8 && clean.length % 2 == 0) {
+                val half = clean.length / 2
+                val firstHalf = clean.substring(0, half)
+                val secondHalf = clean.substring(half)
+                if (firstHalf.equals(secondHalf, ignoreCase = true)) {
+                    clean = firstHalf
+                }
+            }
+
+            // Deduplicate repeated token pattern: e.g. "(gemini-[a-zA-Z0-9.\-]+)\1+"
+            val repeatedMatch = Regex("""^([a-zA-Z0-9.\-_]{4,}?)\1+$""", RegexOption.IGNORE_CASE).matchEntire(clean)
+            if (repeatedMatch != null) {
+                clean = repeatedMatch.groupValues[1]
+            }
+
+            // Deduplicate accidental repeated suffixes/prefixes
+            clean = clean.replace(Regex("""(-flash)+""", RegexOption.IGNORE_CASE), "-flash")
+                .replace(Regex("""(-pro)+""", RegexOption.IGNORE_CASE), "-pro")
+                .replace(Regex("""(-lite)+""", RegexOption.IGNORE_CASE), "-lite")
+                .replace(Regex("""(gemini-)+""", RegexOption.IGNORE_CASE), "gemini-")
+
+            val lower = clean.lowercase(Locale.ROOT)
+
+            // 2. Add missing "gemini-" prefix if user entered bare version e.g. "3.8-flash", "3.5-flash-lite", "2.5-flash"
+            if (!lower.startsWith("gemini-")) {
+                if (lower.startsWith("3.") || lower.startsWith("2.") || lower.startsWith("1.")) {
+                    clean = "gemini-$clean"
+                }
+            }
+
+            val updatedLower = clean.lowercase(Locale.ROOT)
+
+            // 3. Typo corrections and version aliasing
+            return when {
+                // "3.7" / "gemini-3.7" -> Map to gemini-3.8-flash
+                updatedLower == "gemini-3.7" || updatedLower == "gemini-3.7-flash" ||
+                updatedLower == "3.7" || updatedLower == "3.7-flash" -> "gemini-3.8-flash"
+
+                // "gemini-3.8-flash-lite" -> Lite edition is 3.5
+                updatedLower == "gemini-3.8-flash-lite" || updatedLower == "3.8-flash-lite" -> "gemini-3.5-flash-lite"
+
+                // Version shorthand mappings
+                updatedLower == "gemini-3.8" || updatedLower == "3.8" -> "gemini-3.8-flash"
+                updatedLower == "gemini-3.5" || updatedLower == "3.5" -> "gemini-3.5-flash-lite"
+                updatedLower == "gemini-2.5" || updatedLower == "2.5" -> "gemini-2.5-flash"
+                updatedLower == "gemini-2.0" || updatedLower == "2.0" -> "gemini-2.0-flash"
+                updatedLower == "gemini-1.5" || updatedLower == "1.5" -> "gemini-1.5-flash"
+                updatedLower == "gemini-3.1" || updatedLower == "3.1" ||
+                updatedLower == "gemini-3.1-pro" || updatedLower == "3.1-pro" -> "gemini-3.1-pro-preview"
+
+                updatedLower == "flash" -> "gemini-3.8-flash"
+                updatedLower == "flash-lite" || updatedLower == "lite" -> "gemini-3.5-flash-lite"
+                updatedLower == "pro" -> "gemini-3.1-pro-preview"
+
+                else -> clean
+            }
         }
     }
 
@@ -788,11 +854,13 @@ class AgentViewModel : ViewModel() {
             }
         } else if (finalConfig.preferredModelType == ModelType.GEMINI) {
             geminiClient?.temperature = finalConfig.temperature
-            geminiClient?.modelName = finalConfig.geminiModelName
             GGUFModelClient.stopGlobalServer()
-            if (finalConfig.geminiApiKeys != oldConfig.geminiApiKeys || finalConfig.geminiModelName != oldConfig.geminiModelName || !isModelLoaded()) {
+            if (finalConfig.geminiApiKeys != oldConfig.geminiApiKeys || !isModelLoaded() || geminiClient == null) {
                 closeAllModels()
                 loadGeminiModel(finalConfig.geminiApiKeys, finalConfig.geminiModelName, context)
+            } else {
+                geminiClient?.modelName = finalConfig.geminiModelName
+                _uiState.update { it.copy(activeModelName = finalConfig.geminiModelName) }
             }
         }
     }
