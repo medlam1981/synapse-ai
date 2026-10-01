@@ -54,6 +54,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -221,30 +223,34 @@ fun SettingsScreenContent(
                                 val newConfig = config.copy(preferredModelType = ModelType.GEMINI)
                                 viewModel.saveConfig(context, newConfig)
                             },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isGemini) primary else MaterialTheme.colorScheme.surfaceVariant,
                                 contentColor = if (isGemini) onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 10.dp)
+                            contentPadding = PaddingValues(0.dp)
                         ) {
-                            Text("Gemini Cloud", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Gemini Cloud", fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                         Button(
                             onClick = {
                                 val newConfig = config.copy(preferredModelType = ModelType.GGUF)
                                 viewModel.saveConfig(context, newConfig)
                             },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isGguf) primary else MaterialTheme.colorScheme.surfaceVariant,
                                 contentColor = if (isGguf) onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                             ),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 10.dp)
+                            contentPadding = PaddingValues(0.dp)
                         ) {
-                            Text("Local GGUF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Local GGUF", fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
@@ -585,23 +591,41 @@ fun SettingsScreenContent(
                         title = "3. CLOUD INFERENCE PARAMETERS",
                         titleColor = primary
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column {
-                                    Text("Temperature (سياق الحرارة والتركيز)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        "TEMPERATURE & FOCUS DYNAMICS",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
                                     val tempDesc = when {
-                                        temperatureState <= 0.20f -> "🎯 تركيز دقيق وحاسم للأوامر (Hyper-Focused)"
-                                        temperatureState <= 0.40f -> "⚡ تركيز ذكي ومنطقي موصى به (Optimal 0.30)"
-                                        temperatureState <= 0.70f -> "⚖️ متوازن للنقاشات العامة (Balanced)"
-                                        else -> "🎨 إبداعي عالي (High Creativity)"
+                                        temperatureState <= 0.20f -> "🎯 Hyper-Focused (Strict Commands & Code)"
+                                        temperatureState <= 0.40f -> "⚡ Optimal Logic (Recommended 0.30)"
+                                        temperatureState <= 0.70f -> "⚖️ Balanced (General Discussions)"
+                                        else -> "🎨 High Creativity (Exploratory)"
                                     }
-                                    Text(tempDesc, color = primary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                                    Text(tempDesc, color = primary, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                                 }
-                                Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = primary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = primaryContainer
+                                ) {
+                                    Text(
+                                        text = String.format(java.util.Locale.US, "%.2f", temperatureState),
+                                        color = onPrimaryContainer,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
                             }
                             Slider(
                                 value = temperatureState,
@@ -618,29 +642,38 @@ fun SettingsScreenContent(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 listOf(
-                                    Triple("0.15 دقيق", 0.15f, false),
-                                    Triple("0.30 حكيم (موصى به)", 0.30f, true),
-                                    Triple("0.60 متوازن", 0.60f, false)
+                                    Triple("0.15 STRICT", 0.15f, false),
+                                    Triple("0.30 OPTIMAL", 0.30f, true),
+                                    Triple("0.60 BALANCED", 0.60f, false)
                                 ).forEach { (label, value, _) ->
                                     val isSelected = Math.abs(temperatureState - value) < 0.05f
                                     Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isSelected) primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                                        border = if (isSelected) BorderStroke(1.dp, primary) else null,
-                                        modifier = Modifier.weight(1f).clickable {
-                                            temperatureState = value
-                                            val newConfig = config.copy(temperature = value)
-                                            viewModel.saveConfig(context, newConfig)
-                                        }
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSelected) primaryContainer else surfaceContainer,
+                                        border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(34.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                temperatureState = value
+                                                val newConfig = config.copy(temperature = value)
+                                                viewModel.saveConfig(context, newConfig)
+                                            }
                                     ) {
-                                        Text(
-                                            text = label,
-                                            modifier = Modifier.padding(vertical = 6.dp),
-                                            textAlign = TextAlign.Center,
-                                            fontSize = 10.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (isSelected) primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        Box(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                textAlign = TextAlign.Center,
+                                                fontSize = 10.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1129,23 +1162,32 @@ fun SettingsScreenContent(
                                 val label = if (size == 8192) "8K" else if (size == 4096) "4K" else if (size == 2048) "2K" else "1K"
                                 val isSelected = config.contextLength == size
                                 Surface(
-                                    modifier = Modifier.weight(1f).clickable {
-                                        contextLengthText = size.toString()
-                                        val newConfig = config.copy(contextLength = size)
-                                        viewModel.saveConfig(context, newConfig)
-                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(34.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            contextLengthText = size.toString()
+                                            val newConfig = config.copy(contextLength = size)
+                                            viewModel.saveConfig(context, newConfig)
+                                        },
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (isSelected) primaryContainer else surfaceContainer
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                                 ) {
-                                    Text(
-                                        text = label,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        textAlign = TextAlign.Center
-                                    )
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1234,23 +1276,41 @@ fun SettingsScreenContent(
                         )
                     }
                     
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
-                                Text("Temperature (سياق الحرارة والتركيز المحلي)", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    "TEMPERATURE & FOCUS DYNAMICS",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
                                 val tempDesc = when {
-                                    temperatureState <= 0.20f -> "🎯 تركيز دقيق وحاسم للأوامر والترمنال (Hyper-Focused)"
-                                    temperatureState <= 0.40f -> "⚡ تركيز ذكي ومنطقي موصى به للنموذج (Optimal 0.30)"
-                                    temperatureState <= 0.70f -> "⚖️ متوازن للنقاشات العامة (Balanced)"
-                                    else -> "🎨 إبداعي عالي (High Creativity)"
+                                    temperatureState <= 0.20f -> "🎯 Hyper-Focused (Strict Commands & Code)"
+                                    temperatureState <= 0.40f -> "⚡ Optimal Logic (Recommended 0.30)"
+                                    temperatureState <= 0.70f -> "⚖️ Balanced (General Discussions)"
+                                    else -> "🎨 High Creativity (Exploratory)"
                                 }
-                                Text(tempDesc, color = primary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                                Text(tempDesc, color = primary, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                             }
-                            Text(String.format(java.util.Locale.US, "%.2f", temperatureState), color = primary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = primaryContainer
+                            ) {
+                                Text(
+                                    text = String.format(java.util.Locale.US, "%.2f", temperatureState),
+                                    color = onPrimaryContainer,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
                         }
                         Slider(
                             value = temperatureState,
@@ -1267,29 +1327,38 @@ fun SettingsScreenContent(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                Triple("0.15 دقيق", 0.15f, false),
-                                Triple("0.30 حكيم (موصى به)", 0.30f, true),
-                                Triple("0.60 متوازن", 0.60f, false)
+                                Triple("0.15 STRICT", 0.15f, false),
+                                Triple("0.30 OPTIMAL", 0.30f, true),
+                                Triple("0.60 BALANCED", 0.60f, false)
                             ).forEach { (label, value, _) ->
                                 val isSelected = Math.abs(temperatureState - value) < 0.05f
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isSelected) primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                                    border = if (isSelected) BorderStroke(1.dp, primary) else null,
-                                    modifier = Modifier.weight(1f).clickable {
-                                        temperatureState = value
-                                        val newConfig = config.copy(temperature = value)
-                                        viewModel.saveConfig(context, newConfig)
-                                    }
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) primaryContainer else surfaceContainer,
+                                    border = BorderStroke(1.dp, if (isSelected) primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(34.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            temperatureState = value
+                                            val newConfig = config.copy(temperature = value)
+                                            viewModel.saveConfig(context, newConfig)
+                                        }
                                 ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 6.dp),
-                                        textAlign = TextAlign.Center,
-                                        fontSize = 10.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            textAlign = TextAlign.Center,
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1310,7 +1379,7 @@ fun SettingsScreenContent(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // 0. COMPUTE BACKEND (وحدة المعالجة للنموذج المحلي CPU / GPU)
+                    // 0. COMPUTE BACKEND (CPU / GPU)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1318,51 +1387,32 @@ fun SettingsScreenContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "COMPUTE BACKEND (وحدة المعالجة الحسابية):",
+                                "COMPUTE BACKEND:",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                if (config.sdComputeDevice == "GPU") "GPU (Vulkan Adreno 610)" else "CPU (SIMD NEON 4-Cores)",
+                                if (config.sdComputeDevice == "GPU") "GPU (VULKAN ADRENO)" else "CPU (SIMD NEON 4-CORES)",
                                 color = primary,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "CPU" to "⚡ CPU (SIMD NEON)\nمعالج الأنوية الكبيرة taskset f0",
-                                "GPU" to "🎮 GPU (VULKAN ADRENO)\nمعالج الرسوميات تسريع العتاد"
-                            ).forEach { (dev, label) ->
-                                val isSelected = config.sdComputeDevice == dev
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(sdComputeDevice = dev))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
+                        SettingsOptionSelector(
+                            options = listOf(
+                                "CPU" to "⚡ CPU (NEON)",
+                                "GPU" to "🎮 GPU (VULKAN)"
+                            ),
+                            selectedValue = config.sdComputeDevice,
+                            onSelect = { dev ->
+                                viewModel.saveConfig(context, config.copy(sdComputeDevice = dev))
+                            },
+                            buttonHeight = 38.dp,
+                            fontSize = 10.sp
+                        )
                     }
 
                     // 1. Inference Steps Control
@@ -1380,49 +1430,28 @@ fun SettingsScreenContent(
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                if (config.sdSteps == 0) "AUTO (1-2 Turbo / 15 Std)" else "${config.sdSteps} STEPS",
+                                if (config.sdSteps == 0) "AUTO (1-2 TURBO / 15 STD)" else "${config.sdSteps} STEPS",
                                 color = primary,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-
-                        // Presets
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
+                        SettingsOptionSelector(
+                            options = listOf(
                                 0 to "AUTO",
                                 1 to "1 (TURBO)",
                                 4 to "4 (LCM)",
                                 15 to "15 (STD)",
                                 20 to "20 (HQ)"
-                            ).forEach { (steps, label) ->
-                                val isSelected = config.sdSteps == steps
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(sdSteps = steps))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
+                            ),
+                            selectedValue = config.sdSteps,
+                            onSelect = { steps ->
+                                viewModel.saveConfig(context, config.copy(sdSteps = steps))
+                            },
+                            buttonHeight = 38.dp,
+                            fontSize = 8.5.sp
+                        )
                     }
 
                     // 2. CFG Scale (Guidance Scale)
@@ -1440,47 +1469,27 @@ fun SettingsScreenContent(
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                if (config.sdCfgScale <= 0f) "AUTO (1.0 Turbo / 7.0 Std)" else "${config.sdCfgScale}",
+                                if (config.sdCfgScale <= 0f) "AUTO (1.0 TURBO / 7.0 STD)" else "${config.sdCfgScale}",
                                 color = primary,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
+                        SettingsOptionSelector(
+                            options = listOf(
                                 0.0f to "AUTO",
                                 1.0f to "1.0 (TURBO)",
                                 2.0f to "2.0 (LCM)",
                                 7.0f to "7.0 (STD)"
-                            ).forEach { (cfg, label) ->
-                                val isSelected = config.sdCfgScale == cfg
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(sdCfgScale = cfg))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
+                            ),
+                            selectedValue = config.sdCfgScale,
+                            onSelect = { cfg ->
+                                viewModel.saveConfig(context, config.copy(sdCfgScale = cfg))
+                            },
+                            buttonHeight = 38.dp,
+                            fontSize = 9.sp
+                        )
                     }
 
                     // 3. Storage Streaming & RAM Usage (Zero-Forced-RAM Option)
@@ -1491,51 +1500,32 @@ fun SettingsScreenContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "RAM USAGE PROFILE (ذاكرة الوصول العشوائي):",
+                                "RAM USAGE PROFILE:",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                if (config.sdLowMemoryMode) "ZERO-RAM (DISK)" else "RAM (MMAP)",
+                                if (config.sdLowMemoryMode) "ZERO-RAM (DISK STREAM)" else "RAM BUFFER (MMAP)",
                                 color = if (config.sdLowMemoryMode) primary else MaterialTheme.colorScheme.secondary,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                true to "ZERO-RAM DISK STREAMING (موصى به)",
-                                false to "RAM MMAP BUFFER (يتطلب رام عالي)"
-                            ).forEach { (isLowMem, label) ->
-                                val isSelected = config.sdLowMemoryMode == isLowMem
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(sdLowMemoryMode = isLowMem))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
+                        SettingsOptionSelector(
+                            options = listOf(
+                                true to "ZERO-RAM (DISK STREAM)",
+                                false to "RAM BUFFER (MMAP)"
+                            ),
+                            selectedValue = config.sdLowMemoryMode,
+                            onSelect = { isLowMem ->
+                                viewModel.saveConfig(context, config.copy(sdLowMemoryMode = isLowMem))
+                            },
+                            buttonHeight = 38.dp,
+                            fontSize = 9.sp
+                        )
                     }
 
                     // 4. Diffusion CPU Threading
@@ -1560,81 +1550,56 @@ fun SettingsScreenContent(
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
+                        SettingsOptionSelector(
+                            options = listOf(
                                 2 to "2 THREADS (ECO)",
                                 4 to "4 (BIG CORES)",
                                 6 to "6 THREADS (MAX)"
-                            ).forEach { (threads, label) ->
-                                val isSelected = config.sdThreads == threads
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(sdThreads = threads))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
+                            ),
+                            selectedValue = config.sdThreads,
+                            onSelect = { threads ->
+                                viewModel.saveConfig(context, config.copy(sdThreads = threads))
+                            },
+                            buttonHeight = 38.dp,
+                            fontSize = 9.sp
+                        )
                     }
 
                     // 5. Resolution (Width x Height)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "OUTPUT RESOLUTION:",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            listOf(
-                                (256 to 256) to "256x256 (ZERO-RAM)",
-                                (384 to 384) to "384x384 (BALANCED)",
-                                (512 to 512) to "512x512 (HQ / TILING)"
-                            ).forEach { (dims, label) ->
-                                val isSelected = config.sdWidth == dims.first && config.sdHeight == dims.second
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            viewModel.saveConfig(context, config.copy(sdWidth = dims.first, sdHeight = dims.second))
-                                        },
-                                    color = if (isSelected) primaryContainer else surfaceContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
+                            Text(
+                                "OUTPUT RESOLUTION:",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                "${config.sdWidth}x${config.sdHeight}",
+                                color = primary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
                         }
+                        SettingsOptionSelector(
+                            options = listOf(
+                                (256 to 256) to "256x256 (FAST)",
+                                (384 to 384) to "384x384 (BALANCED)",
+                                (512 to 512) to "512x512 (HQ)"
+                            ),
+                            selectedValue = config.sdWidth to config.sdHeight,
+                            onSelect = { dims ->
+                                viewModel.saveConfig(context, config.copy(sdWidth = dims.first, sdHeight = dims.second))
+                            },
+                            buttonHeight = 38.dp,
+                            fontSize = 9.sp
+                        )
                     }
                 }
             }
@@ -1791,6 +1756,64 @@ private fun UnifiedPersonaCard(
                         text = "Reset Defaults",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun <T> SettingsOptionSelector(
+    options: List<Pair<T, String>>,
+    selectedValue: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    buttonHeight: Dp = 38.dp,
+    fontSize: TextUnit = 9.sp
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        val primary = MaterialTheme.colorScheme.primary
+        val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+        val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
+        val isDark = isSystemInDarkTheme()
+        val surfaceContainer = if (isDark) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+        val outlineVariant = MaterialTheme.colorScheme.outlineVariant
+
+        options.forEach { (value, label) ->
+            val isSelected = selectedValue == value
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(buttonHeight)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSelect(value) },
+                color = if (isSelected) primaryContainer else surfaceContainer,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (isSelected) primary else outlineVariant.copy(alpha = 0.35f)
+                )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = fontSize,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (isSelected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
