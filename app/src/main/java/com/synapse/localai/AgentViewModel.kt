@@ -1398,7 +1398,7 @@ CRITICAL EXECUTION RULES:
                             val isOlder = idx < historyList.size - 2
                             val safeContent = if (isOlder && role == "assistant") compactHistoryForQuota(content) else content
                             role to safeContent
-                        }
+                        }.filter { it.second.trim().isNotBlank() }
                     }
 
                     try {
@@ -1573,9 +1573,16 @@ CRITICAL EXECUTION RULES:
                             val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val displayText = if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
+                            val cleanDisplay = cleanVisibleText(displayText)
                             _uiState.update { state ->
-                                val updated = state.logs.map { log -> if (log.id == liveLogId) log.copy(text = cleanVisibleText(displayText), thinkingText = demuxedFull.thinkingText, isThinking = false) else log }
+                                val updated = state.logs.map { log -> if (log.id == liveLogId) log.copy(text = cleanDisplay, thinkingText = demuxedFull.thinkingText, isThinking = false) else log }
                                 state.copy(logs = updated)
+                            }
+                            if (cleanDisplay.isNotBlank()) {
+                                synchronized(conversationHistory) {
+                                    conversationHistory.add("model" to cleanDisplay)
+                                    trimConversationHistoryToContextLimit()
+                                }
                             }
                             keepGoing = false
                         } else if (validToolCalls.isNotEmpty() && !forceFinalTurn) {
@@ -1733,14 +1740,29 @@ Answer the user's request directly based on these findings in their language."""
                                 val detectedPath = ToolExecutor.detectFilePath(fullResponse)
                                 EpistemicMemoryManager.recordInteraction(actualContext, command, fullResponse, detectedPath)
                             }
-                            synchronized(conversationHistory) {
-                                conversationHistory.add("model" to cleanDisplay)
-                                trimConversationHistoryToContextLimit()
+                            if (cleanDisplay.isNotBlank()) {
+                                synchronized(conversationHistory) {
+                                    conversationHistory.add("model" to cleanDisplay)
+                                    trimConversationHistoryToContextLimit()
+                                }
                             }
                             keepGoing = false
                             activeGgufPromptPrefix = null
                         }
                     } else {
+                        val isArabicUser = command.any { it in '\u0600'..'\u06FF' }
+                        val errorText = when {
+                            streamInterrupted && interruptMsg.isNotBlank() -> "⚠️ $interruptMsg"
+                            streamInterrupted -> if (isArabicUser) "⚠️ انقطع الاتصال بالنموذج قبل الرد. يرجى التحقق من اسم النموذج والمفاتيح والمحاولة مجدداً." else "⚠️ Connection interrupted before model responded. Please verify model name and retry."
+                            else -> if (isArabicUser) "⚠️ لم يتم استلام أي رد من النموذج. تأكد من صحة اسم وإصدار النموذج المكتوب في الإعدادات." else "⚠️ Empty response received from model. Please verify model name in Settings."
+                        }
+                        _uiState.update { state ->
+                            val updated = state.logs.map { log ->
+                                if (log.id == liveLogId) log.copy(text = errorText, isThinking = false, isError = true)
+                                else log
+                            }
+                            state.copy(logs = updated, streamInterruptMsg = errorText)
+                        }
                         keepGoing = false
                         activeGgufPromptPrefix = null
                     }
@@ -1823,6 +1845,11 @@ Answer the user's request directly based on these findings in their language."""
                 if (!usedTools) {
                     resultSb.append(summary ?: reply)
                     keepGoing = false
+                } else {
+                    if (summary != null && summary.isNotBlank()) {
+                        taskHistory.add("user" to "[Tool Execution Observation]:\n$summary\n\nPlease proceed to synthesize your findings or complete the task.")
+                        while (taskHistory.size > 8) taskHistory.removeAt(0)
+                    }
                 }
             }
             return resultSb.toString().ifBlank { "Task completed after $iterations iterations" }
@@ -1985,6 +2012,61 @@ Answer the user's request directly based on these findings in their language."""
                                 val range = ContentReaderTool.readFileRange(path, start, count)
                                 summaries.add("✔ Tool(read_file_range: $path [$start..${start + count}])\n$range")
                                 addSystemLog("Read range from: $path")
+                            }
+                        }
+                        "schedule_task", "schedule" -> {
+                            val desc = params["description"] ?: params["desc"] ?: params["title"] ?: "Scheduled Task"
+                            val cmd = params["command"] ?: params["cmd"] ?: ""
+                            val delayMinutes = params["delay_minutes"]?.toLongOrNull() ?: params["delay"]?.toLongOrNull() ?: 1L
+                            val executeAt = System.currentTimeMillis() + (delayMinutes.coerceAtLeast(1L) * 60_000L)
+                            actualContext?.let { initTaskSystem(it) }
+                            val task = AgentTask(
+                                description = desc,
+                                command = cmd,
+                                executeAt = executeAt,
+                                status = TaskStatus.PENDING,
+                                source = "agent_scheduler"
+                            )
+                            taskMemory?.addTask(task)
+                            updateTaskState()
+                            actionToolUsed = true
+                            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(executeAt))
+                            summaries.add("✔ Task Scheduled:\n• Description: $desc\n• Command: $cmd\n• Scheduled run time: $timeStr (in $delayMinutes minute(s))\n• Task ID: ${task.id}")
+                            addSystemLog("Scheduled task '$desc' for $timeStr")
+                        }
+                        "queue_background_task", "background_task", "queue_task" -> {
+                            val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
+                            val desc = params["description"] ?: params["desc"] ?: params["title"] ?: cmd.take(50)
+                            actualContext?.let { initTaskSystem(it) }
+                            val taskId = taskEngine?.queueCommand(cmd, "agent")
+                            updateTaskState()
+                            actionToolUsed = true
+                            summaries.add("✔ Background Task Queued:\n• Description: $desc\n• Command: $cmd\n• Task ID: $taskId\n• Status: Active in background queue")
+                            addSystemLog("Queued background task: $desc")
+                        }
+                        "list_tasks", "get_tasks" -> {
+                            actualContext?.let { initTaskSystem(it) }
+                            updateTaskState()
+                            val summary = taskMemory?.getTaskSummary() ?: "No active tasks"
+                            val activeList = taskMemory?.getAllActiveTasks()?.joinToString("\n") { t ->
+                                val dueStr = if (t.executeAt > 0) SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(t.executeAt)) else "immediate"
+                                "• [${t.status}] ${t.description} (ID: ${t.id.take(8)}, Run at: $dueStr)"
+                            } ?: "None"
+                            actionToolUsed = true
+                            summaries.add("📋 Task List Summary: $summary\n$activeList")
+                        }
+                        "cancel_task" -> {
+                            val targetId = params["task_id"] ?: params["id"] ?: params.values.firstOrNull() ?: ""
+                            if (targetId.isNotBlank()) {
+                                actualContext?.let { initTaskSystem(it) }
+                                val cancelled = taskEngine?.cancelTask(targetId) ?: false
+                                if (!cancelled) {
+                                    taskMemory?.markCancelled(targetId)
+                                }
+                                updateTaskState()
+                                actionToolUsed = true
+                                summaries.add("✔ Task $targetId has been cancelled.")
+                                addSystemLog("Cancelled task: $targetId")
                             }
                         }
                         "complete" -> {

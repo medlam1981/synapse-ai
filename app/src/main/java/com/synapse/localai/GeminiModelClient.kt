@@ -51,7 +51,15 @@ class GeminiModelClient(
 
     var modelName: String = AgentViewModel.DEFAULT_GEMINI_MODEL
         set(value) {
-            field = AgentViewModel.sanitizeGeminiModelName(value)
+            val sanitized = AgentViewModel.sanitizeGeminiModelName(value)
+            if (field != sanitized) {
+                field = sanitized
+                keyCooldowns.clear()
+                keyFailureCounts.clear()
+                activeChat = null
+                lastFunctionCall = null
+                fileLog("Model changed to '$sanitized'. Cleared key cooldowns and chat state.")
+            }
         }
     var maxTokens: Int = 8192 // Maximized API ceiling to 8192 for unbounded output streaming
     var temperature: Float = 0.30f
@@ -451,15 +459,14 @@ class GeminiModelClient(
 
                 if (shouldRetry && attempt + 1 < maxAttempts) {
                     attempt++
-                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
-                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
+                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
+                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
                     onRetry?.invoke()
 
-                    // Strict 5-Second Stable Grace Period:
-                    // Never rotate or hammer keys in milliseconds! Wait a full 5000ms before rotating to next key.
-                    delay(5000L)
+                    // Fast 250ms failover between keys:
+                    delay(250L)
 
-                    // Advance key and update UI only after the 5-second grace window expires
+                    // Advance key and update UI after short failover delay
                     currentPair = getNextValidKey(forceRotate = true)
                 } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
                     throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
@@ -729,15 +736,14 @@ class GeminiModelClient(
 
                 if (shouldRetry && attempt + 1 < maxAttempts) {
                     attempt++
-                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
-                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Enforcing 5000ms stable grace period before failover...")
+                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
+                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
                     onRetry?.invoke()
 
-                    // Strict 5-Second Stable Grace Period:
-                    // Never rotate or hammer keys in milliseconds! Wait a full 5000ms before rotating to next key.
-                    delay(5000L)
+                    // Fast 250ms failover between keys:
+                    delay(250L)
 
-                    // Advance key and update UI only after the 5-second grace window expires
+                    // Advance key and update UI after short failover delay
                     currentPair = getNextValidKey(forceRotate = true)
                 } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
                     throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")

@@ -427,7 +427,7 @@ class TaskMemoryManager(context: Context) {
             result = json.optString("result", ""),
             retryCount = json.optInt("retryCount", 0),
             maxRetries = json.optInt("maxRetries", 3),
-            parentTaskId = if (json.isNull("parentTaskId")) null else json.optString("parentTaskId", null),
+            parentTaskId = if (json.has("parentTaskId") && !json.isNull("parentTaskId")) json.getString("parentTaskId") else null,
             priority = json.optInt("priority", 0),
             source = json.optString("source", "user")
         )
