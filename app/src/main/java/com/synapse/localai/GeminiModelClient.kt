@@ -816,7 +816,7 @@ class GeminiModelClient(
                 listOf(
                     defineFunction(
                         name = "run_shell",
-                        description = "Execute a shell command with root or adb permissions (e.g. to inspect system resources, or 'input keyevent 3' to return to the Home Screen after finishing app tasks)",
+                        description = "Execute a shell command with root or adb permissions (e.g. to inspect system resources, RAM, CPU, storage, processes, or run bash scripts)",
                         parameters = listOf(Schema.str("command", "The bash shell command to execute")),
                         requiredParameters = listOf("command")
                     ),
@@ -914,7 +914,7 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "complete",
-                        description = "Finalize task execution cycles, trigger Return-to-Home, and return direct output summary",
+                        description = "Finalize task execution cycles and return direct output summary",
                         parameters = listOf(
                             Schema.str("summary", "Structured summary of completed actions"),
                             Schema.str("task", "Name or description of completed task")

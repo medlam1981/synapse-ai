@@ -27,58 +27,12 @@ object TaskCompletionProtocol {
     )
 
     /**
-     * Executes the Return-to-Home workflow:
-     * a. Fires Home intent / key.
-     * b. Waits for window transitions to settle.
-     * c. Refocuses the ATLAS-AI MainActivity.
+     * Preserved for backward compatibility — all tasks now execute natively
+     * within the ATLAS-AI interface without exiting or jumping to launcher.
      */
     suspend fun executeReturnToHome(context: Context?): Boolean = withContext(Dispatchers.Main) {
-        val ctx = context ?: MainActivity.instance
-        if (ctx == null) {
-            Log.w(TAG, "Cannot execute Return-to-Home: Context is null")
-            return@withContext false
-        }
-
-        try {
-            // Step A: Trigger "Home" intent / navigation
-            try {
-                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_HOME)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                ctx.startActivity(homeIntent)
-                Log.d(TAG, "Triggered Home via Intent")
-            } catch (_: Exception) {
-                RootShellManager.exec("input keyevent 3")
-                Log.d(TAG, "Triggered Home via Root Shell fallback")
-            }
-
-            // Allow launcher transition to settle cleanly
-            delay(300)
-
-            // Step B: Re-focus and bring ATLAS-AI primary interface to the front
-            val appIntent = Intent(ctx, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("TASK_COMPLETION_REFOCUS", true)
-            }
-
-            // Root Shell am start (guaranteed to bypass background start restrictions)
-            try {
-                RootShellManager.exec("am start -n com.synapse.localai/.MainActivity -f 0x14000000")
-            } catch (_: Exception) {}
-
-            try {
-                ctx.startActivity(appIntent)
-            } catch (_: Exception) {}
-
-            Log.i(TAG, "✔ Return-to-Home and Interface Refocus executed successfully.")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed in Return-to-Home workflow: ${e.message}")
-            false
-        }
+        // No-op: Agent remains in current interface to preserve focus and seamless UX
+        true
     }
 
     /**
@@ -106,7 +60,7 @@ object TaskCompletionProtocol {
             }
         }
 
-        sb.append("• **Lifecycle Protocol:** Returned to Home & ATLAS-AI Interface Refocused.")
+        sb.append("• **Execution Protocol:** Completed seamlessly within ATLAS-AI interface.")
         return sb.toString().trim()
     }
 }

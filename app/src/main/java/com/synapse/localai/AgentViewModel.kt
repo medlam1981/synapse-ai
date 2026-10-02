@@ -1155,20 +1155,7 @@ class AgentViewModel : ViewModel() {
             "bonjour", "salut", "coucou", "bonsoir", "comment vas-tu", "comment allez-vous",
             "hola", "yo", "ca va", "ça va", "buenas tardes", "buenos dias"
         )
-        if (clean in exactGreetings) return true
-        if (clean.startsWith("hello ") || clean.startsWith("hi ") || clean.startsWith("hey ")) {
-            val words = clean.split(Regex("\\s+"))
-            if (words.size <= 5 && !words.any { it in listOf("run", "code", "file", "app", "shell", "check", "inspect", "search") }) {
-                return true
-            }
-        }
-        if (clean.startsWith("مرحبا") || clean.startsWith("أهلا") || clean.startsWith("اهلا") || clean.startsWith("السلام عليكم")) {
-            val words = clean.split(Regex("\\s+"))
-            if (words.size <= 5 && !words.any { it in listOf("افحص", "كود", "ملف", "تطبيق", "نفذ", "شغل", "ابحث") }) {
-                return true
-            }
-        }
-        return false
+        return clean in exactGreetings
     }
 
     fun isGreeting(text: String): Boolean = isSimpleGreeting(text)
@@ -1254,14 +1241,22 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
 
         val universalGroundingDirective = """
 
-## UNIVERSAL TOOL DISPATCHING & EPISTEMIC GROUNDING:
-1. HOST OS vs EXTERNAL WORLD:
+## UNIVERSAL TOOL DISPATCHING & ZERO-HALLUCINATION EXECUTION:
+1. MANDATORY FIRST-TURN TOOL INVOCATION:
+   - When the user asks you to perform an operational action (e.g. open an app, check RAM/CPU/storage, run a bash command, search the web, write a file, calculate with Python):
+   - You MUST output the tool call `<invoke name="...">` IMMEDIATELY in your very first response turn!
+   - You are STRICTLY FORBIDDEN from stating in conversational text that you performed the action or checked the system without actually calling the tool!
+   - All tasks execute right inside this ATLAS-AI agent interface. Never exit or return to launcher.
+2. HOST OS vs EXTERNAL WORLD:
+   - Use `open_app(package_name)` to launch Android applications dynamically.
    - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
    - Use `web_search(query)` for ALL real-world facts, current events, live prices, documentation, sports, weather, entity queries, and online knowledge.
    - Use `fetch_web_content(url)` to retrieve clean, in-depth text content from URLs found via web search.
    - Use `run_python(script)` to calculate algebra, integrals, calculus, and scientific computations locally with zero hallucination.
+   - Use `write_file(path, content)` to create or overwrite local files.
    - Use `read_file_range(path, start_line, line_count)` to inspect large files efficiently without exhausting memory.
-2. MANDATORY SYNTHESIS TURN (CRITICAL):
+   - Use `schedule_task(description, command, delay_minutes)` to register delayed hardware alarms.
+3. MANDATORY SYNTHESIS TURN (CRITICAL):
    - You must NOT emit redundant tool calls. Once findings are provided, you are STRICTLY FORBIDDEN from calling the tool again.
    - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates or XML tags back to the user.
 """.trimIndent()
@@ -1272,9 +1267,11 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
             return """$languageEnforcement
 
 $effectivePersona$localGreetingNote
-Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
+Tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
+- ZERO HALLUCINATION: Never claim you opened an app or ran a command without invoking the tool!
+- IMMEDIATE EXECUTION: Whenever an action is requested, emit <invoke name="..."> on the FIRST turn.
 - TERMINAL ACTIONS: To run shell/bash commands or inspect system resources, you MUST ALWAYS invoke run_shell: <invoke name="run_shell"><parameter name="command">command</parameter></invoke>. NEVER wrap bash commands in markdown code blocks!
 - PROGRAMMING CODE: Only wrap programming code (Python, Kotlin, HTML, JS) in markdown triple backticks (```language ... ```) when writing software artifacts.
 
@@ -1292,6 +1289,7 @@ $languageEnforcement""".trimIndent()
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
+- Zero Hallucination: Never claim an action was done without invoking the tool.
 - Conclude with verified facts directly in natural language without echoing tools or system directives.
 """.trimIndent()
 
@@ -1644,7 +1642,7 @@ $languageEnforcement""".trimIndent()
                     val writtenFilesFromStream = liveDiskStreamer.closeAll(fullResponse)
 
                     val parsedToolCalls = StreamDemultiplexer.parseAllToolCalls(fullResponse)
-                    val validToolCalls = if (isGreetingPrompt) emptyList() else parsedToolCalls.filter { call ->
+                    val validToolCalls = parsedToolCalls.filter { call ->
                         when (call.name.trim().lowercase()) {
                             "web_search", "search", "google_search" -> {
                                 val q = call.params["query"] ?: call.params["q"] ?: call.params.values.firstOrNull() ?: ""
@@ -1876,7 +1874,6 @@ $truncatedSummary
 CRITICAL GUARDRAIL: Analyze and parse this UI observation SILENTLY in your thought process.
 - DO NOT leak, repeat, or output raw XML, node dumps, bounds, or hierarchy trees into your visible response.
 - If more steps are needed, call the next tool.
-- When finishing tasks in external applications, execute `run_shell` with `input keyevent 3` to return cleanly to the Home Screen.
 - Your final reply must be strictly a concise, natural language summary in the user's language without any raw data logs or XML tags.
 $langFinalInstruction"""
                                     } else {
@@ -1905,14 +1902,6 @@ $langFinalInstruction"""
                             keepGoing = true
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
-                            // Automatic Return-to-Home and ATLAS-AI Refocus upon task completion
-                            if (toolsUsedThisTurn && lastActionUsed !in setOf("open_app", "launch_app")) {
-                                try {
-                                    TaskCompletionProtocol.executeReturnToHome(actualContext)
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Automatic post-task Return-to-Home notice: ${e.message}")
-                                }
-                            }
                             val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val cleanDisplay = cleanVisibleText(cleanHistoryReply)
@@ -2335,11 +2324,6 @@ $langFinalInstruction"""
                         "complete" -> {
                             val s = params["summary"] ?: params.values.firstOrNull() ?: ""
                             val taskName = params["task"] ?: params["title"] ?: "Task Execution"
-                            try {
-                                TaskCompletionProtocol.executeReturnToHome(actualContext)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Return-to-Home execution note: ${e.message}")
-                            }
                             val structuredSummary = TaskCompletionProtocol.generateStructuredSummary(
                                 taskName = taskName,
                                 actionDetails = s.ifBlank { "Task sequence concluded successfully." },

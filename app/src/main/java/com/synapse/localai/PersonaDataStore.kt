@@ -28,6 +28,7 @@ object PersonaDataStore {
             !prompt.contains("STRICT LANGUAGE RULE FOR GREETINGS") ||
             !prompt.contains("CORE OPERATIONAL DOCTRINE") ||
             !prompt.contains("TERMINAL COMMAND EXECUTION") ||
+            !prompt.contains("ZERO-HALLUCINATION IMMEDIATE TOOL DISPATCH") ||
             !prompt.contains("DYNAMIC MIRRORING")) {
             return true
         }
