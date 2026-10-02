@@ -49,11 +49,14 @@ object UiAutomationTool {
      * Dumps screen node hierarchies and visible actionable elements.
      */
     suspend fun readScreenHierarchy(context: Context?): String = withContext(Dispatchers.IO) {
+        // Auto-enable Accessibility Service via Root if not bound
+        ensureAccessibilityActive()
+
         // Layer 1: Native AccessibilityService
         val service = SynapseAccessibilityService.instance
         if (service != null) {
             val hierarchy = service.dumpNodeHierarchy()
-            if (!hierarchy.startsWith("[Error")) {
+            if (!hierarchy.startsWith("[Error") && !hierarchy.startsWith("[Screen hierarchy is empty")) {
                 return@withContext hierarchy
             }
         }
@@ -65,13 +68,43 @@ object UiAutomationTool {
             val xmlLines = RootShellManager.exec("cat $dumpPath")
             val xml = xmlLines.joinToString("\n").trim()
             if (xml.isNotBlank() && xml.contains("<node")) {
-                return@withContext parseUiAutomatorXml(xml)
+                val parsed = parseUiAutomatorXml(xml)
+                if (parsed.isNotBlank() && !parsed.startsWith("[Empty")) {
+                    return@withContext parsed
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Root uiautomator fallback error: ${e.message}")
         }
 
-        return@withContext "[Notice: Accessibility Service is currently disabled and root uiautomator returned no nodes. Enable ATLAS-AI in Android Settings > Accessibility for direct UI interaction.]"
+        // Layer 3: Visual OCR / Screen Vision fallback (ML Kit)
+        try {
+            val ocrReport = ScreenVisionTool.ocrScreen(context = context)
+            if (ocrReport.isNotBlank() && !ocrReport.startsWith("[Error")) {
+                return@withContext ocrReport
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Visual OCR screen dump fallback error: ${e.message}")
+        }
+
+        return@withContext "[Active Screen Hierarchy: Screen contains no detectable interactive text or elements at this moment.]"
+    }
+
+    private fun ensureAccessibilityActive() {
+        if (SynapseAccessibilityService.instance == null) {
+            try {
+                val current = RootShellManager.exec("settings get secure enabled_accessibility_services").joinToString("").trim()
+                val targetService = "com.synapse.localai/.automation.SynapseAccessibilityService"
+                if (!current.contains("SynapseAccessibilityService")) {
+                    val updated = if (current.isBlank() || current == "null") targetService else "$current:$targetService"
+                    RootShellManager.exec("settings put secure enabled_accessibility_services $updated")
+                    RootShellManager.exec("settings put secure accessibility_enabled 1")
+                    Thread.sleep(250)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to auto-enable AccessibilityService via root: ${e.message}")
+            }
+        }
     }
 
     /**

@@ -61,10 +61,34 @@ class SynapseAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Retrieves the active or top-level window root node, falling back to all interactive windows.
+     */
+    fun getEffectiveRootNode(): AccessibilityNodeInfo? {
+        rootInActiveWindow?.let { return it }
+        try {
+            val winList = windows
+            // 1. Try active window
+            winList.firstOrNull { it.isActive }?.root?.let { return it }
+            // 2. Try focused window
+            winList.firstOrNull { it.isFocused }?.root?.let { return it }
+            // 3. Try standard application window
+            winList.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }?.root?.let { return it }
+            // 4. Any window with a non-null root
+            for (w in winList) {
+                val r = w.root
+                if (r != null) return r
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error querying window roots: ${e.message}")
+        }
+        return null
+    }
+
+    /**
      * Dumps the entire active screen hierarchy tree with texts, IDs, bounds, and interactive traits.
      */
     fun dumpNodeHierarchy(maxDepth: Int = 12): String {
-        val root = rootInActiveWindow ?: return "[Error: No active window or root node accessible]"
+        val root = getEffectiveRootNode() ?: return "[Error: No active window or root node accessible]"
         val sb = StringBuilder()
         sb.append("=== ACTIVE SCREEN NODE HIERARCHY ===\n")
         try {
@@ -119,7 +143,7 @@ class SynapseAccessibilityService : AccessibilityService() {
      * Finds a node by text, description, or resource ID.
      */
     fun findNode(query: String): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
+        val root = getEffectiveRootNode() ?: return null
         val clean = query.trim().lowercase()
         return searchNodeRecursive(root, clean)
     }
@@ -190,7 +214,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         val latch = CountDownLatch(1)
         val success = AtomicBoolean(false)
 
-        dispatchGesture(gesture, object : GestureResultCallback() {
+        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 success.set(true)
                 latch.countDown()
@@ -200,6 +224,8 @@ class SynapseAccessibilityService : AccessibilityService() {
                 latch.countDown()
             }
         }, null)
+
+        if (!dispatched) return false
 
         latch.await(350, TimeUnit.MILLISECONDS)
         return success.get()
@@ -220,7 +246,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         val latch = CountDownLatch(1)
         val success = AtomicBoolean(false)
 
-        dispatchGesture(gesture, object : GestureResultCallback() {
+        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 success.set(true)
                 latch.countDown()
@@ -231,6 +257,8 @@ class SynapseAccessibilityService : AccessibilityService() {
             }
         }, null)
 
+        if (!dispatched) return false
+
         latch.await(safeDur + 400L, TimeUnit.MILLISECONDS)
         return success.get()
     }
@@ -239,7 +267,7 @@ class SynapseAccessibilityService : AccessibilityService() {
      * Injects text into an editable element (or the currently focused input).
      */
     fun inputText(text: String, query: String? = null): Boolean {
-        val targetNode = if (!query.isNullOrBlank()) findNode(query) else findFocusedEditableNode(rootInActiveWindow)
+        val targetNode = if (!query.isNullOrBlank()) findNode(query) else findFocusedEditableNode(getEffectiveRootNode())
         if (targetNode == null) return false
 
         try {
@@ -284,7 +312,7 @@ class SynapseAccessibilityService : AccessibilityService() {
      * Performs native accessibility scrolling on the active scrollable container.
      */
     fun scroll(forward: Boolean): Boolean {
-        val root = rootInActiveWindow ?: return false
+        val root = getEffectiveRootNode() ?: return false
         val scrollable = findScrollableNode(root)
         return if (scrollable != null) {
             val action = if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD

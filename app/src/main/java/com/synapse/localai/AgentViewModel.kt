@@ -514,8 +514,8 @@ class AgentViewModel : ViewModel() {
     }
 
     private fun cleanVisibleText(raw: String): String {
-        // Fast-path: if text contains no special tags or backticks, return directly without running regexes
-        if (!raw.contains('<') && !raw.contains('`') && !raw.contains("💭") && !raw.contains("SYSTEM MANDATORY") && !raw.contains("Shell output")) {
+        // Fast-path: if text contains no special tags or backticks or screen dumps, return directly without running regexes
+        if (!raw.contains('<') && !raw.contains('`') && !raw.contains("💭") && !raw.contains("SYSTEM MANDATORY") && !raw.contains("Shell output") && !raw.contains("ACTIVE SCREEN") && !raw.contains("SCREEN VISION") && !raw.contains("bounds=\"[")) {
             return raw.trim()
         }
         var text = raw
@@ -533,6 +533,26 @@ class AgentViewModel : ViewModel() {
                 .replace(RE_TERMINAL_OPEN, "")
                 .replace(RE_THINK_TAG_SOLO, "")
                 .replace(RE_TERMINAL_TAG_SOLO, "")
+        }
+        if (text.contains("=== ACTIVE SCREEN NODE HIERARCHY ===") || text.contains("=== SCREEN VISION & OCR REPORT ===")) {
+            text = text.replace(Regex("""=== ACTIVE SCREEN NODE HIERARCHY ===[\s\S]*?(?=\n\n[^\s•<]|\z)"""), "")
+                .replace(Regex("""=== SCREEN VISION & OCR REPORT ===[\s\S]*?(?=\n\n[^\s•<]|\z)"""), "")
+                .trim()
+        }
+        if (text.contains("<node") || text.contains("</node>")) {
+            text = text.replace(Regex("""<node\b[^>]*>(?:[\s\S]*?</node>)?"""), "")
+                .replace(Regex("""<node\b[^>]*/>"""), "")
+                .replace("</node>", "")
+                .trim()
+        }
+        if (text.contains("<hierarchy") || text.contains("</hierarchy>")) {
+            text = text.replace(Regex("""<hierarchy\b[^>]*>[\s\S]*?</hierarchy>"""), "")
+                .replace("</hierarchy>", "")
+                .trim()
+        }
+        if (text.contains("bounds=\"[")) {
+            text = text.replace(Regex("""•\s*<[a-zA-Z0-9_.]+\b[^>]*bounds="\[\d+,\d+\]\[\d+,\d+\]"[^>]*>\s*"""), "")
+                .trim()
         }
         if (text.contains("Shell output")) text = text.replace(RE_SHELL_OUT, "")
         if (text.contains("SYSTEM MANDATORY")) text = text.replace(RE_SYS_INSTRUCTION, "")
@@ -1237,14 +1257,27 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
 
 ## UNIVERSAL TOOL DISPATCHING & EPISTEMIC GROUNDING:
 1. HOST OS vs EXTERNAL WORLD:
-   - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
+   - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands, and returning to home screen via `input keyevent 3`). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
    - Use `web_search(query)` for ALL real-world facts, current events, live prices, documentation, sports, weather, entity queries, and online knowledge.
    - Use `fetch_web_content(url)` to retrieve clean, in-depth text content from URLs found via web search.
    - Use `run_python(script)` to calculate algebra, integrals, calculus, and scientific computations locally with zero hallucination.
    - Use `read_file_range(path, start_line, line_count)` to inspect large files efficiently without exhausting memory.
 2. MANDATORY SYNTHESIS TURN (CRITICAL):
    - You must NOT emit redundant tool calls. Once findings are provided, you are STRICTLY FORBIDDEN from calling the tool again.
-   - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates or XML tags back to the user.
+   - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates, raw XML tags, or UI hierarchies back to the user.
+""".trimIndent()
+
+        val silentObservationGuardrail = """
+
+## CRITICAL GUARDRAIL: STRICT SILENT OBSERVATIONS & UI AUTOMATION PROTOCOL:
+1. STRICT SILENT OBSERVATIONS (ZERO-LEAK MANDATE):
+   - When inspecting the screen (via `read_screen_nodes`, `dump_ui_hierarchy`, `ocr_screen`, or UI dumps), you MUST analyze and parse the screen nodes, bounds, text labels, and XML hierarchies STRICTLY AND SILENTLY inside your internal thought process.
+   - ABSOLUTE ZERO-LEAK POLICY: You are STRICTLY FORBIDDEN from echoing, leaking, or outputting ANY raw XML (`<node ...>`, `<View ...>`, `<hierarchy>`), node dump trees, bounds coordinates (`[x,y][x,y]`), or UI hierarchy markers (such as `=== ACTIVE SCREEN NODE HIERARCHY ===`) in your visible chat response.
+2. MANDATORY RETURN TO HOME SCREEN AFTER APP TASKS:
+   - After completing automated tasks, navigation, swiping, or inspections inside external applications, you MUST execute `run_shell` with `input keyevent 3` to return cleanly to the Android Home Screen before delivering your final conclusion.
+3. CONCISE NATURAL LANGUAGE SUMMARY:
+   - Restrict your final user-facing response strictly to a concise, natural language summary explaining the completed actions and findings in the user's language.
+   - NEVER output raw data logs, debug traces, terminal output frames, or raw XML snippets to the user.
 """.trimIndent()
 
         if (forLocalModel) {
@@ -1258,6 +1291,9 @@ Format: <invoke name="tool_name"><parameter name="param">value</parameter></invo
 CRITICAL EXECUTION RULES:
 - TERMINAL ACTIONS: To run shell/bash commands or inspect system resources, you MUST ALWAYS invoke run_shell: <invoke name="run_shell"><parameter name="command">command</parameter></invoke>. NEVER wrap bash commands in markdown code blocks!
 - PROGRAMMING CODE: Only wrap programming code (Python, Kotlin, HTML, JS) in markdown triple backticks (```language ... ```) when writing software artifacts.
+- STRICT SILENT OBSERVATIONS: Parse UI node hierarchies and XML dumps silently in your thought process. NEVER leak raw XML, `<node>`, or hierarchy trees into your visible response.
+- RETURN TO HOME SCREEN: After completing external app tasks, execute run_shell with 'input keyevent 3' to return cleanly to the Home Screen.
+- FINAL OUTPUT: Restrict final output to a concise, natural language summary in the user's language without raw data logs or dumps.
 
 $languageEnforcement""".trimIndent()
         }
@@ -1293,7 +1329,7 @@ $languageEnforcement""".trimIndent()
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines\n\n$silentObservationGuardrail$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1440,6 +1476,7 @@ $languageEnforcement""".trimIndent()
                 var keepGoing = true
                 var iterationCount = 0
                 var toolsUsedThisTurn = false
+                var lastActionUsed: String? = null
                 var toolCallCount = 0
                 val MAX_TOOL_CALLS = 4
                 var forceFinalTurn = false
@@ -1687,6 +1724,7 @@ $languageEnforcement""".trimIndent()
                             toolsUsedThisTurn = true
                             val primaryCall = validToolCalls.first()
                             val action = primaryCall.name.trim().lowercase()
+                            lastActionUsed = action
                             val params = primaryCall.params
                             val rawExplanatoryText = StreamDemultiplexer.extractPreambleProse(fullResponse, primaryCall.rawMatch)
                             toolCallCount++
@@ -1832,10 +1870,24 @@ $langFinalInstruction"""
                                 else -> {
                                     val (usedTools, summary) = executeToolLoop(fullResponse, actualContext)
                                     val cleanSummary = summary ?: ""
+                                    val isUiInspection = action in setOf(
+                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen",
+                                        "ocr_screen", "screen_vision", "capture_screen"
+                                    )
+                                    val userFacingSummary = if (isUiInspection) {
+                                        when (detectedLang) {
+                                            DetectedLanguage.ARABIC -> "🔍 تم فحص وتحليل عناصر واجهة الشاشة بنجاح."
+                                            DetectedLanguage.FRENCH -> "🔍 Éléments de l'interface analysés en arrière-plan."
+                                            DetectedLanguage.SPANISH -> "🔍 Elementos de la interfaz analizados en segundo plano."
+                                            DetectedLanguage.ENGLISH -> "🔍 Active screen UI elements inspected silently."
+                                        }
+                                    } else {
+                                        cleanSummary
+                                    }
                                     val lockedSegmentText = when {
-                                        explanatoryText.isNotBlank() && cleanSummary.isNotBlank() -> "$explanatoryText\n\n$cleanSummary"
+                                        explanatoryText.isNotBlank() && userFacingSummary.isNotBlank() -> "$explanatoryText\n\n$userFacingSummary"
                                         explanatoryText.isNotBlank() -> explanatoryText
-                                        cleanSummary.isNotBlank() -> cleanSummary
+                                        userFacingSummary.isNotBlank() -> userFacingSummary
                                         else -> ""
                                     }
                                     _uiState.update { state ->
@@ -1857,10 +1909,14 @@ $langFinalInstruction"""
                                     )
                                     val truncatedSummary = sanitizeProcessOutput(cleanSummary, maxChars = 1200, maxLines = 25)
                                     val observationMsg = if (isUiTool) {
-                                        """[UI Automation Action Observation]:
+                                        """[UI Automation Action Observation (SILENT - PARSE IN THOUGHT PROCESS ONLY)]:
 $truncatedSummary
 
-INSTRUCTION: You have successfully executed this action on the device. If the user's objective requires further steps (such as swiping, clicking, typing, or reading), call the next tool. If the task is finished, deliver your final concise summary to the user directly or invoke complete(summary).
+CRITICAL GUARDRAIL: Analyze and parse this UI observation SILENTLY in your thought process.
+- DO NOT leak, repeat, or output raw XML, node dumps, bounds, or hierarchy trees into your visible response.
+- If more steps are needed, call the next tool.
+- When finishing tasks in external applications, execute `run_shell` with `input keyevent 3` to return cleanly to the Home Screen.
+- Your final reply must be strictly a concise, natural language summary in the user's language without any raw data logs or XML tags.
 $langFinalInstruction"""
                                     } else {
                                         """[Tool Execution Findings]:
@@ -1889,7 +1945,7 @@ $langFinalInstruction"""
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
                             // Automatic Return-to-Home and ATLAS-AI Refocus upon task completion
-                            if (toolsUsedThisTurn) {
+                            if (toolsUsedThisTurn && lastActionUsed !in setOf("open_app", "launch_app")) {
                                 try {
                                     TaskCompletionProtocol.executeReturnToHome(actualContext)
                                 } catch (e: Exception) {

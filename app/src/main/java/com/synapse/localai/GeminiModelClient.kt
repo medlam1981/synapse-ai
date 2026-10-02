@@ -816,7 +816,7 @@ class GeminiModelClient(
                 listOf(
                     defineFunction(
                         name = "run_shell",
-                        description = "Execute a shell command with root or adb permissions",
+                        description = "Execute a shell command with root or adb permissions (e.g. to inspect system resources, or 'input keyevent 3' to return to the Home Screen after finishing app tasks)",
                         parameters = listOf(Schema.str("command", "The bash shell command to execute")),
                         requiredParameters = listOf("command")
                     ),
@@ -828,7 +828,7 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "read_screen_nodes",
-                        description = "Read active screen UI node hierarchy (texts, IDs, bounds, clickable buttons)",
+                        description = "Read active screen UI node hierarchy (texts, IDs, bounds, clickable buttons). Must be parsed silently in your thought process without leaking raw XML or node dumps to the user.",
                         parameters = emptyList(),
                         requiredParameters = emptyList()
                     ),
