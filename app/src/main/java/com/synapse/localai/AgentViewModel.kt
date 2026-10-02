@@ -50,6 +50,8 @@ import com.synapse.localai.tools.DocumentTool
 import com.synapse.localai.tools.WebSearchTool
 import com.synapse.localai.tools.PythonTool
 import com.synapse.localai.tools.ContentReaderTool
+import com.synapse.localai.tools.UiAutomationTool
+import com.synapse.localai.tools.ScreenVisionTool
 import com.synapse.localai.repository.ImageGenerator
 import com.synapse.localai.repository.ImageRepository
 import com.synapse.localai.repository.ImageResult
@@ -1248,7 +1250,7 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
             return """$languageEnforcement
 
 $effectivePersona$localGreetingNote
-Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
+Tools: open_app(pkg), run_shell(cmd), write_file(path, content), read_file_range(path, start_line, line_count), web_search(query), fetch_web_content(url), run_python(script), read_screen_nodes(), click(target), swipe(direction), input_text(text, target), capture_screen(save_path), ocr_screen(image_path), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - TERMINAL ACTIONS: To run shell/bash commands or inspect system resources, you MUST ALWAYS invoke run_shell: <invoke name="run_shell"><parameter name="command">command</parameter></invoke>. NEVER wrap bash commands in markdown code blocks!
@@ -1263,7 +1265,23 @@ $languageEnforcement""".trimIndent()
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+- Available tools:
+  * open_app(package_name): Launch an Android application by package name or alias.
+  * run_shell(command): Execute a shell/bash command with root privileges.
+  * write_file(path, content): Create or overwrite a local file atomically.
+  * read_file_range(path, start_line, line_count): Read chunk slices from large files safely without OOM.
+  * web_search(query): Real-time internet search for up-to-date information.
+  * fetch_web_content(url): Extract clean text from a web page URL.
+  * run_python(script): Execute Python code for advanced mathematics and computation.
+  * read_screen_nodes(): Read active screen UI node hierarchy (texts, IDs, bounds, clickable buttons).
+  * click(target): Click an element by text, ID, or direct screen coordinates "x,y".
+  * swipe(direction): Perform swipe gesture ("up", "down", "left", "right" or "startX,startY,endX,endY").
+  * input_text(text, target): Inject text into an editable element or currently active input field.
+  * capture_screen(save_path): Capture the active screen framebuffer buffer to PNG image file.
+  * ocr_screen(image_path): Inspect visual elements, extract text labels, and map button coordinates.
+  * schedule_task(description, command, delay_minutes): Schedule delayed task execution with Android system alarm.
+  * queue_background_task(command): Queue a task for asynchronous background thread execution.
+  * complete(summary): Finalize task execution cycles and return direct output summaries.
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
@@ -1685,21 +1703,45 @@ $languageEnforcement""".trimIndent()
                                     DetectedLanguage.ARABIC -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "سأقوم بتنفيذ الأمر وفحص النظام الآن:"
                                         "web_search", "search", "google_search" -> "سأقوم بالبحث والتحقق من المصادر الآن:"
+                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "سأقوم بفحص عناصر واجهة الشاشة النشطة الآن:"
+                                        "click", "click_node", "tap" -> "سأقوم بالنقر والتفاعل مع العنصر المحدد الآن:"
+                                        "swipe", "scroll" -> "سأقوم بتنفيذ حركة التمرير على الشاشة الآن:"
+                                        "input_text", "type_text" -> "سأقوم بكتابة النص في الحقل المحدد الآن:"
+                                        "capture_screen", "screenshot" -> "سأقوم بالتقاط لقطة للشاشة الآن:"
+                                        "ocr_screen", "screen_vision" -> "سأقوم بتحليل عناصر الشاشة واستخراج النصوص الآن:"
                                         else -> "جاري تنفيذ العملية المطلوبة:"
                                     }
                                     DetectedLanguage.FRENCH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Exécution de la commande système en cours :"
                                         "web_search", "search", "google_search" -> "Recherche d'informations vérifiées en cours :"
+                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "Inspection des éléments de l'écran en cours :"
+                                        "click", "click_node", "tap" -> "Interaction avec l'élément sélectionné en cours :"
+                                        "swipe", "scroll" -> "Exécution du geste sur l'écran en cours :"
+                                        "input_text", "type_text" -> "Saisie du texte dans le champ cible en cours :"
+                                        "capture_screen", "screenshot" -> "Capture de l'écran en cours :"
+                                        "ocr_screen", "screen_vision" -> "Analyse visuelle de l'écran en cours :"
                                         else -> "Exécution de l'opération demandée :"
                                     }
                                     DetectedLanguage.SPANISH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Ejecutando comando de diagnóstico del sistema ahora:"
                                         "web_search", "search", "google_search" -> "Buscando información verificada ahora:"
+                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "Inspeccionando elementos de la pantalla ahora:"
+                                        "click", "click_node", "tap" -> "Interactuando con el elemento en pantalla ahora:"
+                                        "swipe", "scroll" -> "Realizando gesto en pantalla ahora:"
+                                        "input_text", "type_text" -> "Ingresando texto en el campo objetivo ahora:"
+                                        "capture_screen", "screenshot" -> "Capturando pantalla ahora:"
+                                        "ocr_screen", "screen_vision" -> "Analizando elementos visuales de la pantalla ahora:"
                                         else -> "Ejecutando la operación solicitada:"
                                     }
                                     DetectedLanguage.ENGLISH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Executing system diagnostic command now:"
                                         "web_search", "search", "google_search" -> "Searching for verified information now:"
+                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "Inspecting active screen UI elements now:"
+                                        "click", "click_node", "tap" -> "Interacting with target screen element now:"
+                                        "swipe", "scroll" -> "Performing gesture on screen now:"
+                                        "input_text", "type_text" -> "Injecting text into target field now:"
+                                        "capture_screen", "screenshot" -> "Capturing screen buffer now:"
+                                        "ocr_screen", "screen_vision" -> "Analyzing screen visuals and text elements now:"
                                         else -> "Executing requested operation:"
                                     }
                                 }
@@ -2138,11 +2180,58 @@ $langFinalInstruction"""
                                 source = "agent_scheduler"
                             )
                             taskMemory?.addTask(task)
+                            actualContext?.let { TaskAlarmReceiver.scheduleTaskAlarm(it, task.id, executeAt) }
                             updateTaskState()
                             actionToolUsed = true
                             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(executeAt))
                             summaries.add("✔ Task Scheduled:\n• Description: $desc\n• Command: $cmd\n• Scheduled run time: $timeStr (in $delayMinutes minute(s))\n• Task ID: ${task.id}")
                             addSystemLog("Scheduled task '$desc' for $timeStr")
+                        }
+                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> {
+                            actionToolUsed = true
+                            val hierarchy = UiAutomationTool.readScreenHierarchy(actualContext)
+                            summaries.add(hierarchy)
+                            addSystemLog("Inspected screen UI nodes")
+                        }
+                        "click", "click_node", "tap" -> {
+                            val target = params["target"] ?: params["text"] ?: params["id"] ?: params["coords"] ?: params.values.firstOrNull() ?: ""
+                            if (target.isNotBlank()) {
+                                actionToolUsed = true
+                                val result = UiAutomationTool.click(target)
+                                summaries.add(result)
+                                addSystemLog("Clicked UI target: $target")
+                            }
+                        }
+                        "swipe", "scroll" -> {
+                            val direction = params["direction"] ?: params["coords"] ?: params.values.firstOrNull() ?: "up"
+                            actionToolUsed = true
+                            val result = UiAutomationTool.swipe(direction)
+                            summaries.add(result)
+                            addSystemLog("Swiped UI: $direction")
+                        }
+                        "input_text", "type_text" -> {
+                            val text = params["text"] ?: params["content"] ?: params.values.firstOrNull() ?: ""
+                            val target = params["target"] ?: params["id"]
+                            if (text.isNotBlank()) {
+                                actionToolUsed = true
+                                val result = UiAutomationTool.inputText(text, target)
+                                summaries.add(result)
+                                addSystemLog("Injected UI text: $text")
+                            }
+                        }
+                        "capture_screen", "screenshot", "take_screenshot" -> {
+                            val path = params["save_path"] ?: params["path"]
+                            actionToolUsed = true
+                            val result = ScreenVisionTool.captureScreen(path)
+                            summaries.add(result)
+                            addSystemLog("Captured screen buffer")
+                        }
+                        "ocr_screen", "screen_vision", "read_screen_text" -> {
+                            val path = params["image_path"] ?: params["path"]
+                            actionToolUsed = true
+                            val result = ScreenVisionTool.ocrScreen(path, actualContext)
+                            summaries.add(result)
+                            addSystemLog("Processed screen vision & OCR")
                         }
                         "queue_background_task", "background_task", "queue_task" -> {
                             val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
