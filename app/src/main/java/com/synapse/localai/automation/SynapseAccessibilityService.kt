@@ -184,7 +184,7 @@ class SynapseAccessibilityService : AccessibilityService() {
         val path = Path().apply {
             moveTo(x, y)
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 100)
+        val stroke = GestureDescription.StrokeDescription(path, 0, 45L)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
 
         val latch = CountDownLatch(1)
@@ -201,19 +201,20 @@ class SynapseAccessibilityService : AccessibilityService() {
             }
         }, null)
 
-        latch.await(1500, TimeUnit.MILLISECONDS)
+        latch.await(350, TimeUnit.MILLISECONDS)
         return success.get()
     }
 
     /**
      * Dispatches a smooth swipe gesture between two screen points.
      */
-    fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 300L): Boolean {
+    fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 250L): Boolean {
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(endX, endY)
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(100L, 2000L))
+        val safeDur = durationMs.coerceIn(80L, 1500L)
+        val stroke = GestureDescription.StrokeDescription(path, 0, safeDur)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
 
         val latch = CountDownLatch(1)
@@ -230,7 +231,7 @@ class SynapseAccessibilityService : AccessibilityService() {
             }
         }, null)
 
-        latch.await(durationMs + 1000L, TimeUnit.MILLISECONDS)
+        latch.await(safeDur + 400L, TimeUnit.MILLISECONDS)
         return success.get()
     }
 

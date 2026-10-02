@@ -125,6 +125,7 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("com.github.topjohnwu.libsu:core:6.0.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("ru.noties:jlatexmath-android:0.2.0")
     implementation("ru.noties:jlatexmath-android-font-greek:0.2.0")
     testImplementation("junit:junit:4.13.2")

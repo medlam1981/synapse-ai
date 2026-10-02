@@ -52,6 +52,9 @@ import com.synapse.localai.tools.PythonTool
 import com.synapse.localai.tools.ContentReaderTool
 import com.synapse.localai.tools.UiAutomationTool
 import com.synapse.localai.tools.ScreenVisionTool
+import com.synapse.localai.automation.TaskCompletionProtocol
+import com.synapse.localai.automation.SynapseAccessibilityService
+import com.synapse.localai.ModelEngineService
 import com.synapse.localai.repository.ImageGenerator
 import com.synapse.localai.repository.ImageRepository
 import com.synapse.localai.repository.ImageResult
@@ -1370,6 +1373,7 @@ $languageEnforcement""".trimIndent()
             
             try {
                 var finalCommand = command
+                actualContext?.let { ModelEngineService.start(it, "ATLAS-AI: ${finalCommand.take(40)}") }
                 val imageBase64List = mutableListOf<String>()
 
                 val modelType = _uiState.value.activeModelType
@@ -1925,7 +1929,10 @@ $langFinalInstruction"""
                 addLog(LogEntry(sender = "SYSTEM", text = "Mission Error: ${e.message}", isError = true))
             } finally {
                 _uiState.update { it.copy(isProcessing = false, currentPhase = AgentActionPhase.IDLE, activeStatusDetail = "Idle / Ready", streamInterruptMsg = null) }
-                if (actualContext != null) saveConversation(actualContext)
+                if (actualContext != null) {
+                    saveConversation(actualContext)
+                    ModelEngineService.updateStatus(actualContext, "ATLAS-AI • Ready")
+                }
                 updateTaskState()
                 processNextQueuedCommand(context)
             }
@@ -1950,6 +1957,7 @@ $langFinalInstruction"""
         if (!isModelLoaded()) throw IllegalStateException("Model not ready")
         
         val ctx = appContext ?: MainActivity.instance
+        ctx?.let { ModelEngineService.start(it, "Background: ${command.take(40)}") }
         val pm = ctx?.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         val wakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "synapse:BackgroundTask")
         wakeLock?.acquire(10 * 60 * 1000L)
@@ -2006,6 +2014,7 @@ $langFinalInstruction"""
             }
             return resultSb.toString().ifBlank { "Task completed after $iterations iterations" }
         } finally {
+            ctx?.let { ModelEngineService.updateStatus(it, "ATLAS-AI • Ready") }
             if (wakeLock?.isHeld == true) wakeLock.release()
             updateTaskState()
         }
@@ -2187,6 +2196,25 @@ $langFinalInstruction"""
                             summaries.add("✔ Task Scheduled:\n• Description: $desc\n• Command: $cmd\n• Scheduled run time: $timeStr (in $delayMinutes minute(s))\n• Task ID: ${task.id}")
                             addSystemLog("Scheduled task '$desc' for $timeStr")
                         }
+                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
+                            val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
+                            if (cmd.isNotBlank()) {
+                                actionToolUsed = true
+                                val (exitCode, output) = runShellWithExitCode(cmd)
+                                summaries.add("✔ Tool(run_shell: $cmd) [exit: $exitCode]\n$output")
+                                addSystemLog("Executed shell: $cmd (exit: $exitCode)")
+                            }
+                        }
+                        "write_file", "save_file", "create_file" -> {
+                            val path = params["path"] ?: params["file"] ?: ""
+                            val content = params["content"] ?: params["text"] ?: params["data"] ?: ""
+                            if (path.isNotBlank()) {
+                                actionToolUsed = true
+                                val res = ToolHandler.handleWriteFile(path, content)
+                                summaries.add(res.summary)
+                                addSystemLog("Wrote file: $path (${content.length} bytes)")
+                            }
+                        }
                         "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> {
                             actionToolUsed = true
                             val hierarchy = UiAutomationTool.readScreenHierarchy(actualContext)
@@ -2197,7 +2225,7 @@ $langFinalInstruction"""
                             val target = params["target"] ?: params["text"] ?: params["id"] ?: params["coords"] ?: params.values.firstOrNull() ?: ""
                             if (target.isNotBlank()) {
                                 actionToolUsed = true
-                                val result = UiAutomationTool.click(target)
+                                val result = UiAutomationTool.click(target, actualContext)
                                 summaries.add(result)
                                 addSystemLog("Clicked UI target: $target")
                             }
@@ -2205,7 +2233,7 @@ $langFinalInstruction"""
                         "swipe", "scroll" -> {
                             val direction = params["direction"] ?: params["coords"] ?: params.values.firstOrNull() ?: "up"
                             actionToolUsed = true
-                            val result = UiAutomationTool.swipe(direction)
+                            val result = UiAutomationTool.swipe(direction, actualContext)
                             summaries.add(result)
                             addSystemLog("Swiped UI: $direction")
                         }
@@ -2214,7 +2242,7 @@ $langFinalInstruction"""
                             val target = params["target"] ?: params["id"]
                             if (text.isNotBlank()) {
                                 actionToolUsed = true
-                                val result = UiAutomationTool.inputText(text, target)
+                                val result = UiAutomationTool.inputText(text, target, actualContext)
                                 summaries.add(result)
                                 addSystemLog("Injected UI text: $text")
                             }
@@ -2270,7 +2298,18 @@ $langFinalInstruction"""
                         }
                         "complete" -> {
                             val s = params["summary"] ?: params.values.firstOrNull() ?: ""
-                            if (s.isNotBlank()) summaries.add(s)
+                            val taskName = params["task"] ?: params["title"] ?: "Task Execution"
+                            try {
+                                TaskCompletionProtocol.executeReturnToHome(actualContext)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Return-to-Home execution note: ${e.message}")
+                            }
+                            val structuredSummary = TaskCompletionProtocol.generateStructuredSummary(
+                                taskName = taskName,
+                                actionDetails = s.ifBlank { "Task sequence concluded successfully." },
+                                isSuccess = true
+                            )
+                            summaries.add(structuredSummary)
                             return@withTimeoutOrNull false to summaries.joinToString("\n\n")
                         }
                     }

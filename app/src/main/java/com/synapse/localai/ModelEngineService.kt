@@ -13,36 +13,109 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
+/**
+ * ModelEngineService — High-Priority Persistent Foreground Service for ATLAS-AI.
+ *
+ * Guarantees:
+ * 1. Persistent Foreground Process status preventing Android OOM killer termination.
+ * 2. High-priority WakeLock maintaining active CPU clock during complex automation cycles.
+ * 3. Dynamic real-time notification status reflecting ongoing agent execution tasks.
+ * 4. Resilient START_STICKY lifecycle recovery.
+ */
 class ModelEngineService : Service() {
 
     companion object {
         private const val TAG = "ModelEngineService"
         private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "synapse_model_engine"
-        private const val CHANNEL_NAME = "Atlas-AI Neural Engine"
+        private const val CHANNEL_ID = "synapse_model_engine_high"
+        private const val CHANNEL_NAME = "Atlas-AI Autonomous Agent Core"
+
+        const val ACTION_START = "com.synapse.localai.action.START_SERVICE"
+        const val ACTION_UPDATE_STATUS = "com.synapse.localai.action.UPDATE_STATUS"
+        const val ACTION_STOP = "com.synapse.localai.action.STOP_SERVICE"
+        const val EXTRA_STATUS = "extra_status"
 
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        @Volatile
+        var currentStatus: String = "Neural Cognitive Matrix • Ready"
+            private set
+
+        fun start(context: Context, initialStatus: String? = null) {
+            try {
+                val intent = Intent(context, ModelEngineService::class.java).apply {
+                    action = ACTION_START
+                    if (initialStatus != null) putExtra(EXTRA_STATUS, initialStatus)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to start ModelEngineService: ${e.message}")
+            }
+        }
+
+        fun updateStatus(context: Context, status: String) {
+            currentStatus = status
+            try {
+                val intent = Intent(context, ModelEngineService::class.java).apply {
+                    action = ACTION_UPDATE_STATUS
+                    putExtra(EXTRA_STATUS, status)
+                }
+                context.startService(intent)
+            } catch (_: Exception) {}
+        }
+
+        fun stop(context: Context) {
+            try {
+                val intent = Intent(context, ModelEngineService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                context.stopService(intent)
+            } catch (_: Exception) {}
+        }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "ModelEngineService created")
+        Log.i(TAG, "ModelEngineService created as High-Priority Foreground Service")
         acquireWakeLock()
-        startForegroundServiceNotification()
+        startForegroundWithStatus(currentStatus)
         isRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "ModelEngineService running in foreground")
-        startForegroundServiceNotification()
+        val action = intent?.action
+        val statusExtra = intent?.getStringExtra(EXTRA_STATUS)
+
+        if (statusExtra != null) {
+            currentStatus = statusExtra
+        }
+
+        when (action) {
+            ACTION_STOP -> {
+                Log.i(TAG, "Received ACTION_STOP, shutting down foreground service")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_UPDATE_STATUS -> {
+                startForegroundWithStatus(currentStatus)
+            }
+            else -> {
+                startForegroundWithStatus(currentStatus)
+            }
+        }
+
         return START_STICKY
     }
 
-    private fun startForegroundServiceNotification() {
+    private fun startForegroundWithStatus(statusText: String) {
         createNotificationChannel()
 
         val notificationIntent = Intent(this, MainActivity::class.java).apply {
@@ -63,13 +136,14 @@ class ModelEngineService : Service() {
         )
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ATLAS-AI AGENT Active")
-            .setContentText("Neural Cognitive Matrix • Running in Background")
+            .setContentTitle("ATLAS-AI Autonomous Agent Active")
+            .setContentText(statusText)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
 
         startForeground(NOTIFICATION_ID, notification)
@@ -80,9 +154,9 @@ class ModelEngineService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Keeps ATLAS-AI Local Engine active in background"
+                description = "Keeps ATLAS-AI High-Priority Engine active during task execution"
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
@@ -96,12 +170,12 @@ class ModelEngineService : Service() {
                 val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
                 wakeLock = pm?.newWakeLock(
                     PowerManager.PARTIAL_WAKE_LOCK,
-                    "AtlasAI:ModelEngineWakeLock"
+                    "AtlasAI:HighPriorityExecutionLock"
                 )?.apply {
                     setReferenceCounted(false)
-                    acquire()
+                    acquire(24 * 60 * 60 * 1000L) // Safe 24h cap
                 }
-                Log.i(TAG, "Partial WakeLock acquired")
+                Log.i(TAG, "High-Priority Partial WakeLock acquired")
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to acquire WakeLock: ${e.message}")
@@ -130,7 +204,12 @@ class ModelEngineService : Service() {
         Log.i(TAG, "ModelEngineService destroyed")
         isRunning = false
         releaseWakeLock()
-        stopForeground(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         super.onDestroy()
     }
 }

@@ -242,17 +242,6 @@ class GeminiModelClient(
                 try {
                     val effectiveModelName = AgentViewModel.sanitizeGeminiModelName(modelName)
 
-                    val shellTool = Tool(
-                        listOf(
-                            defineFunction(
-                                name = "run_shell",
-                                description = "Execute a shell command in the system terminal",
-                                parameters = listOf(Schema.str("command", "The bash shell command to execute")),
-                                requiredParameters = listOf("command")
-                            )
-                        )
-                    )
-
                     val generativeModel = GenerativeModel(
                         modelName = effectiveModelName,
                         apiKey = apiKey,
@@ -266,7 +255,7 @@ class GeminiModelClient(
                             SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
                             SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
                         ),
-                        tools = listOf(shellTool),
+                        tools = getAgentTools(),
                         systemInstruction = content { text(systemPrompt) }
                     )
 
@@ -298,9 +287,13 @@ class GeminiModelClient(
                         if (fns.isNotEmpty()) {
                             val call = fns.first()
                             lastFunctionCall = call
-                            val cmd = call.args["command"] ?: call.args.values.firstOrNull() ?: ""
-                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (command: $cmd)")
-                            val toolXml = "<invoke name=\"${call.name}\">\n<parameter name=\"command\">$cmd</parameter>\n</invoke>"
+                            val paramsXml = if (call.args.isNotEmpty()) {
+                                call.args.entries.joinToString("\n") { (k, v) ->
+                                    "<parameter name=\"$k\">$v</parameter>"
+                                }
+                            } else ""
+                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (args: ${call.args})")
+                            val toolXml = "<invoke name=\"${call.name}\">\n$paramsXml\n</invoke>"
                             channel.send(toolXml)
                             channel.close()
                             functionCallDetected = true
@@ -524,17 +517,6 @@ class GeminiModelClient(
                 try {
                     val effectiveModelName = AgentViewModel.sanitizeGeminiModelName(modelName)
 
-                    val shellTool = Tool(
-                        listOf(
-                            defineFunction(
-                                name = "run_shell",
-                                description = "Execute a shell command in the system terminal",
-                                parameters = listOf(Schema.str("command", "The bash shell command to execute")),
-                                requiredParameters = listOf("command")
-                            )
-                        )
-                    )
-
                     val generativeModel = GenerativeModel(
                         modelName = effectiveModelName,
                         apiKey = apiKey,
@@ -548,7 +530,7 @@ class GeminiModelClient(
                             SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
                             SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
                         ),
-                        tools = listOf(shellTool),
+                        tools = getAgentTools(),
                         systemInstruction = content { text(systemPrompt) }
                     )
 
@@ -575,9 +557,13 @@ class GeminiModelClient(
                         if (fns.isNotEmpty()) {
                             val call = fns.first()
                             lastFunctionCall = call
-                            val cmd = call.args["command"] ?: call.args.values.firstOrNull() ?: ""
-                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (command: $cmd)")
-                            val toolXml = "<invoke name=\"${call.name}\">\n<parameter name=\"command\">$cmd</parameter>\n</invoke>"
+                            val paramsXml = if (call.args.isNotEmpty()) {
+                                call.args.entries.joinToString("\n") { (k, v) ->
+                                    "<parameter name=\"$k\">$v</parameter>"
+                                }
+                            } else ""
+                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (args: ${call.args})")
+                            val toolXml = "<invoke name=\"${call.name}\">\n$paramsXml\n</invoke>"
                             channel.send(toolXml)
                             channel.close()
                             functionCallDetected = true
@@ -823,6 +809,128 @@ class GeminiModelClient(
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun getAgentTools(): List<Tool> {
+        return listOf(
+            Tool(
+                listOf(
+                    defineFunction(
+                        name = "run_shell",
+                        description = "Execute a shell command with root or adb permissions",
+                        parameters = listOf(Schema.str("command", "The bash shell command to execute")),
+                        requiredParameters = listOf("command")
+                    ),
+                    defineFunction(
+                        name = "open_app",
+                        description = "Launch an Android application dynamically using package name or app name",
+                        parameters = listOf(Schema.str("package_name", "Android package name or application name")),
+                        requiredParameters = listOf("package_name")
+                    ),
+                    defineFunction(
+                        name = "read_screen_nodes",
+                        description = "Read active screen UI node hierarchy (texts, IDs, bounds, clickable buttons)",
+                        parameters = emptyList(),
+                        requiredParameters = emptyList()
+                    ),
+                    defineFunction(
+                        name = "click",
+                        description = "Click an element by text, ID, or direct screen coordinates 'x,y'",
+                        parameters = listOf(Schema.str("target", "Text, resource ID, or 'x,y' coordinates of the element")),
+                        requiredParameters = listOf("target")
+                    ),
+                    defineFunction(
+                        name = "swipe",
+                        description = "Perform a swipe gesture ('up', 'down', 'left', 'right' or 'startX,startY,endX,endY')",
+                        parameters = listOf(Schema.str("direction", "Direction or coordinate trajectory")),
+                        requiredParameters = listOf("direction")
+                    ),
+                    defineFunction(
+                        name = "input_text",
+                        description = "Inject text into an editable element or currently active input field",
+                        parameters = listOf(
+                            Schema.str("text", "The text to type"),
+                            Schema.str("target", "Optional target element text or ID")
+                        ),
+                        requiredParameters = listOf("text")
+                    ),
+                    defineFunction(
+                        name = "capture_screen",
+                        description = "Capture the active screen framebuffer buffer to a PNG image file",
+                        parameters = listOf(Schema.str("save_path", "Optional file path to save screenshot")),
+                        requiredParameters = emptyList()
+                    ),
+                    defineFunction(
+                        name = "ocr_screen",
+                        description = "Inspect visual elements, extract text labels, and map button coordinates via ML Kit OCR",
+                        parameters = listOf(Schema.str("image_path", "Optional path to image file, or active screen if empty")),
+                        requiredParameters = emptyList()
+                    ),
+                    defineFunction(
+                        name = "write_file",
+                        description = "Create or overwrite a local file atomically",
+                        parameters = listOf(
+                            Schema.str("path", "File path on disk"),
+                            Schema.str("content", "Text content to write into file")
+                        ),
+                        requiredParameters = listOf("path", "content")
+                    ),
+                    defineFunction(
+                        name = "read_file_range",
+                        description = "Read chunk slices from large files safely without OOM",
+                        parameters = listOf(
+                            Schema.str("path", "Path of file to read"),
+                            Schema.str("start_line", "Start line (1-indexed)"),
+                            Schema.str("line_count", "Number of lines to read")
+                        ),
+                        requiredParameters = listOf("path")
+                    ),
+                    defineFunction(
+                        name = "web_search",
+                        description = "Query live search engines for real-time facts and documentation",
+                        parameters = listOf(Schema.str("query", "Search terms or question")),
+                        requiredParameters = listOf("query")
+                    ),
+                    defineFunction(
+                        name = "fetch_web_content",
+                        description = "Extract clean text content from web URLs",
+                        parameters = listOf(Schema.str("url", "Web page URL to fetch")),
+                        requiredParameters = listOf("url")
+                    ),
+                    defineFunction(
+                        name = "run_python",
+                        description = "Execute local Python code for advanced mathematics, algorithms, and computation",
+                        parameters = listOf(Schema.str("script", "Python source code to execute")),
+                        requiredParameters = listOf("script")
+                    ),
+                    defineFunction(
+                        name = "schedule_task",
+                        description = "Register delayed execution with hardware alarm triggers",
+                        parameters = listOf(
+                            Schema.str("description", "Description of scheduled task"),
+                            Schema.str("command", "Command or action to run"),
+                            Schema.str("delay_minutes", "Delay in minutes before triggering")
+                        ),
+                        requiredParameters = listOf("description", "command", "delay_minutes")
+                    ),
+                    defineFunction(
+                        name = "queue_background_task",
+                        description = "Defer heavy compute workloads to asynchronous background threads",
+                        parameters = listOf(Schema.str("command", "Command or workload to run in background")),
+                        requiredParameters = listOf("command")
+                    ),
+                    defineFunction(
+                        name = "complete",
+                        description = "Finalize task execution cycles, trigger Return-to-Home, and return direct output summary",
+                        parameters = listOf(
+                            Schema.str("summary", "Structured summary of completed actions"),
+                            Schema.str("task", "Name or description of completed task")
+                        ),
+                        requiredParameters = listOf("summary")
+                    )
+                )
+            )
+        )
+    }
 
     fun stop() {}
     fun release() { isLoaded = false }
