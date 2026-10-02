@@ -97,6 +97,7 @@ object StreamDemultiplexer {
     private val RE_TOOL_CALL = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|$)""", RegexOption.IGNORE_CASE)
     private val RE_FUNCTION_CALL = Regex("""<function_call\b[^>]*>([\s\S]*?)(?:</function_call>|$)""", RegexOption.IGNORE_CASE)
     private val RE_INVOKE = Regex("""<invoke\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)(?:</invoke>|$)""", RegexOption.IGNORE_CASE)
+    private val RE_FUNCTION_CALL_STYLE = Regex("""\b(run_shell|open_app|web_search|write_file|read_file_range|run_python|fetch_web_content|schedule_task|complete)\s*\(([\s\S]*?)\)""", RegexOption.IGNORE_CASE)
     private val RE_FENCED_JSON = Regex("""```(?:json)?\s*\n?(\{[\s\S]*?\}|\[[\s\S]*?\])\s*\n?```""", RegexOption.IGNORE_CASE)
     private val RE_RAW_JSON = Regex("""(?:\A|\n)\s*(\{\s*\"(?:name|tool|action|type)\"\s*:[\s\S]*?(?:\}\s*(?:\n|\Z)|$))""")
     private val RE_DEMUX_PLACEHOLDER = Regex("""___DEMUX_BLOCK_([a-zA-Z0-9_\-]+)___""")
@@ -547,7 +548,14 @@ object StreamDemultiplexer {
         if (params.isEmpty() && argsStr.isNotBlank()) {
             val clean = argsStr.removeSurrounding("\"").removeSurrounding("'").trim()
             params["command"] = clean
+            params["cmd"] = clean
             params["package_name"] = clean
+            params["query"] = clean
+            params["q"] = clean
+            params["script"] = clean
+            params["url"] = clean
+            params["path"] = clean
+            params["summary"] = clean
         }
         return params
     }
@@ -619,7 +627,19 @@ object StreamDemultiplexer {
             }
         }
 
-        // 4. Fallback: Fenced ```bash ... ``` or ```sh ... ``` commands
+        // 4. Functional call style: run_shell("cmd"), open_app("pkg"), web_search("query"), etc.
+        for (m in RE_FUNCTION_CALL_STYLE.findAll(text)) {
+            val toolName = m.groupValues[1].lowercase().trim()
+            val argsRaw = m.groupValues[2].trim()
+            val params = parsePythonArgs(argsRaw)
+            val key = "$toolName:${params.entries.sortedBy { it.key }.joinToString { "${it.key}=${it.value}" }}"
+            if (!seen.contains(key)) {
+                seen.add(key)
+                results.add(ParsedToolCall(name = toolName, params = params, isClosed = true, rawMatch = m.value))
+            }
+        }
+
+        // 5. Fallback: Fenced ```bash ... ``` or ```sh ... ``` commands
         // If the model generated a bash code block instead of invoking run_shell,
         // intercept it cleanly and execute it in the terminal frame!
         if (results.isEmpty()) {
@@ -684,7 +704,7 @@ object StreamDemultiplexer {
      * Synchronous ReAct Barrier: Detects if incoming token text has reached a completed tool call.
      */
     fun hasCompletedToolCall(text: String): Boolean {
-        if (!text.contains('>') && !text.contains('}') && !text.contains("```")) return false
+        if (!text.contains('>') && !text.contains('}') && !text.contains("```") && !text.contains(')')) return false
         if (text.contains("</tool_call>", ignoreCase = true) && text.contains("<tool_call", ignoreCase = true)) return true
         if (text.contains("</invoke>", ignoreCase = true) && text.contains("<invoke", ignoreCase = true)) return true
         if (text.contains("</function_call>", ignoreCase = true) && text.contains("<function_call", ignoreCase = true)) return true
@@ -693,6 +713,7 @@ object StreamDemultiplexer {
         if (text.contains("```") && RE_FENCED_TOOL_JSON.containsMatchIn(text)) return true
         if (text.contains("```") && RE_FENCED_BASH_BLOCK.containsMatchIn(text)) return true
         if (text.contains('{') && RE_RAW_TOOL_JSON.containsMatchIn(text)) return true
+        if (text.contains(')') && RE_FUNCTION_CALL_STYLE.containsMatchIn(text)) return true
         return false
     }
 
@@ -713,6 +734,10 @@ object StreamDemultiplexer {
         }
         if (earliestEnd != -1) {
             return text.substring(0, earliestEnd).trimEnd()
+        }
+        val funcStyleMatch = RE_FUNCTION_CALL_STYLE.find(text)
+        if (funcStyleMatch != null) {
+            return text.substring(0, funcStyleMatch.range.last + 1).trimEnd()
         }
         val fencedMatch = RE_FENCED_TOOL_JSON.find(text)
         if (fencedMatch != null) {

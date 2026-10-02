@@ -23,13 +23,11 @@ object PersonaDataStore {
         if (prompt.contains("Worker 1") ||
             prompt.contains("Worker 2") ||
             prompt.contains("ChatGPT") ||
-            !prompt.contains("ATLAS-AI") ||
-            !prompt.contains("GREETINGS") ||
-            !prompt.contains("STRICT LANGUAGE RULE FOR GREETINGS") ||
-            !prompt.contains("CORE OPERATIONAL DOCTRINE") ||
-            !prompt.contains("TERMINAL COMMAND EXECUTION") ||
-            !prompt.contains("ZERO-HALLUCINATION IMMEDIATE TOOL DISPATCH") ||
-            !prompt.contains("DYNAMIC MIRRORING")) {
+            !prompt.contains("ATLAS") ||
+            !prompt.contains("AUTONOMOUS LOCAL ADMINISTRATOR") ||
+            !prompt.contains("GUI BLINDNESS") ||
+            !prompt.contains("MANDATORY WAIT STATE") ||
+            !prompt.contains("NO PREMATURE CLOSURE")) {
             return true
         }
         return false

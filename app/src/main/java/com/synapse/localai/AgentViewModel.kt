@@ -1592,7 +1592,7 @@ $languageEnforcement""".trimIndent()
 
                                     // Fast-path: only check tool call barrier when chunk contains closing delimiter '>', '}', or '`'
                                     if (modelType == ModelType.GGUF && !forceFinalTurn &&
-                                        (chunk.contains('>') || chunk.contains('}') || chunk.contains('`')) &&
+                                        (chunk.contains('>') || chunk.contains('}') || chunk.contains('`') || chunk.contains(')')) &&
                                         StreamDemultiplexer.hasCompletedToolCall(responseSb.takeLast(350).toString())) {
                                         throw SynchronousToolBarrierException()
                                     }
@@ -1785,9 +1785,11 @@ $languageEnforcement""".trimIndent()
                                     val observationMsg = """[Command Output (Exit code $exitCode)]:
 $output
 
-MANDATORY INSTRUCTION: The command execution is finished. Do NOT invoke any tools or execute shell commands again.
-$langFinalInstruction
-Summarize the metrics, explain what the numbers mean clearly, and provide the final conclusion."""
+MANDATORY PROTOCOL:
+- If further diagnostic commands, file inspections, or operational actions are required to finish the objective completely, emit the next tool call now.
+- Do NOT close the session prematurely. Never say "I will do this" without running the tool.
+- Once all necessary actions are finished, deliver your structured analysis and final conclusion directly to the user.
+$langFinalInstruction"""
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1818,7 +1820,9 @@ Summarize the metrics, explain what the numbers mean clearly, and provide the fi
                                     val observationMsg = """[Web Search Results for "$searchQuery"]:
 $truncatedSearch
 
-MANDATORY INSTRUCTION: Web search is complete. Do NOT call any more tools.
+MANDATORY PROTOCOL:
+- If you need to fetch full content from a URL via fetch_web_content or run further checks, emit the tool call now.
+- Otherwise, deliver your verified final answer directly to the user.
 $langFinalInstruction"""
 
                                     synchronized(conversationHistory) {
@@ -1893,11 +1897,7 @@ $langFinalInstruction"""
                                 }
                             }
 
-                            forceFinalTurn = if (action in setOf("open_app", "launch_app", "click", "click_node", "tap", "swipe", "scroll", "input_text", "type_text", "ocr_screen")) {
-                                toolCallCount >= 6
-                            } else {
-                                true
-                            }
+                            forceFinalTurn = toolCallCount >= MAX_TOOL_CALLS
                             activeGgufPromptPrefix = null
                             keepGoing = true
                         } else {
