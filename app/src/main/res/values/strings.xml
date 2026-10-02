@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Medlam-AI</string>
-    <string name="accessibility_service_description">ATLAS-AI Autonomous UI Automation &amp; Screen Interaction Service</string>
 </resources>

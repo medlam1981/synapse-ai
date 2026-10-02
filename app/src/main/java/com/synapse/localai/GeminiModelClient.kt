@@ -827,12 +827,6 @@ class GeminiModelClient(
                         requiredParameters = listOf("package_name")
                     ),
                     defineFunction(
-                        name = "read_screen_nodes",
-                        description = "Read active screen UI node hierarchy (texts, IDs, bounds, clickable buttons). Must be parsed silently in your thought process without leaking raw XML or node dumps to the user.",
-                        parameters = emptyList(),
-                        requiredParameters = emptyList()
-                    ),
-                    defineFunction(
                         name = "click",
                         description = "Click an element by text, ID, or direct screen coordinates 'x,y'",
                         parameters = listOf(Schema.str("target", "Text, resource ID, or 'x,y' coordinates of the element")),

@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.MediaStore
 import android.util.Log
-import com.synapse.localai.automation.SynapseAccessibilityService
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -295,7 +294,7 @@ object AppLauncherManager {
 
     /**
      * Executes bulletproof application launch.
-     * Tier 1: Standard Intent (Dispatched via AccessibilityService or Context)
+     * Tier 1: Standard Intent (Dispatched via Application Context)
      * Tier 2: Direct Shell Execution via RootShellManager (Monkey, Component start, Intent start)
      */
     fun launch(target: String, context: Context?): LaunchResult {
@@ -310,8 +309,6 @@ object AppLauncherManager {
         val pm = ctx.packageManager
         val resolvedPkg = resolvePackageName(target, pm)
         var friendlyLabel = target
-
-        val service = SynapseAccessibilityService.instance
 
         // ── Tier 1: Standard Android Launch Intent ───────────────────────────
         try {
@@ -336,13 +333,8 @@ object AppLauncherManager {
             }
 
             if (launchIntent != null) {
-                if (service != null) {
-                    service.startActivity(launchIntent)
-                    Log.i(TAG, "Tier 1: Launched $resolvedPkg via SynapseAccessibilityService")
-                } else {
-                    ctx.startActivity(launchIntent)
-                    Log.i(TAG, "Tier 1: Launched $resolvedPkg via Context")
-                }
+                ctx.startActivity(launchIntent)
+                Log.i(TAG, "Tier 1: Launched $resolvedPkg via Context")
                 friendlyLabel = try {
                     val appInfo = pm.getApplicationInfo(resolvedPkg, 0)
                     pm.getApplicationLabel(appInfo).toString()

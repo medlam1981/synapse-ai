@@ -41,21 +41,16 @@ object TaskCompletionProtocol {
 
         try {
             // Step A: Trigger "Home" intent / navigation
-            val service = SynapseAccessibilityService.instance
-            if (service != null && service.performNavigation("home")) {
-                Log.d(TAG, "Triggered Home via Accessibility Service")
-            } else {
-                try {
-                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                        addCategory(Intent.CATEGORY_HOME)
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    ctx.startActivity(homeIntent)
-                    Log.d(TAG, "Triggered Home via Intent")
-                } catch (_: Exception) {
-                    RootShellManager.exec("input keyevent 3")
-                    Log.d(TAG, "Triggered Home via Root Shell fallback")
+            try {
+                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
+                ctx.startActivity(homeIntent)
+                Log.d(TAG, "Triggered Home via Intent")
+            } catch (_: Exception) {
+                RootShellManager.exec("input keyevent 3")
+                Log.d(TAG, "Triggered Home via Root Shell fallback")
             }
 
             // Allow launcher transition to settle cleanly
@@ -69,28 +64,14 @@ object TaskCompletionProtocol {
                 putExtra("TASK_COMPLETION_REFOCUS", true)
             }
 
-            var refocused = false
-            if (service != null) {
-                try {
-                    service.startActivity(appIntent)
-                    refocused = true
-                    Log.i(TAG, "Refocused MainActivity via AccessibilityService")
-                } catch (e: Exception) {
-                    Log.w(TAG, "AccessibilityService refocus failed: ${e.message}")
-                }
-            }
-
             // Root Shell am start (guaranteed to bypass background start restrictions)
             try {
                 RootShellManager.exec("am start -n com.synapse.localai/.MainActivity -f 0x14000000")
             } catch (_: Exception) {}
 
-            if (!refocused) {
-                try {
-                    ctx.startActivity(appIntent)
-                    refocused = true
-                } catch (_: Exception) {}
-            }
+            try {
+                ctx.startActivity(appIntent)
+            } catch (_: Exception) {}
 
             Log.i(TAG, "✔ Return-to-Home and Interface Refocus executed successfully.")
             true

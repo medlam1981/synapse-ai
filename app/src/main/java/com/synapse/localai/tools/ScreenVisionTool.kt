@@ -186,17 +186,6 @@ object ScreenVisionTool {
             }
         }
 
-        // Secondary: Correlate with active UI layout hierarchy
-        try {
-            val hierarchy = UiAutomationTool.readScreenHierarchy(context)
-            if (!hierarchy.startsWith("[Notice") && !hierarchy.startsWith("[Error")) {
-                sb.append("\n[Detected On-Screen Text & Interactive Elements]:\n")
-                sb.append(hierarchy)
-                return@withContext sb.toString().trim()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Hierarchy extraction in OCR error: ${e.message}")
-        }
 
         // Python OCR fallback if Tesseract/OCR is installed in Termux
         try {

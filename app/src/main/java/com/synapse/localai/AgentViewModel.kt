@@ -53,7 +53,6 @@ import com.synapse.localai.tools.ContentReaderTool
 import com.synapse.localai.tools.UiAutomationTool
 import com.synapse.localai.tools.ScreenVisionTool
 import com.synapse.localai.automation.TaskCompletionProtocol
-import com.synapse.localai.automation.SynapseAccessibilityService
 import com.synapse.localai.ModelEngineService
 import com.synapse.localai.repository.ImageGenerator
 import com.synapse.localai.repository.ImageRepository
@@ -1257,27 +1256,14 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
 
 ## UNIVERSAL TOOL DISPATCHING & EPISTEMIC GROUNDING:
 1. HOST OS vs EXTERNAL WORLD:
-   - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands, and returning to home screen via `input keyevent 3`). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
+   - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
    - Use `web_search(query)` for ALL real-world facts, current events, live prices, documentation, sports, weather, entity queries, and online knowledge.
    - Use `fetch_web_content(url)` to retrieve clean, in-depth text content from URLs found via web search.
    - Use `run_python(script)` to calculate algebra, integrals, calculus, and scientific computations locally with zero hallucination.
    - Use `read_file_range(path, start_line, line_count)` to inspect large files efficiently without exhausting memory.
 2. MANDATORY SYNTHESIS TURN (CRITICAL):
    - You must NOT emit redundant tool calls. Once findings are provided, you are STRICTLY FORBIDDEN from calling the tool again.
-   - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates, raw XML tags, or UI hierarchies back to the user.
-""".trimIndent()
-
-        val silentObservationGuardrail = """
-
-## CRITICAL GUARDRAIL: STRICT SILENT OBSERVATIONS & UI AUTOMATION PROTOCOL:
-1. STRICT SILENT OBSERVATIONS (ZERO-LEAK MANDATE):
-   - When inspecting the screen (via `read_screen_nodes`, `dump_ui_hierarchy`, `ocr_screen`, or UI dumps), you MUST analyze and parse the screen nodes, bounds, text labels, and XML hierarchies STRICTLY AND SILENTLY inside your internal thought process.
-   - ABSOLUTE ZERO-LEAK POLICY: You are STRICTLY FORBIDDEN from echoing, leaking, or outputting ANY raw XML (`<node ...>`, `<View ...>`, `<hierarchy>`), node dump trees, bounds coordinates (`[x,y][x,y]`), or UI hierarchy markers (such as `=== ACTIVE SCREEN NODE HIERARCHY ===`) in your visible chat response.
-2. MANDATORY RETURN TO HOME SCREEN AFTER APP TASKS:
-   - After completing automated tasks, navigation, swiping, or inspections inside external applications, you MUST execute `run_shell` with `input keyevent 3` to return cleanly to the Android Home Screen before delivering your final conclusion.
-3. CONCISE NATURAL LANGUAGE SUMMARY:
-   - Restrict your final user-facing response strictly to a concise, natural language summary explaining the completed actions and findings in the user's language.
-   - NEVER output raw data logs, debug traces, terminal output frames, or raw XML snippets to the user.
+   - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates or XML tags back to the user.
 """.trimIndent()
 
         if (forLocalModel) {
@@ -1286,14 +1272,11 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
             return """$languageEnforcement
 
 $effectivePersona$localGreetingNote
-Tools: open_app(pkg), run_shell(cmd), write_file(path, content), read_file_range(path, start_line, line_count), web_search(query), fetch_web_content(url), run_python(script), read_screen_nodes(), click(target), swipe(direction), input_text(text, target), capture_screen(save_path), ocr_screen(image_path), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+Tools: open_app(pkg), run_shell(cmd), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - TERMINAL ACTIONS: To run shell/bash commands or inspect system resources, you MUST ALWAYS invoke run_shell: <invoke name="run_shell"><parameter name="command">command</parameter></invoke>. NEVER wrap bash commands in markdown code blocks!
 - PROGRAMMING CODE: Only wrap programming code (Python, Kotlin, HTML, JS) in markdown triple backticks (```language ... ```) when writing software artifacts.
-- STRICT SILENT OBSERVATIONS: Parse UI node hierarchies and XML dumps silently in your thought process. NEVER leak raw XML, `<node>`, or hierarchy trees into your visible response.
-- RETURN TO HOME SCREEN: After completing external app tasks, execute run_shell with 'input keyevent 3' to return cleanly to the Home Screen.
-- FINAL OUTPUT: Restrict final output to a concise, natural language summary in the user's language without raw data logs or dumps.
 
 $languageEnforcement""".trimIndent()
         }
@@ -1304,23 +1287,7 @@ $languageEnforcement""".trimIndent()
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools:
-  * open_app(package_name): Launch an Android application by package name or alias.
-  * run_shell(command): Execute a shell/bash command with root privileges.
-  * write_file(path, content): Create or overwrite a local file atomically.
-  * read_file_range(path, start_line, line_count): Read chunk slices from large files safely without OOM.
-  * web_search(query): Real-time internet search for up-to-date information.
-  * fetch_web_content(url): Extract clean text from a web page URL.
-  * run_python(script): Execute Python code for advanced mathematics and computation.
-  * read_screen_nodes(): Read active screen UI node hierarchy (texts, IDs, bounds, clickable buttons).
-  * click(target): Click an element by text, ID, or direct screen coordinates "x,y".
-  * swipe(direction): Perform swipe gesture ("up", "down", "left", "right" or "startX,startY,endX,endY").
-  * input_text(text, target): Inject text into an editable element or currently active input field.
-  * capture_screen(save_path): Capture the active screen framebuffer buffer to PNG image file.
-  * ocr_screen(image_path): Inspect visual elements, extract text labels, and map button coordinates.
-  * schedule_task(description, command, delay_minutes): Schedule delayed task execution with Android system alarm.
-  * queue_background_task(command): Queue a task for asynchronous background thread execution.
-  * complete(summary): Finalize task execution cycles and return direct output summaries.
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
@@ -1329,7 +1296,7 @@ $languageEnforcement""".trimIndent()
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines\n\n$silentObservationGuardrail$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1745,7 +1712,6 @@ $languageEnforcement""".trimIndent()
                                     DetectedLanguage.ARABIC -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "سأقوم بتنفيذ الأمر وفحص النظام الآن:"
                                         "web_search", "search", "google_search" -> "سأقوم بالبحث والتحقق من المصادر الآن:"
-                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "سأقوم بفحص عناصر واجهة الشاشة النشطة الآن:"
                                         "click", "click_node", "tap" -> "سأقوم بالنقر والتفاعل مع العنصر المحدد الآن:"
                                         "swipe", "scroll" -> "سأقوم بتنفيذ حركة التمرير على الشاشة الآن:"
                                         "input_text", "type_text" -> "سأقوم بكتابة النص في الحقل المحدد الآن:"
@@ -1756,7 +1722,6 @@ $languageEnforcement""".trimIndent()
                                     DetectedLanguage.FRENCH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Exécution de la commande système en cours :"
                                         "web_search", "search", "google_search" -> "Recherche d'informations vérifiées en cours :"
-                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "Inspection des éléments de l'écran en cours :"
                                         "click", "click_node", "tap" -> "Interaction avec l'élément sélectionné en cours :"
                                         "swipe", "scroll" -> "Exécution du geste sur l'écran en cours :"
                                         "input_text", "type_text" -> "Saisie du texte dans le champ cible en cours :"
@@ -1767,7 +1732,6 @@ $languageEnforcement""".trimIndent()
                                     DetectedLanguage.SPANISH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Ejecutando comando de diagnóstico del sistema ahora:"
                                         "web_search", "search", "google_search" -> "Buscando información verificada ahora:"
-                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "Inspeccionando elementos de la pantalla ahora:"
                                         "click", "click_node", "tap" -> "Interactuando con el elemento en pantalla ahora:"
                                         "swipe", "scroll" -> "Realizando gesto en pantalla ahora:"
                                         "input_text", "type_text" -> "Ingresando texto en el campo objetivo ahora:"
@@ -1778,7 +1742,6 @@ $languageEnforcement""".trimIndent()
                                     DetectedLanguage.ENGLISH -> when (action) {
                                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Executing system diagnostic command now:"
                                         "web_search", "search", "google_search" -> "Searching for verified information now:"
-                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> "Inspecting active screen UI elements now:"
                                         "click", "click_node", "tap" -> "Interacting with target screen element now:"
                                         "swipe", "scroll" -> "Performing gesture on screen now:"
                                         "input_text", "type_text" -> "Injecting text into target field now:"
@@ -1871,7 +1834,6 @@ $langFinalInstruction"""
                                     val (usedTools, summary) = executeToolLoop(fullResponse, actualContext)
                                     val cleanSummary = summary ?: ""
                                     val isUiInspection = action in setOf(
-                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen",
                                         "ocr_screen", "screen_vision", "capture_screen"
                                     )
                                     val userFacingSummary = if (isUiInspection) {
@@ -1904,7 +1866,6 @@ $langFinalInstruction"""
                                     val isUiTool = action in setOf(
                                         "open_app", "launch_app", "click", "click_node", "tap",
                                         "swipe", "scroll", "input_text", "type_text",
-                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen",
                                         "capture_screen", "ocr_screen", "screen_vision"
                                     )
                                     val truncatedSummary = sanitizeProcessOutput(cleanSummary, maxChars = 1200, maxLines = 25)
@@ -1935,7 +1896,7 @@ $langFinalInstruction"""
                                 }
                             }
 
-                            forceFinalTurn = if (action in setOf("open_app", "launch_app", "click", "click_node", "tap", "swipe", "scroll", "input_text", "type_text", "read_screen_nodes", "ocr_screen")) {
+                            forceFinalTurn = if (action in setOf("open_app", "launch_app", "click", "click_node", "tap", "swipe", "scroll", "input_text", "type_text", "ocr_screen")) {
                                 toolCallCount >= 6
                             } else {
                                 true
@@ -2294,14 +2255,7 @@ $langFinalInstruction"""
                                 actionToolUsed = true
                                 val res = ToolHandler.handleWriteFile(path, content)
                                 summaries.add(res.summary)
-                                addSystemLog("Wrote file: $path (${content.length} bytes)")
                             }
-                        }
-                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen" -> {
-                            actionToolUsed = true
-                            val hierarchy = UiAutomationTool.readScreenHierarchy(actualContext)
-                            summaries.add(hierarchy)
-                            addSystemLog("Inspected screen UI nodes")
                         }
                         "click", "click_node", "tap" -> {
                             val target = params["target"] ?: params["text"] ?: params["id"] ?: params["coords"] ?: params.values.firstOrNull() ?: ""
