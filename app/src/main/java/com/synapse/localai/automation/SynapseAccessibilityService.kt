@@ -281,6 +281,34 @@ class SynapseAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Performs native accessibility scrolling on the active scrollable container.
+     */
+    fun scroll(forward: Boolean): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val scrollable = findScrollableNode(root)
+        return if (scrollable != null) {
+            val action = if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            val success = scrollable.performAction(action)
+            try { scrollable.recycle() } catch (_: Throwable) {}
+            success
+        } else {
+            false
+        }
+    }
+
+    private fun findScrollableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        if (node.isScrollable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i)
+            val match = findScrollableNode(child)
+            if (match != null) return match
+            try { child?.recycle() } catch (_: Throwable) {}
+        }
+        return null
+    }
+
+    /**
      * Performs standard Android global navigation actions.
      */
     fun performNavigation(actionName: String): Boolean {

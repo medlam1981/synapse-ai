@@ -59,7 +59,7 @@ object TaskCompletionProtocol {
             }
 
             // Allow launcher transition to settle cleanly
-            delay(350)
+            delay(300)
 
             // Step B: Re-focus and bring ATLAS-AI primary interface to the front
             val appIntent = Intent(ctx, MainActivity::class.java).apply {
@@ -68,7 +68,30 @@ object TaskCompletionProtocol {
                         Intent.FLAG_ACTIVITY_SINGLE_TOP
                 putExtra("TASK_COMPLETION_REFOCUS", true)
             }
-            ctx.startActivity(appIntent)
+
+            var refocused = false
+            if (service != null) {
+                try {
+                    service.startActivity(appIntent)
+                    refocused = true
+                    Log.i(TAG, "Refocused MainActivity via AccessibilityService")
+                } catch (e: Exception) {
+                    Log.w(TAG, "AccessibilityService refocus failed: ${e.message}")
+                }
+            }
+
+            // Root Shell am start (guaranteed to bypass background start restrictions)
+            try {
+                RootShellManager.exec("am start -n com.synapse.localai/.MainActivity -f 0x14000000")
+            } catch (_: Exception) {}
+
+            if (!refocused) {
+                try {
+                    ctx.startActivity(appIntent)
+                    refocused = true
+                } catch (_: Exception) {}
+            }
+
             Log.i(TAG, "✔ Return-to-Home and Interface Refocus executed successfully.")
             true
         } catch (e: Exception) {

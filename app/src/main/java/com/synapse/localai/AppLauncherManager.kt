@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.MediaStore
 import android.util.Log
+import com.synapse.localai.automation.SynapseAccessibilityService
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -137,19 +138,51 @@ object AppLauncherManager {
         "files" to "com.google.android.documentsui",
         "الملفات" to "com.google.android.documentsui",
         "مدير الملفات" to "com.google.android.documentsui",
-        "file manager" to "com.google.android.documentsui"
+        // Additional Arab & English Aliases
+        "تطبيق يوتيوب" to "com.google.android.youtube",
+        "تطبيق اليوتيوب" to "com.google.android.youtube",
+        "تطبيق واتساب" to "com.whatsapp",
+        "تطبيق الواتساب" to "com.whatsapp",
+        "الواتس" to "com.whatsapp",
+        "ضبط" to "com.android.settings",
+        "إعدادات الهاتف" to "com.android.settings",
+        "اعدادات الهاتف" to "com.android.settings",
+        "هاتف" to "com.google.android.dialer",
+        "اتصال" to "com.google.android.dialer",
+        "صور" to "com.google.android.apps.photos",
+        "معرض" to "com.google.android.apps.photos",
+        "المعرض" to "com.google.android.apps.photos",
+        "استوديو" to "com.google.android.apps.photos",
+        "متجر" to "com.android.vending",
+        "المتجر" to "com.android.vending",
+        "ساعة" to "com.google.android.deskclock",
+        "منبه" to "com.google.android.deskclock"
     )
 
     /**
-     * Resolves target string to a candidate Android package name using:
-     * 1. Strict YouTube rule
-     * 2. Deterministic alias map
-     * 3. Camera package detection
-     * 4. Dynamic PackageManager matching (labels and package names)
-     * 5. Shell `pm list packages` search
+     * Strips conversational request prefixes from package/app target in Arabic and English.
+     */
+    fun cleanAppTarget(target: String): String {
+        var clean = target.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+        val removePrefixes = listOf(
+            "افتح تطبيق ", "افتح برنامج ", "افتح ", "شغل تطبيق ", "شغل برنامج ", "شغل ", "تطبيق ", "برنامج ",
+            "open app ", "launch app ", "open ", "launch ", "app "
+        )
+        for (prefix in removePrefixes) {
+            if (clean.startsWith(prefix, ignoreCase = true)) {
+                clean = clean.substring(prefix.length).trim()
+                break
+            }
+        }
+        return clean
+    }
+
+    /**
+     * Resolves target string to a candidate Android package name.
      */
     fun resolvePackageName(target: String, pm: PackageManager?): String {
-        val clean = target.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+        val stripped = cleanAppTarget(target)
+        val clean = stripped.ifBlank { target.trim().removeSurrounding("\"").removeSurrounding("'").trim() }
         val lower = clean.lowercase(Locale.ROOT)
 
         // Strict YouTube rule: map youtube strictly to com.google.android.youtube
@@ -251,10 +284,7 @@ object AppLauncherManager {
 
         return try {
             val cmd = "pm list packages | grep -i \"$cleanKeyword\" | head -n 1 | cut -d: -f2"
-            val pb = ProcessBuilder("sh", "-c", cmd)
-            val process = pb.start()
-            val output = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor(2, TimeUnit.SECONDS)
+            val output = RootShellManager.exec(cmd).firstOrNull()?.trim() ?: ""
             if (output.isNotBlank() && output.contains(".") && !output.contains(" ")) {
                 output
             } else null
@@ -265,9 +295,8 @@ object AppLauncherManager {
 
     /**
      * Executes bulletproof application launch.
-     * Tier 1: Standard Intent
-     * Tier 2: Direct Shell Execution (am start || monkey)
-     * All web deep-links and Play Store redirects are strictly banned.
+     * Tier 1: Standard Intent (Dispatched via AccessibilityService or Context)
+     * Tier 2: Direct Shell Execution via RootShellManager (Monkey, Component start, Intent start)
      */
     fun launch(target: String, context: Context?): LaunchResult {
         val ctx = context ?: MainActivity.instance ?: return LaunchResult(
@@ -282,20 +311,44 @@ object AppLauncherManager {
         val resolvedPkg = resolvePackageName(target, pm)
         var friendlyLabel = target
 
+        val service = SynapseAccessibilityService.instance
+
         // ── Tier 1: Standard Android Launch Intent ───────────────────────────
         try {
-            val launchIntent = pm.getLaunchIntentForPackage(resolvedPkg)?.apply {
+            var launchIntent = pm.getLaunchIntentForPackage(resolvedPkg)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             }
+
+            if (launchIntent == null) {
+                val intent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    `package` = resolvedPkg
+                }
+                val resolveInfos = pm.queryIntentActivities(intent, 0)
+                if (resolveInfos.isNotEmpty()) {
+                    val activityInfo = resolveInfos[0].activityInfo
+                    launchIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_LAUNCHER)
+                        setClassName(activityInfo.packageName, activityInfo.name)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    }
+                }
+            }
+
             if (launchIntent != null) {
-                ctx.startActivity(launchIntent)
+                if (service != null) {
+                    service.startActivity(launchIntent)
+                    Log.i(TAG, "Tier 1: Launched $resolvedPkg via SynapseAccessibilityService")
+                } else {
+                    ctx.startActivity(launchIntent)
+                    Log.i(TAG, "Tier 1: Launched $resolvedPkg via Context")
+                }
                 friendlyLabel = try {
                     val appInfo = pm.getApplicationInfo(resolvedPkg, 0)
                     pm.getApplicationLabel(appInfo).toString()
                 } catch (_: Exception) {
                     resolvedPkg
                 }
-                Log.i(TAG, "Tier 1: Successfully launched $friendlyLabel ($resolvedPkg) natively")
                 return LaunchResult(
                     success = true,
                     appLabel = friendlyLabel,
@@ -307,7 +360,7 @@ object AppLauncherManager {
             Log.w(TAG, "Tier 1 standard launch failed: ${e.message}, escalating to direct shell launch")
         }
 
-        // ── Tier 2: Direct Shell Execution Fallback (am start || monkey) ───────────
+        // ── Tier 2: Direct Shell Execution Fallback (RootShellManager) ───────────
         try {
             val shellResult = launchViaDirectShell(resolvedPkg, target)
             if (shellResult) {
@@ -329,7 +382,6 @@ object AppLauncherManager {
             Log.w(TAG, "Tier 2 direct shell launch failed: ${e.message}")
         }
 
-        // Banned Web & Play Store Fallbacks - return clean failure
         Log.e(TAG, "Failed to launch $resolvedPkg natively and via direct shell execution")
         return LaunchResult(
             success = false,
@@ -341,26 +393,36 @@ object AppLauncherManager {
     }
 
     /**
-     * Executes direct shell launch using am start and monkey:
-     * am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$TARGET_PKG" 2>/dev/null || monkey -p "$TARGET_PKG" -c android.intent.category.LAUNCHER 1 2>/dev/null
+     * Executes direct shell launch using RootShellManager (Monkey, Component am start, or Intent start):
      */
     private fun launchViaDirectShell(pkg: String, originalTarget: String): Boolean {
         val cleanPkg = pkg.trim()
-        val cleanTarget = originalTarget.filter { it.isLetterOrDigit() || it == '.' || it == '_' }
 
-        val script = "TARGET_PKG=\"$cleanPkg\"\n" +
-            "if ! pm list packages | grep -q \"^package:$cleanPkg\$\"; then\n" +
-            "    FOUND_PKG=\$(pm list packages | grep -i \"$cleanTarget\" | head -n 1 | cut -d: -f2)\n" +
-            "    if [ -n \"\$FOUND_PKG\" ]; then\n" +
-            "        TARGET_PKG=\"\$FOUND_PKG\"\n" +
-            "    fi\n" +
-            "fi\n" +
-            "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p \"\$TARGET_PKG\" 2>/dev/null || monkey -p \"\$TARGET_PKG\" -c android.intent.category.LAUNCHER 1 2>/dev/null\n"
+        // 1. Monkey launch via Root / Shell (most reliable Android app launcher)
+        val monkeyOut = RootShellManager.exec("monkey -p $cleanPkg -c android.intent.category.LAUNCHER 1")
+        if (monkeyOut.any { it.contains("Events injected: 1") }) {
+            Log.i(TAG, "Shell monkey launched $cleanPkg successfully")
+            return true
+        }
 
+        // 2. Component resolution am start
+        val resolvedComponent = RootShellManager.exec("cmd package resolve-activity --brief $cleanPkg | tail -n 1").firstOrNull()?.trim() ?: ""
+        if (resolvedComponent.contains("/") && !resolvedComponent.contains(" ")) {
+            RootShellManager.exec("am start -n $resolvedComponent")
+            return true
+        }
+
+        // 3. Generic launcher action
+        val amOut = RootShellManager.exec("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER $cleanPkg")
+        if (amOut.none { it.contains("Error:", ignoreCase = true) }) {
+            return true
+        }
+
+        // 4. Standard shell process fallback
         return try {
-            val pb = ProcessBuilder("sh", "-c", script)
+            val pb = ProcessBuilder("sh", "-c", "monkey -p $cleanPkg -c android.intent.category.LAUNCHER 1")
             val proc = pb.start()
-            val exited = proc.waitFor(4, TimeUnit.SECONDS)
+            val exited = proc.waitFor(3, TimeUnit.SECONDS)
             exited && proc.exitValue() == 0
         } catch (_: Exception) {
             false

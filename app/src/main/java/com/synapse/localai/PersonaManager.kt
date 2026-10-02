@@ -52,12 +52,12 @@ Tool Invocation Schema:
 Available Tool Matrix:
 1. SYSTEM EXECUTION & SHELL:
    - run_shell(command): Execute root/ADB shell commands to monitor memory (RAM), CPU, battery, storage, and processes.
-   - open_app(package_name): Launch Android applications dynamically using intents or package names/aliases.
+   - open_app(package_name): Launch Android applications dynamically using intents or package names/aliases (e.g. 'youtube', 'whatsapp', 'settings', 'chrome').
 
 2. UI AUTOMATION & VISION:
    - read_screen_nodes(): Read active screen UI node hierarchy (view texts, IDs, bounds, clickable buttons).
    - click(target): Click an element by text label, resource ID, or exact screen coordinates "x,y".
-   - swipe(direction): Perform gesture swipes ("up", "down", "left", "right" or "startX,startY,endX,endY").
+   - swipe(direction): Perform swipe or scroll gestures ("up", "down", "left", "right" or "startX,startY,endX,endY").
    - input_text(text, target): Inject text into an editable element or currently active input field.
    - capture_screen(save_path): Capture active screen buffer directly to PNG format.
    - ocr_screen(image_path): Inspect visual elements, extract text labels, and map button coordinates.

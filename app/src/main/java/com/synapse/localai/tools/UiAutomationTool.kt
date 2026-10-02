@@ -131,14 +131,15 @@ object UiAutomationTool {
      * Dispatches directional swipes or explicit coordinate trajectories.
      */
     suspend fun swipe(directionOrCoords: String, context: Context? = null): String = withContext(Dispatchers.IO) {
-        val clean = directionOrCoords.trim().lowercase()
+        val raw = directionOrCoords.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+        val clean = raw.lowercase()
 
         // Explicit coordinate swipe "startX,startY,endX,endY"
         if (clean.matches(Regex("""^\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+(?:\s*,\s*\d+)?$"""))) {
             val parts = clean.split(',').map { it.trim().toFloatOrNull() ?: 0f }
             val (x1, y1) = normalizeCoordinates(parts[0], parts[1], context)
             val (x2, y2) = normalizeCoordinates(parts[2], parts[3], context)
-            val dur = if (parts.size > 4) parts[4].toLong() else 250L
+            val dur = if (parts.size > 4) parts[4].toLong() else 350L
 
             val service = SynapseAccessibilityService.instance
             if (service != null && service.swipe(x1, y1, x2, y2, dur)) {
@@ -154,20 +155,43 @@ object UiAutomationTool {
         val width = metrics?.widthPixels?.toFloat() ?: 1080f
         val height = metrics?.heightPixels?.toFloat() ?: 2400f
 
-        val (x1, y1, x2, y2) = when (clean) {
-            "up", "scroll_up" -> listOf(width * 0.5f, height * 0.75f, width * 0.5f, height * 0.20f)
-            "down", "scroll_down" -> listOf(width * 0.5f, height * 0.25f, width * 0.5f, height * 0.80f)
-            "left" -> listOf(width * 0.85f, height * 0.5f, width * 0.15f, height * 0.5f)
-            "right" -> listOf(width * 0.15f, height * 0.5f, width * 0.85f, height * 0.5f)
-            else -> return@withContext "[Error: Invalid swipe direction '$directionOrCoords'. Use 'up', 'down', 'left', 'right' or 'x1,y1,x2,y2']"
+        val service = SynapseAccessibilityService.instance
+
+        val isUp = clean in setOf("up", "scroll_up", "swipe_up", "top", "اعلى", "أعلى", "فوق", "haut", "arriba")
+        val isDown = clean in setOf("down", "scroll_down", "swipe_down", "bottom", "اسفل", "أسفل", "تحت", "bas", "abajo")
+        val isLeft = clean in setOf("left", "scroll_left", "swipe_left", "يسار", "شمال", "gauche", "izquierda")
+        val isRight = clean in setOf("right", "scroll_right", "swipe_right", "يمين", "droite", "derecha")
+
+        if (!isUp && !isDown && !isLeft && !isRight) {
+            return@withContext "[Error: Invalid swipe direction '$directionOrCoords'. Use 'up' (أعلى), 'down' (أسفل), 'left' (يسار), 'right' (يمين) or 'x1,y1,x2,y2']"
         }
 
-        val service = SynapseAccessibilityService.instance
-        if (service != null && service.swipe(x1, y1, x2, y2, 250L)) {
-            return@withContext "✔ Performed swipe $clean via Accessibility Service."
+        // Tier 1: If Up/Down, try native Accessibility Node scroll first (fast & reliable)
+        if (service != null) {
+            if (isUp && service.scroll(forward = true)) {
+                return@withContext "✔ Scrolled up (forward) via Accessibility Service."
+            }
+            if (isDown && service.scroll(forward = false)) {
+                return@withContext "✔ Scrolled down (backward) via Accessibility Service."
+            }
         }
-        RootShellManager.exec("input swipe ${x1.toInt()} ${y1.toInt()} ${x2.toInt()} ${y2.toInt()} 250")
-        return@withContext "✔ Performed swipe $clean via Root Shell."
+
+        // Tier 2: Density-aware human gesture swipe (350ms duration)
+        val (x1, y1, x2, y2) = when {
+            isUp -> listOf(width * 0.5f, height * 0.75f, width * 0.5f, height * 0.25f)
+            isDown -> listOf(width * 0.5f, height * 0.25f, width * 0.5f, height * 0.75f)
+            isLeft -> listOf(width * 0.85f, height * 0.5f, width * 0.15f, height * 0.5f)
+            isRight -> listOf(width * 0.15f, height * 0.5f, width * 0.85f, height * 0.5f)
+            else -> listOf(width * 0.5f, height * 0.75f, width * 0.5f, height * 0.25f)
+        }
+
+        if (service != null && service.swipe(x1, y1, x2, y2, 350L)) {
+            return@withContext "✔ Performed swipe $raw via Accessibility Service."
+        }
+
+        // Tier 3: Root Shell input swipe
+        RootShellManager.exec("input swipe ${x1.toInt()} ${y1.toInt()} ${x2.toInt()} ${y2.toInt()} 350")
+        return@withContext "✔ Performed swipe $raw via Root Shell."
     }
 
     /**

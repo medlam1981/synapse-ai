@@ -263,6 +263,12 @@ class MainActivity : ComponentActivity() {
         var instance: MainActivity? = null
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        instance = this
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this

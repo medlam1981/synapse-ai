@@ -1849,12 +1849,26 @@ $langFinalInstruction"""
                                         refreshSessions()
                                     }
 
+                                    val isUiTool = action in setOf(
+                                        "open_app", "launch_app", "click", "click_node", "tap",
+                                        "swipe", "scroll", "input_text", "type_text",
+                                        "read_screen_nodes", "dump_ui_hierarchy", "read_screen",
+                                        "capture_screen", "ocr_screen", "screen_vision"
+                                    )
                                     val truncatedSummary = sanitizeProcessOutput(cleanSummary, maxChars = 1200, maxLines = 25)
-                                    val observationMsg = """[Tool Execution Findings]:
+                                    val observationMsg = if (isUiTool) {
+                                        """[UI Automation Action Observation]:
+$truncatedSummary
+
+INSTRUCTION: You have successfully executed this action on the device. If the user's objective requires further steps (such as swiping, clicking, typing, or reading), call the next tool. If the task is finished, deliver your final concise summary to the user directly or invoke complete(summary).
+$langFinalInstruction"""
+                                    } else {
+                                        """[Tool Execution Findings]:
 $truncatedSummary
 
 MANDATORY INSTRUCTION: Tool execution is finished. Do NOT call any further tools.
 $langFinalInstruction"""
+                                    }
 
                                     synchronized(conversationHistory) {
                                         val assistantTurn = if (explanatoryText.isNotBlank()) "$explanatoryText\n${primaryCall.rawMatch}" else primaryCall.rawMatch
@@ -1865,11 +1879,23 @@ $langFinalInstruction"""
                                 }
                             }
 
-                            forceFinalTurn = true
+                            forceFinalTurn = if (action in setOf("open_app", "launch_app", "click", "click_node", "tap", "swipe", "scroll", "input_text", "type_text", "read_screen_nodes", "ocr_screen")) {
+                                toolCallCount >= 6
+                            } else {
+                                true
+                            }
                             activeGgufPromptPrefix = null
                             keepGoing = true
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
+                            // Automatic Return-to-Home and ATLAS-AI Refocus upon task completion
+                            if (toolsUsedThisTurn) {
+                                try {
+                                    TaskCompletionProtocol.executeReturnToHome(actualContext)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Automatic post-task Return-to-Home notice: ${e.message}")
+                                }
+                            }
                             val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val cleanDisplay = cleanVisibleText(cleanHistoryReply)

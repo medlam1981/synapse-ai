@@ -822,8 +822,8 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "open_app",
-                        description = "Launch an Android application dynamically using package name or app name",
-                        parameters = listOf(Schema.str("package_name", "Android package name or application name")),
+                        description = "Launch an Android application dynamically using package name or app alias (e.g. 'youtube', 'whatsapp', 'settings', 'chrome')",
+                        parameters = listOf(Schema.str("package_name", "Android package name or application name/alias")),
                         requiredParameters = listOf("package_name")
                     ),
                     defineFunction(
@@ -840,8 +840,8 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "swipe",
-                        description = "Perform a swipe gesture ('up', 'down', 'left', 'right' or 'startX,startY,endX,endY')",
-                        parameters = listOf(Schema.str("direction", "Direction or coordinate trajectory")),
+                        description = "Perform a swipe or scroll gesture ('up'/'اعلى', 'down'/'اسفل', 'left'/'يسار', 'right'/'يمين' or 'startX,startY,endX,endY')",
+                        parameters = listOf(Schema.str("direction", "Direction ('up', 'down', 'left', 'right') or coordinate trajectory")),
                         requiredParameters = listOf("direction")
                     ),
                     defineFunction(
