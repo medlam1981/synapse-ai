@@ -1278,13 +1278,18 @@ CRITICAL EXECUTION RULES:
 $languageEnforcement""".trimIndent()
         }
 
-        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}"
+        val recalledVectorMemories = if (userPrompt.isNotBlank()) {
+            com.synapse.localai.memory.VectorMemoryManager.formatRelevantContextForPrompt(userPrompt)
+        } else ""
+        val vectorMemoriesSection = if (recalledVectorMemories.isNotBlank()) "\n\n$recalledVectorMemories" else ""
+
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}"
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) return cachedStaticPrefix!!
 
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, delay_minutes), queue_background_task(command), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
@@ -1294,7 +1299,7 @@ $languageEnforcement""".trimIndent()
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -2052,6 +2057,36 @@ $langFinalInstruction"""
         }
     }
 
+    /** Returns true when the active model is a cloud/remote model (Gemini). */
+    fun isCloudMode(): Boolean = _uiState.value.activeModelType == ModelType.GEMINI
+
+    /**
+     * Single-pass LLM call used by [MultiWorkerOrchestrator] for each ReAct step.
+     */
+    suspend fun runSingleLlmPass(
+        systemPrompt: String,
+        userPrompt: String,
+        onChunk: ((String) -> Unit)? = null
+    ): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val modelType = _uiState.value.activeModelType ?: return@withContext ""
+        val history = mutableListOf("user" to userPrompt)
+        val sb = StringBuilder()
+        try {
+            val stream = when (modelType) {
+                ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(history, systemPrompt)
+                ModelType.GEMINI -> {
+                    val json = org.json.JSONArray()
+                    json.put(org.json.JSONObject().put("role", "user").put("content", userPrompt))
+                    geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { sb.setLength(0) }
+                }
+            }
+            stream.collect { chunk -> sb.append(chunk); onChunk?.invoke(chunk) }
+        } catch (e: Exception) {
+            android.util.Log.w("AgentViewModel", "runSingleLlmPass error: ${e.message}")
+        }
+        sb.toString()
+    }
+
     private fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): Pair<Int, String> {
         val pb = ProcessBuilder(shell, "-c", cmd)
         pb.redirectErrorStream(true)
@@ -2210,23 +2245,37 @@ $langFinalInstruction"""
                         "schedule_task", "schedule" -> {
                             val desc = params["description"] ?: params["desc"] ?: params["title"] ?: "Scheduled Task"
                             val cmd = params["command"] ?: params["cmd"] ?: ""
-                            val delayMinutes = params["delay_minutes"]?.toLongOrNull() ?: params["delay"]?.toLongOrNull() ?: 1L
-                            val executeAt = System.currentTimeMillis() + (delayMinutes.coerceAtLeast(1L) * 60_000L)
+                            val cron = params["cron"] ?: params["cron_expression"] ?: params["schedule"] ?: ""
                             actualContext?.let { initTaskSystem(it) }
-                            val task = AgentTask(
-                                description = desc,
-                                command = cmd,
-                                executeAt = executeAt,
-                                status = TaskStatus.PENDING,
-                                source = "agent_scheduler"
-                            )
-                            taskMemory?.addTask(task)
-                            actualContext?.let { TaskAlarmReceiver.scheduleTaskAlarm(it, task.id, executeAt) }
-                            updateTaskState()
-                            actionToolUsed = true
-                            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(executeAt))
-                            summaries.add("✔ Task Scheduled:\n• Description: $desc\n• Command: $cmd\n• Scheduled run time: $timeStr (in $delayMinutes minute(s))\n• Task ID: ${task.id}")
-                            addSystemLog("Scheduled task '$desc' for $timeStr")
+
+                            if (cron.isNotBlank()) {
+                                actionToolUsed = true
+                                val taskId = taskEngine?.scheduleCronTask(desc, cmd, cron)
+                                if (taskId != null) {
+                                    summaries.add("✔ Recurring Task Scheduled:\n• Description: $desc\n• Command: $cmd\n• Cron Expression: $cron\n• Task ID: $taskId")
+                                    addSystemLog("Scheduled cron task '$desc' ($cron)")
+                                } else {
+                                    summaries.add("✖ Failed to schedule task: Invalid cron expression '$cron'")
+                                }
+                                updateTaskState()
+                            } else {
+                                val delayMinutes = params["delay_minutes"]?.toLongOrNull() ?: params["delay"]?.toLongOrNull() ?: 1L
+                                val executeAt = System.currentTimeMillis() + (delayMinutes.coerceAtLeast(1L) * 60_000L)
+                                val task = AgentTask(
+                                    description = desc,
+                                    command = cmd,
+                                    executeAt = executeAt,
+                                    status = TaskStatus.PENDING,
+                                    source = "agent_scheduler"
+                                )
+                                taskMemory?.addTask(task)
+                                actualContext?.let { TaskAlarmReceiver.scheduleTaskAlarm(it, task.id, executeAt) }
+                                updateTaskState()
+                                actionToolUsed = true
+                                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(executeAt))
+                                summaries.add("✔ Task Scheduled:\n• Description: $desc\n• Command: $cmd\n• Scheduled run time: $timeStr (in $delayMinutes minute(s))\n• Task ID: ${task.id}")
+                                addSystemLog("Scheduled task '$desc' for $timeStr")
+                            }
                         }
                         "run_shell", "execute_shell", "terminal", "bash", "sh" -> {
                             val cmd = params["command"] ?: params["cmd"] ?: params.values.firstOrNull() ?: ""
@@ -2332,6 +2381,56 @@ $langFinalInstruction"""
                             summaries.add(structuredSummary)
                             return@withTimeoutOrNull false to summaries.joinToString("\n\n")
                         }
+                        "run_plugin", "plugin", "exec_plugin" -> {
+                            actualContext?.let { initTaskSystem(it) }
+                            val pluginName = params["name"] ?: params["plugin"] ?: params["plugin_name"] ?: params.values.firstOrNull() ?: ""
+                            if (pluginName.isNotBlank()) {
+                                actionToolUsed = true
+                                val pluginRes = com.synapse.localai.plugins.PluginRegistry.executePlugin(pluginName, params)
+                                summaries.add(pluginRes.summary)
+                                addSystemLog("Executed dynamic plugin: $pluginName")
+                            }
+                        }
+                        "save_memory", "store_memory", "remember" -> {
+                            actualContext?.let { initTaskSystem(it) }
+                            val content = params["content"] ?: params["text"] ?: params["memory"] ?: params.values.firstOrNull() ?: ""
+                            val category = params["category"] ?: params["type"] ?: "FACT"
+                            if (content.isNotBlank()) {
+                                actionToolUsed = true
+                                val rec = com.synapse.localai.memory.VectorMemoryManager.store(content, category)
+                                summaries.add("✔ Persistent Memory Saved [${rec.category}]:\n• Content: \"${rec.content}\"\n• Vector: 128-dim normalized embedding stored.")
+                                addSystemLog("Saved vector memory: ${rec.id}")
+                            }
+                        }
+                        "search_memory", "query_memory", "recall" -> {
+                            actualContext?.let { initTaskSystem(it) }
+                            val q = params["query"] ?: params["q"] ?: params.values.firstOrNull() ?: ""
+                            if (q.isNotBlank()) {
+                                actionToolUsed = true
+                                val results = com.synapse.localai.memory.VectorMemoryManager.search(q, topK = 3)
+                                val summary = if (results.isNotEmpty()) {
+                                    buildString {
+                                        appendLine("🔍 Semantic Memory Recall for \"$q\":")
+                                        results.forEach { (rec, score) ->
+                                            appendLine("• [${rec.category}] (similarity: ${String.format(Locale.US, "%.2f", score)}) ${rec.content}")
+                                        }
+                                    }
+                                } else {
+                                    "🔍 Semantic Memory: No close matches found for \"$q\"."
+                                }
+                                summaries.add(summary)
+                                addSystemLog("Searched vector memory for: $q")
+                            }
+                        }
+                        else -> {
+                            actualContext?.let { initTaskSystem(it) }
+                            if (com.synapse.localai.plugins.PluginRegistry.hasPlugin(action)) {
+                                actionToolUsed = true
+                                val pluginRes = com.synapse.localai.plugins.PluginRegistry.executePlugin(action, params)
+                                summaries.add(pluginRes.summary)
+                                addSystemLog("Executed dynamic plugin: $action")
+                            }
+                        }
                     }
                 } finally {
                     inFlightCalls.remove(callHash)
@@ -2346,10 +2445,16 @@ $langFinalInstruction"""
 
     fun initTaskSystem(context: Context) {
         if (taskMemory == null) {
-            taskMemory = TaskMemoryManager(context)
-            taskEngine = BackgroundTaskEngine(taskMemory!!)
+            val tm = TaskMemoryManager(context)
+            taskMemory = tm
+            val engine = BackgroundTaskEngine(tm)
+            val daemon = MaintenanceDaemon(context, tm)
+            engine.maintenanceDaemon = daemon
+            taskEngine = engine
             taskEngine?.start()
         }
+        com.synapse.localai.plugins.PluginRegistry.init(context)
+        com.synapse.localai.memory.VectorMemoryManager.init(context)
     }
     
     fun updateTaskState() {

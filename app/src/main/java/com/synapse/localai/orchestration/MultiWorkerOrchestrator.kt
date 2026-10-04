@@ -2,7 +2,11 @@ package com.synapse.localai.orchestration
 
 import android.util.Log
 import com.synapse.localai.HtmlSanitizer
+import com.synapse.localai.PersonaManager
 import com.synapse.localai.ToolExecutor
+import com.synapse.localai.tools.ContentReaderTool
+import com.synapse.localai.tools.PythonExecutionEngine
+import com.synapse.localai.tools.WebSearchClient as WebSearchTool
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -10,12 +14,11 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
+// Data class to encapsulate parsed tool invocation requests from the AI
+data class ToolInvocation(val name: String, val params: Map<String, String>)
+
 /**
- * Multi-Worker MCP Orchestration Pipeline:
- * Implements the Orchestrator-Workers + Critic/Verifier Pattern.
- * Decouples user requests into parallel background tasks, isolates all generated code
- * inside a transient staging sandbox, audits outputs through the Verifier Gatekeeper,
- * and atomically deploys verified files to production storage without leaking partial or broken files.
+ * Multi-Worker MCP Orchestration Pipeline & Autonomous Agent Protocol
  */
 class MultiWorkerOrchestrator(
     private val sessionId: String,
@@ -34,16 +37,177 @@ class MultiWorkerOrchestrator(
 
         /**
          * Determines if a user prompt is an orchestration candidate.
-         * Disabled to prevent prompt pollution and ensure single-agent execution with the Unified System Prompt.
+         * Disabled by default to prevent prompt pollution.
          */
         fun isOrchestrationCandidate(command: String): Boolean {
-            return false
+            return false 
         }
     }
 
-    /**
-     * Decomposes user intent into discrete, independent worker sub-tasks.
-     */
+    // =========================================================================
+    // 1. AUTONOMOUS UI AGENT PATH (ReAct Loop)
+    // =========================================================================
+    
+    suspend fun executeAutonomousAgent(userPrompt: String): String = withContext(Dispatchers.IO) {
+        val terminalBuffer = StringBuilder()
+        var lastTerminalUpdateTime = 0L
+
+        fun appendCli(line: String) {
+            terminalBuffer.append(line).append("\n")
+            lastTerminalUpdateTime = System.currentTimeMillis()
+            onTerminalLogUpdate(terminalBuffer.toString().trimEnd())
+        }
+
+        appendCli("> Initiating Autonomous Protocol: $userPrompt")
+        onStatusUpdate?.invoke("Agent Active: Initializing...")
+
+        // Dynamic fetch of unified system prompt from PersonaManager
+        val systemPrompt = PersonaManager.getActivePersonaContent()
+
+        val maxSteps = 25
+        var step = 0
+        var isCompleted = false
+        var consecutiveNoToolCount = 0
+        var currentContext = "User Request: $userPrompt\n"
+        var finalResult = "Task completed."
+
+        onTelemetryUpdate(1)
+
+        while (step < maxSteps && !isCompleted) {
+            step++
+            appendCli("  ├─ [Step $step/$maxSteps] Thinking...")
+
+            try {
+                val llmResponse = runLlmPass(systemPrompt = systemPrompt, userPrompt = currentContext)
+                val toolInvocation = extractToolInvocation(llmResponse)
+
+                if (toolInvocation != null) {
+                    consecutiveNoToolCount = 0
+                    val toolName = toolInvocation.name.trim().lowercase(Locale.ROOT)
+                    appendCli("  ├─ Invoking: ${toolInvocation.name}")
+                    onStatusUpdate?.invoke("Executing ${toolInvocation.name}...")
+
+                    val toolResult: String = try {
+                        when (toolName) {
+                            "run_shell", "execute_shell", "bash" -> {
+                                val cmd = toolInvocation.params["command"] ?: toolInvocation.params.values.firstOrNull() ?: ""
+                                if (cmd.isNotBlank()) {
+                                    // Intercept Python execution inside shell calls and route to embedded engine
+                                    if (cmd.contains(".py") || cmd.contains("python")) {
+                                        val pyFileMatch = Regex("""/sdcard/[^\s]+\.py|/[^\s]+\.py|[^\s]+\.py""").find(cmd)
+                                        if (pyFileMatch != null) {
+                                            val rawPath = pyFileMatch.value.trimEnd('"', '\'', ';', '&')
+                                            val filePath = ToolExecutor.resolvePath(rawPath)
+                                            val scriptFile = java.io.File(filePath)
+                                            
+                                            if (scriptFile.exists()) {
+                                                val scriptContent = scriptFile.readText()
+                                                val result = PythonExecutionEngine.execute(scriptContent)
+                                                "[Intercepted & Executed via Python Engine]\n${result.output}"
+                                            } else {
+                                                val result = PythonExecutionEngine.execute(cmd)
+                                                "[Intercepted & Executed via Python Engine]\n${result.output}"
+                                            }
+                                        } else {
+                                            val result = PythonExecutionEngine.execute(cmd)
+                                            "[Intercepted & Executed via Python Engine]\n${result.output}"
+                                        }
+                                    } else {
+                                        shellExecutor(cmd)
+                                    }
+                                } else "[Error: empty command]"
+                            }
+                            "run_python" -> {
+                                val script = toolInvocation.params["script"] ?: toolInvocation.params.values.firstOrNull() ?: ""
+                                if (script.isNotBlank()) PythonExecutionEngine.execute(script).output
+                                else "[Error: empty script]"
+                            }
+                            "web_search" -> {
+                                val q = toolInvocation.params["query"] ?: toolInvocation.params.values.firstOrNull() ?: ""
+                                if (q.isNotBlank()) WebSearchTool.search(q) else "[Error: empty query]"
+                            }
+                            "write_file" -> {
+                                val path = toolInvocation.params["path"] ?: ""
+                                val content = toolInvocation.params["content"] ?: ""
+                                if (path.isNotBlank()) {
+                                    val f = java.io.File(ToolExecutor.resolvePath(path))
+                                    f.parentFile?.mkdirs(); f.writeText(content)
+                                    "Wrote ${content.length} bytes to${f.absolutePath}"
+                                } else "[Error: empty path]"
+                            }
+                            "read_file_range" -> {
+                                val path = toolInvocation.params["path"] ?: ""
+                                val start = toolInvocation.params["start_line"]?.toIntOrNull() ?: 1
+                                val count = toolInvocation.params["line_count"]?.toIntOrNull() ?: 60
+                                if (path.isNotBlank()) ContentReaderTool.readFileRange(path, start, count)
+                                else "[Error: empty path]"
+                            }
+                            "complete", "task_completion_protocol" -> {
+                                val summary = toolInvocation.params["summary"] ?: toolInvocation.params.values.firstOrNull() ?: "Task finished."
+                                isCompleted = true
+                                finalResult = summary
+                                appendCli("  └─ TASK COMPLETE: $summary")
+                                break
+                            }
+                            else -> "[Unknown tool: $toolName]"
+                        }
+                    } catch (e: Exception) {
+                        "Tool Error: ${e.message}"
+                    }
+
+                    appendCli("  ├─ Result: ${toolResult.take(120)}")
+                    currentContext += "\nStep $step Action: ${toolInvocation.name}\nResult:$toolResult\nContinue the task."
+
+                } else {
+                    consecutiveNoToolCount++
+                    val proseSnippet = llmResponse.take(200)
+                    currentContext += "\nStep $step Note:$proseSnippet\nYou MUST now call a tool or call complete() if the task is done. DO NOT stop."
+                    appendCli("  ├─ [No tool call, retry push #$consecutiveNoToolCount]:${proseSnippet.take(60)}")
+
+                    if (consecutiveNoToolCount >= 3) {
+                        finalResult = llmResponse.trim().ifBlank { "Task processed." }
+                        isCompleted = true
+                        appendCli("  └─ Forced completion after $consecutiveNoToolCount prose turns.")
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                appendCli("  ├─ Exception on step $step:${e.message} — retrying...")
+                currentContext += "\nStep $step Error:${e.message}\nAnalyze and retry."
+            }
+        }
+
+        if (!isCompleted) {
+            appendCli("  └─ Max steps ($maxSteps) reached — returning best result.")
+            finalResult = "Task execution reached max steps ($maxSteps). Last context:\n${currentContext.takeLast(300)}"
+        }
+
+        onTelemetryUpdate(0)
+        return@withContext finalResult
+    }
+
+    private fun extractToolInvocation(response: String): ToolInvocation? {
+        val invokeRegex = Regex("""<invoke\s+name="([^"]+)">([\s\S]*?)</invoke>""")
+        val match = invokeRegex.find(response) ?: return null
+        
+        val name = match.groupValues[1]
+        val paramsBlock = match.groupValues[2]
+        
+        val paramRegex = Regex("""<parameter\s+name="([^"]+)">([\s\S]*?)</parameter>""")
+        val params = mutableMapOf<String, String>()
+        
+        paramRegex.findAll(paramsBlock).forEach { paramMatch ->
+            params[paramMatch.groupValues[1]] = paramMatch.groupValues[2].trim()
+        }
+        
+        return ToolInvocation(name, params)
+    }
+
+    // =========================================================================
+    // 2. CODE SYNTHESIS PATH (Original Architecture)
+    // =========================================================================
+
     fun decomposeIntent(userPrompt: String, destinationDir: String): List<WorkerSubTask> {
         val tasks = mutableListOf<WorkerSubTask>()
 
@@ -51,7 +215,6 @@ class MultiWorkerOrchestrator(
         val isPythonProject = lower.contains("python") || lower.contains("flask") || lower.contains("fastapi")
 
         if (isPythonProject) {
-            // Worker 1: Core Logic & State (Python Backend)
             tasks.add(
                 WorkerSubTask(
                     workerId = "Worker 1",
@@ -67,7 +230,6 @@ CRITICAL: Output ONLY raw python code. Zero markdown code fences, zero XML tags,
                 )
             )
 
-            // Worker 2: Layout & Presentation (HTML Template or UI)
             tasks.add(
                 WorkerSubTask(
                     workerId = "Worker 2",
@@ -85,14 +247,12 @@ Format:
 /* styles */
 CRITICAL RULES:
 1. Clean Document Tree Requirement: Every HTML output MUST start at Byte 0 with <!DOCTYPE html>. Zero leading brackets, fences, or worker tags.
-2. Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters (<, >, <<, >>, [<], <[[, <-). All icons (menu, back, dark-mode toggle, status indicators) must strictly use inline, high-resolution SVG vectors (e.g., Lucide / Heroicons SVG paths) with appropriate viewBox, stroke, and fill properties.
+2. Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters.
 3. Ensure all HTML tags are closed, all CSS braces are balanced. Output ONLY the file blocks. Zero XML tags.
 """.trimIndent()
                 )
             )
         } else {
-            // Standard Web App / Dashboard (HTML5 + CSS3 + Modern JavaScript)
-            // Core Logic & State: app.js
             tasks.add(
                 WorkerSubTask(
                     workerId = "CoreLogic",
@@ -113,7 +273,6 @@ Requirements:
                 )
             )
 
-            // Layout & Presentation: index.html & styles.css
             tasks.add(
                 WorkerSubTask(
                     workerId = "LayoutPresentation",
@@ -131,37 +290,21 @@ Target deliverables:
 Format your output EXACTLY as:
 ===FILE: index.html===
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Application</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  ...
-  <script src="app.js"></script>
-</body>
-</html>
+<html lang="en">...
 ===FILE: styles.css===
 /* Clean modern responsive styles */
 ...
-
 CRITICAL RULES:
-1. Clean Document Tree Requirement: Every HTML output MUST start at Byte 0 with <!DOCTYPE html>. Zero leading brackets, fences, or worker tags. For Arabic/RTL interfaces, configure <html lang="ar" dir="rtl"> properly. The top navigation bar must use clean CSS Grid or Flex layout with semantic <button> elements enclosing pure SVG vectors.
-2. Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons, arrows, chevrons, or indicators with raw ASCII or keyboard characters (<, >, <<, >>, [<], <[[, <-). All icons (menu, back, dark-mode toggle, status indicators) must strictly use inline, high-resolution SVG vectors (e.g., Lucide / Heroicons SVG paths) with appropriate viewBox, stroke, and fill properties.
+1. Clean Document Tree Requirement: Every HTML output MUST start at Byte 0 with <!DOCTYPE html>. Zero leading brackets, fences, or worker tags.
+2. Zero-ASCII Navigation Rule: Strictly forbid simulating UI buttons with raw ASCII.
 3. Verify all tags are closed and all CSS braces are balanced. Zero markdown fences outside the blocks, zero XML tags.
 """.trimIndent()
                 )
             )
         }
-
         return tasks
     }
 
-    /**
-     * Executes the complete Orchestrator-Workers + Critic/Verifier pipeline.
-     */
     suspend fun execute(
         userPrompt: String,
         destinationDir: String = DEFAULT_PRODUCTION_DIR
@@ -190,8 +333,6 @@ CRITICAL RULES:
         )
 
         val runFolderRelative = ".staging/${stagingManager.runDir.name}"
-
-        // 1. Intent Decomposition
         val subTasks = decomposeIntent(userPrompt, destinationDir)
         stagingManager.initializeManifest(subTasks)
 
@@ -202,7 +343,6 @@ CRITICAL RULES:
         appendCli("> $userPrompt\n")
         appendCli("Orchestrator: Decomposed intent into $initialTaskCount parallel tasks [TSK $initialTaskCount]\n")
 
-        // 2. Concurrency & Worker Dispatch with Real-Time Code Streaming
         val workerResults = mutableMapOf<String, WorkerExecutionResult>()
 
         for ((workerIndex, task) in subTasks.withIndex()) {
@@ -235,7 +375,6 @@ CRITICAL RULES:
                 }
             )
 
-            // Finalize this worker's code frame in terminalBuffer
             terminalBuffer.setLength(streamStartOffset)
             val finalOutput = if (liveWorkerBuffer.isNotBlank()) liveWorkerBuffer.toString() else (workerResult.executionLog)
             val finalFormatted = formatWorkerOutputForDisplay(
@@ -263,14 +402,12 @@ CRITICAL RULES:
             }
         }
 
-        // 3. Verifier Gatekeeper Audit Pass
         appendCli("Verifier: Auditing staging artifacts in $runFolderRelative/")
         stagingManager.updateVerifierStatus("AUDITING")
 
         var stagedFiles = stagingManager.getAllStagedFiles()
         var auditResult = VerifierGatekeeper.auditStagedFiles(stagedFiles)
 
-        // 4. Self-Healing Feedback Loop (Max 2 Retries)
         var retryCount = 0
         val maxSelfHealingRetries = 2
 
@@ -300,7 +437,6 @@ CRITICAL RULES:
             auditResult = VerifierGatekeeper.auditStagedFiles(stagedFiles)
         }
 
-        // Output Verifier Report
         val syntaxStatus = if (auditResult.missingClosures == 0 && auditResult.unclosedTags == 0) "PASSED" else "WARNING"
         appendCli("  ├─ Syntax validation: $syntaxStatus (${auditResult.missingClosures} missing closures, ${auditResult.unclosedTags} unclosed tags)")
 
@@ -310,7 +446,6 @@ CRITICAL RULES:
         val gatekeeperStatus = if (auditResult.isVerified || auditResult.toolCallLeaksFound == 0) "VERIFIED" else "FAILED"
         appendCli("  ├─ Gatekeeper status: $gatekeeperStatus")
 
-        // 5. Atomic Production Promotion
         if (gatekeeperStatus == "VERIFIED") {
             stagingManager.updateVerifierStatus("VERIFIED")
             appendCli("Production Sync: Atomically promoted files to $destinationDir/")
@@ -321,7 +456,6 @@ CRITICAL RULES:
                 appendCli("  ├─ ${file.absolutePath} ($sizeFormatted)")
             }
 
-            // Transient Purge
             stagingManager.cleanupStaging()
             appendCli("Status: Ready / Operational")
         } else {
@@ -335,15 +469,11 @@ CRITICAL RULES:
         terminalBuffer.toString().trimEnd()
     }
 
-    /**
-     * Executes an individual worker pass, respecting Cloud concurrent vs Local sequentialized GGUF modes.
-     */
     private suspend fun executeWorker(
         task: WorkerSubTask,
         onChunk: ((String) -> Unit)? = null
     ): WorkerExecutionResult {
         if (task.isShellTask && task.shellCommand != null) {
-            // Environment & Dependencies via Shell MCP
             return try {
                 val result = shellExecutor(task.shellCommand)
                 onChunk?.invoke(result)
@@ -402,11 +532,6 @@ CRITICAL RULES:
         }
     }
 
-    /**
-     * Dispatches LLM generation:
-     * - Gemini Cloud Mode: True concurrent execution.
-     * - Local GGUF Mode: Sequentialized execution via Mutex to prevent CPU starvation.
-     */
     private suspend fun runLlmPass(
         systemPrompt: String,
         userPrompt: String,
@@ -421,9 +546,6 @@ CRITICAL RULES:
         }
     }
 
-    /**
-     * Formats streaming or completed worker code chunks into visual expanding code frames.
-     */
     private fun formatWorkerOutputForDisplay(
         rawText: String,
         destinationDir: String,
@@ -434,7 +556,6 @@ CRITICAL RULES:
     ): String {
         if (rawText.isBlank()) return ""
 
-        // Case 1: Multi-file output marked by ===FILE: filename===
         if (rawText.contains("===FILE:")) {
             val sb = StringBuilder()
             val matches = Regex("""===FILE:\s*([^\n=]+)===""").findAll(rawText).toList()
@@ -472,12 +593,11 @@ CRITICAL RULES:
             }
         }
 
-        // Case 2: Output already contains markdown code fences
         if (rawText.contains("```")) {
             val defaultFile = task.targetFileNames.firstOrNull() ?: "output.txt"
             val fullPath = "$destinationDir/$defaultFile"
             val sb = StringBuilder()
-            sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing $fullPath] ─────────┐\n")
+            sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing$fullPath] ─────────┐\n")
             sb.append(rawText.trim())
             if (isFinal) {
                 if (!rawText.trimEnd().endsWith("```")) sb.append("\n```")
@@ -486,7 +606,6 @@ CRITICAL RULES:
             return sb.toString()
         }
 
-        // Case 3: Raw code stream (e.g. Worker 1 JavaScript or Python code)
         val defaultFile = task.targetFileNames.firstOrNull() ?: "output.txt"
         val fullPath = "$destinationDir/$defaultFile"
         val lang = when {
@@ -501,7 +620,7 @@ CRITICAL RULES:
         }
 
         val sb = StringBuilder()
-        sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing $fullPath] ─────────┐\n")
+        sb.append("┌─ [${task.workerId}/$totalWorkers: Synthesizing$fullPath] ─────────┐\n")
         sb.append("```$lang filepath=\"$fullPath\"\n")
         sb.append(rawText)
         if (isFinal) {
@@ -512,14 +631,9 @@ CRITICAL RULES:
         return sb.toString()
     }
 
-    /**
-     * Parses generated text into individual file outputs.
-     * Handles `===FILE: filename===` format, standard markdown code fences, or single file fallbacks.
-     */
     private fun parseWorkerFiles(rawText: String, expectedFiles: List<String>): Map<String, String> {
         val result = mutableMapOf<String, String>()
 
-        // 1. Check for ===FILE: name=== blocks
         if (rawText.contains("===FILE:")) {
             val sections = rawText.split(Regex("""===FILE:\s*([^\n=]+)===""")).filter { it.isNotBlank() }
             val matchIter = Regex("""===FILE:\s*([^\n=]+)===""").findAll(rawText).iterator()
@@ -533,7 +647,6 @@ CRITICAL RULES:
             }
         }
 
-        // 2. Check for fenced code blocks
         if (result.isEmpty()) {
             val fenceRegex = Regex("""```(?:[a-zA-Z0-9_\-]+)?\n([\s\S]*?)```""")
             val matches = fenceRegex.findAll(rawText).toList()
@@ -547,7 +660,6 @@ CRITICAL RULES:
             }
         }
 
-        // 3. Single-file fallback if output matches single target
         if (result.isEmpty() && expectedFiles.size == 1) {
             val targetName = expectedFiles.first()
             val clean = sanitizeGeneratedCode(rawText, targetName)
@@ -559,13 +671,9 @@ CRITICAL RULES:
         return result
     }
 
-    /**
-     * Strips leaked tool tags, XML tags, and stray markdown code fences.
-     */
     private fun sanitizeGeneratedCode(raw: String, fileName: String): String {
         var clean = raw.trim()
 
-        // Strip markdown backtick enclosures if wrapping entire code
         if (clean.startsWith("```")) {
             val newline = clean.indexOf('\n')
             if (newline != -1) {
@@ -576,7 +684,6 @@ CRITICAL RULES:
             clean = clean.removeSuffix("```").trimEnd()
         }
 
-        // Strip leaked tool invocation XML tags
         clean = clean
             .replace("<function_calls>", "")
             .replace("</function_calls>", "")

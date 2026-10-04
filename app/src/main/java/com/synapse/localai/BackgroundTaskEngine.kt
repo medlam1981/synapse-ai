@@ -60,6 +60,8 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
     private var completedCount = 0
     private var failedCount = 0
 
+    var maintenanceDaemon: MaintenanceDaemon? = null
+
     // ── Lifecycle ───────────────────────────────────────────────────────
 
     /**
@@ -127,6 +129,38 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
         taskMemory.addTask(queued)
         updateState()
         Log.d(TAG, "Submitted task ${task.id}: \"${task.command}\"")
+    }
+
+    /**
+     * Schedules a recurring or cron-based task.
+     */
+    fun scheduleCronTask(
+        description: String,
+        command: String,
+        cronExpr: String,
+        taskType: String = "COMMAND",
+        priority: Int = 0
+    ): String? {
+        val nextRun = CronExpressionParser.getNextExecutionTime(cronExpr)
+        if (nextRun <= 0L) {
+            Log.w(TAG, "Invalid cron expression: $cronExpr")
+            return null
+        }
+        val task = AgentTask(
+            description = description,
+            command = command,
+            executeAt = nextRun,
+            cronExpression = cronExpr,
+            taskType = taskType,
+            isRecurring = true,
+            status = TaskStatus.PENDING,
+            priority = priority,
+            source = "cron_daemon"
+        )
+        taskMemory.addTask(task)
+        updateState()
+        Log.i(TAG, "Scheduled cron task ${task.id} '$description' with cron '$cronExpr' for $nextRun")
+        return task.id
     }
 
     /**
@@ -253,22 +287,66 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
         Log.i(TAG, "Executing task ${task.id}: \"${task.command}\"")
 
         try {
-            // Wait for AgentViewModel to become available
-            val viewModel = waitForViewModel()
-            if (viewModel == null) {
-                Log.w(TAG, "AgentViewModel not available after timeout — failing task ${task.id}")
-                taskMemory.markFailed(task.id, "AgentViewModel not available")
-                failedCount++
-                return false
+            val result = if (task.command.startsWith("__INTERNAL_MAINTENANCE_")) {
+                when (task.command) {
+                    "__INTERNAL_MAINTENANCE_SYSTEM_CHECK__" -> maintenanceDaemon?.runSystemCheck() ?: "System check completed"
+                    "__INTERNAL_MAINTENANCE_BACKUP__" -> maintenanceDaemon?.runAgentBackup() ?: "Backup deferred"
+                    "__INTERNAL_MAINTENANCE_CACHE_CLEANUP__" -> maintenanceDaemon?.runCacheCleanup() ?: "Cleanup finished"
+                    else -> "Internal routine finished"
+                }
+            } else if (task.taskType == "AGENT_TASK") {
+                // Route complex agent tasks through the autonomous ReAct loop
+                val viewModel = waitForViewModel()
+                if (viewModel == null) {
+                    taskMemory.markFailed(task.id, "AgentViewModel not available")
+                    failedCount++
+                    return false
+                }
+                val orchestrator = com.synapse.localai.orchestration.MultiWorkerOrchestrator(
+                    sessionId = task.id,
+                    isCloudMode = viewModel.isCloudMode(),
+                    modelInvoker = { sys, usr, onChunk -> viewModel.runSingleLlmPass(sys, usr, onChunk) },
+                    onTelemetryUpdate = { _ -> },
+                    onTerminalLogUpdate = { log -> Log.d(TAG, "Orchestrator: $log") }
+                )
+                orchestrator.executeAutonomousAgent(task.command)
+            } else {
+                // Wait for AgentViewModel to become available
+                val viewModel = waitForViewModel()
+                if (viewModel == null) {
+                    Log.w(TAG, "AgentViewModel not available after timeout — failing task ${task.id}")
+                    taskMemory.markFailed(task.id, "AgentViewModel not available")
+                    failedCount++
+                    return false
+                }
+                viewModel.executeBackgroundTask(task.command, task.id)
             }
-
-            // Execute the command
-            val result = viewModel.executeBackgroundTask(task.command, task.id)
 
             // Success
             taskMemory.markCompleted(task.id, result)
             completedCount++
             Log.i(TAG, "Task ${task.id} completed successfully")
+
+            // Auto-reschedule if recurring or cron-based
+            if (task.isRecurring || !task.cronExpression.isNullOrBlank()) {
+                val nextRun = if (!task.cronExpression.isNullOrBlank()) {
+                    CronExpressionParser.getNextExecutionTime(task.cronExpression!!, System.currentTimeMillis())
+                } else {
+                    System.currentTimeMillis() + 3600_000L
+                }
+                if (nextRun > 0L) {
+                    val nextTask = task.copy(
+                        id = java.util.UUID.randomUUID().toString(),
+                        status = TaskStatus.PENDING,
+                        executeAt = nextRun,
+                        retryCount = 0,
+                        result = "",
+                        completedAt = 0L
+                    )
+                    taskMemory.addTask(nextTask)
+                    Log.i(TAG, "Rescheduled recurring task ${task.description} for epoch $nextRun")
+                }
+            }
             return true
 
         } catch (e: CancellationException) {

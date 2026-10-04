@@ -22,20 +22,12 @@ data class ExtractedCodeBlock(
 
 /**
  * ToolExecutor — File Extraction, Real-Time Concurrent Disk Streaming & Post-Execution Hygiene.
- *
- * Responsibilities:
- * 1. Immediate File Provisioning: Instantly create and allocate target files on disk when code begins.
- * 2. Synchronous Live Writing: Stream incoming code tokens concurrently into disk buffer in real time.
- * 3. Auto-Flush & Atomic Save: Close, flush and save files the moment a code block terminates.
- * 4. Post-Execution Summary Hygiene: Eliminate code echoes in conversational chat, confining raw code
- *    strictly to physical files and interactive code containers.
  */
 object ToolExecutor {
 
     private const val TAG = "ToolExecutor"
     const val BASE_DIR = "/sdcard/Medlam-Ai"
 
-    // Patterns that suggest an explicit file path label before a code block
     private val FILE_PATH_PATTERNS = listOf(
         Regex("""(?:file|path|save to|write to|create file|filename)[:\s]+[`"']?([^\s`"'\n]+\.[a-zA-Z0-9]{1,10})[`"']?""", RegexOption.IGNORE_CASE),
         Regex("""(?://|/\*|#|<!--)\s*(?:file|path)[:\s]+([^\s*`"'\n]+\.[a-zA-Z0-9]{1,10})""", RegexOption.IGNORE_CASE),
@@ -43,18 +35,13 @@ object ToolExecutor {
         Regex("""(/sdcard/Medlam-Ai/[^\s\n"'`\]:]+\.[a-zA-Z0-9]{1,10})""")
     )
 
-    // Extensions that represent executable web/UI content
     private val WEB_EXTENSIONS = setOf("html", "htm", "css", "js", "ts", "jsx", "tsx", "vue", "svelte")
 
-    // Extensions that MUST contain real code (not conversational text)
     private val CODE_EXTENSIONS = WEB_EXTENSIONS + setOf(
         "kt", "java", "py", "cpp", "c", "h", "rs", "go", "rb", "php",
         "swift", "sh", "bash", "sql", "json", "xml", "yaml", "yml"
     )
 
-    /**
-     * Resolves raw path against base directory and standardizes path.
-     */
     fun resolvePath(rawPath: String, baseDir: String = BASE_DIR): String {
         return when {
             rawPath.startsWith("/sdcard/") -> rawPath
@@ -64,9 +51,6 @@ object ToolExecutor {
         }
     }
 
-    /**
-     * Formats file size nicely (e.g. 4.2 KB, 1.1 MB).
-     */
     fun formatFileSize(filePath: String): String {
         val f = File(filePath)
         if (!f.exists()) return "synced"
@@ -76,12 +60,6 @@ object ToolExecutor {
         else String.format(Locale.US, "%.1f KB", kb)
     }
 
-    /**
-     * Real-Time Disk Streaming Engine:
-     * - Immediately provisions target file upon detecting code block opening.
-     * - Synchronously streams tokens directly to disk buffer in real time.
-     * - Auto-flushes and atomically saves on block termination.
-     */
     class LiveFileStreamer(
         private val baseDir: String = BASE_DIR,
         private val onStatusUpdate: ((String) -> Unit)? = null
@@ -97,28 +75,23 @@ object ToolExecutor {
 
         @Synchronized
         fun onChunk(fullAccumulatedText: String) {
-            // Pre-Parser Tool-Call Quarantine: Mute all file streaming from tool calls
             if (fullAccumulatedText.contains("<function_calls>") || fullAccumulatedText.contains("<invoke")) {
                 return
             }
 
             if (!inCodeBlock) {
-                // Look for opening fence strictly AFTER the last processed/closed block
                 val nextOpening = fullAccumulatedText.indexOf("```", lastProcessedOffset)
                 if (nextOpening != -1) {
                     val afterBacktick = fullAccumulatedText.substring(nextOpening + 3)
                     val newlineIdx = afterBacktick.indexOf('\n')
                     if (newlineIdx != -1) {
-                        // Opening fence header is complete (e.g. ```html\n)
                         val lang = afterBacktick.substring(0, newlineIdx).trim().lowercase()
                         
-                        // If it's an internal thought/reasoning block, skip past it
                         if (lang in setOf("thought", "thinking", "reasoning")) {
                             lastProcessedOffset = nextOpening + 3 + newlineIdx + 1
                             return
                         }
 
-                        // Check lines between lastProcessedOffset and nextOpening for file path annotation
                         val precedingText = fullAccumulatedText.substring(lastProcessedOffset, nextOpening)
                         for (line in precedingText.lines().takeLast(6)) {
                             val path = detectFilePath(line)
@@ -131,8 +104,6 @@ object ToolExecutor {
                         val explicitTarget = pendingFilePath
 
                         if (explicitTarget == null) {
-                            // Turn-Level State Sanitization: Strictly prohibit writing to /sdcard/...
-                            // unless the active stream contains an explicit file-writing directive with an explicitly defined target path.
                             inCodeBlock = true
                             currentFile = null
                             currentWriter = null
@@ -148,7 +119,6 @@ object ToolExecutor {
                             val targetFile = File(resolved)
                             targetFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
 
-                            // Immediate File Provisioning with Append-Safe Disk Sink (Zero-OOM RAM Protection)
                             val fos = FileOutputStream(targetFile, true)
                             currentFos = fos
                             currentWriter = BufferedWriter(OutputStreamWriter(fos, StandardCharsets.UTF_8))
@@ -169,10 +139,9 @@ object ToolExecutor {
                     }
                 }
             } else {
-                // Inside active code block: check if closing delimiter (\n```) has arrived
                 val newlineFence = fullAccumulatedText.indexOf("\n```", lastWrittenOffset)
                 val closingBackticks = if (newlineFence != -1) {
-                    newlineFence + 1 // points to first '`'
+                    newlineFence + 1
                 } else if (fullAccumulatedText.startsWith("```", lastWrittenOffset)) {
                     lastWrittenOffset
                 } else {
@@ -180,7 +149,6 @@ object ToolExecutor {
                 }
 
                 if (closingBackticks != -1) {
-                    // Closing ``` found: write final code characters up to the closing fence if active file handle exists
                     if (currentWriter != null && currentFile != null) {
                         val finalChunk = fullAccumulatedText.substring(lastWrittenOffset, closingBackticks)
                         val targetFileToSanitize = currentFile
@@ -208,12 +176,10 @@ object ToolExecutor {
                     currentFile = null
                     inCodeBlock = false
                     pendingFilePath = null
-                    // Move lastProcessedOffset past closing ```
                     val afterClosing = fullAccumulatedText.indexOf('\n', closingBackticks + 3)
                     lastProcessedOffset = if (afterClosing != -1) afterClosing + 1 else closingBackticks + 3
                     lastWrittenOffset = lastProcessedOffset
                 } else if (currentWriter != null) {
-                    // Still generating code: stream tokens safely to disk, leaving a 4-char buffer for "\n```"
                     val safeEnd = (fullAccumulatedText.length - 4).coerceAtLeast(lastWrittenOffset)
                     if (safeEnd > lastWrittenOffset) {
                         val chunk = fullAccumulatedText.substring(lastWrittenOffset, safeEnd)
@@ -275,7 +241,6 @@ object ToolExecutor {
         fun closeAll(finalFullText: String = ""): List<String> {
             try {
                 if (inCodeBlock && currentWriter != null) {
-                    // Stream completed before explicit closing fence: flush all remaining code
                     if (finalFullText.length > lastWrittenOffset) {
                         val remainder = finalFullText.substring(lastWrittenOffset)
                         val fenceIdx = remainder.indexOf("```")
@@ -305,7 +270,6 @@ object ToolExecutor {
                 pendingFilePath = null
             }
 
-            // Comprehensive multi-file safety check: Ensure only EXPLICIT file blocks are written to physical disk
             if (finalFullText.isNotBlank()) {
                 try {
                     val demuxed = StreamDemultiplexer.demux(finalFullText)
@@ -333,7 +297,6 @@ object ToolExecutor {
                 }
             }
 
-            // Post-stream HTML Byte-0 Strict Anchor Pass across all written files
             for (filePath in writtenFiles) {
                 if (filePath.endsWith(".html", ignoreCase = true) || filePath.endsWith("index.html", ignoreCase = true)) {
                     try {
@@ -347,7 +310,7 @@ object ToolExecutor {
                             }
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Could not post-sanitize HTML $filePath: ${e.message}")
+                        Log.w(TAG, "Could not post-sanitize HTML $filePath:${e.message}")
                     }
                 }
             }
@@ -373,12 +336,6 @@ object ToolExecutor {
         }
     }
 
-    /**
-     * Post-Execution Summary Hygiene (Strict No-Echo Rule):
-     * Eliminates code regurgitation/echoing in conversational chat text.
-     * Confines all code strictly to code fences (rendered in dedicated code containers),
-     * and produces a clean high-level executive deployment confirmation.
-     */
     fun sanitizePostExecutionSummary(rawReply: String, writtenFiles: List<String>): String {
         if (writtenFiles.isEmpty()) return rawReply.trim()
 
@@ -397,21 +354,18 @@ object ToolExecutor {
             }
         }
 
-        // Maintain fenced code blocks intact (rendered inside dedicated CliCodeBlockContainer)
         codeBlocks.forEach { block ->
             sb.append("```").append(block.language).append("\n")
             sb.append(block.code).append("\n")
             sb.append("```\n\n")
         }
 
-        // Strict Anti-Echo Enforcement: Filter prose after code to remove any code quotes or echoes
         if (lastProse.isNotBlank() && lastProse != firstProse) {
             val cleanAfter = StreamDemultiplexer.sanitizeProse(lastProse)
                 .replace("### Executive Deployment Confirmation:", "")
                 .replace("### Executive Deployment Confirmation", "")
                 .trim()
 
-            // Only retain high-level conversational summary sentences (no raw code or echoes)
             val nonCodeLines = cleanAfter.lines().filter { line ->
                 val t = line.trim()
                 t.isNotEmpty() && !t.startsWith("{") && !t.startsWith("}") &&
@@ -436,9 +390,6 @@ object ToolExecutor {
         return sb.toString().trim()
     }
 
-    /**
-     * Parse all code blocks from text, resolving target file path for each block.
-     */
     fun parseCodeBlocksWithPaths(text: String): List<ExtractedCodeBlock> {
         val blocks = mutableListOf<ExtractedCodeBlock>()
         val lines = text.lines()
@@ -496,7 +447,6 @@ object ToolExecutor {
             }
         }
 
-        // Catch any trailing unclosed code block:
         if (inCodeBlock && codeSb.isNotBlank()) {
             val code = codeSb.toString().trim()
             val lang = codeLanguage.ifBlank { "plaintext" }
@@ -515,10 +465,6 @@ object ToolExecutor {
         return blocks
     }
 
-    /**
-     * Extract and write all detected file-code pairs from an AI response.
-     * Strictly writes to disk ONLY if an explicit target file path directive was present.
-     */
     fun extractAndWriteFiles(response: String): List<String> {
         val writtenFiles = mutableListOf<String>()
         val blocks = parseCodeBlocksWithPaths(response)
@@ -530,8 +476,6 @@ object ToolExecutor {
                 if (ext in CODE_EXTENSIONS && isLikelyCode(block.code, ext)) {
                     val resolved = resolvePath(target, BASE_DIR)
                     val existingFile = File(resolved)
-                    // Integrity check: If file already exists and was streamed with more or equal content,
-                    // do NOT truncate or overwrite with an echoed snippet!
                     if (existingFile.exists() && existingFile.length() >= block.code.length) {
                         Log.i(TAG, "Skipping re-write: existing file is complete (${existingFile.length()} >= ${block.code.length})")
                         if (!writtenFiles.contains(existingFile.absolutePath)) {
@@ -551,9 +495,6 @@ object ToolExecutor {
         return writtenFiles
     }
 
-    /**
-     * Fallback generic output path when no explicit path was provided.
-     */
     fun defaultPathForLanguage(language: String, code: String): String {
         return "$BASE_DIR/output.txt"
     }
@@ -575,9 +516,6 @@ object ToolExecutor {
         return null
     }
 
-    /**
-     * Write content to the resolved file path, auto-creating parent dirs.
-     */
     fun writeFile(rawPath: String, content: String): String? {
         return try {
             val resolvedPath = resolvePath(rawPath, BASE_DIR)
@@ -664,8 +602,16 @@ object ToolExecutor {
         }
     }
 
+    /**
+     * Spawns non-root process with watchdog and explicit terminal dimensions environment variables.
+     */
     private fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): String {
         val pb = ProcessBuilder(shell, "-c", cmd)
+        val env = pb.environment()
+        env["TERM"] = "xterm-256color"
+        env["COLUMNS"] = "120"
+        env["LINES"] = "40"
+
         pb.redirectErrorStream(true)
         val process = pb.start()
         try { process.outputStream.close() } catch (_: Exception) {}

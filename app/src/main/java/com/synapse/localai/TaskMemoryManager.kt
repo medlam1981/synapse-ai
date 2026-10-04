@@ -30,7 +30,10 @@ data class AgentTask(
     val maxRetries: Int = 3,
     val parentTaskId: String? = null,
     val priority: Int = 0,
-    val source: String = "user"
+    val source: String = "user",
+    val cronExpression: String? = null,
+    val taskType: String = "COMMAND",
+    val isRecurring: Boolean = false
 )
 
 class TaskMemoryManager(context: Context) {
@@ -408,6 +411,9 @@ class TaskMemoryManager(context: Context) {
             put("parentTaskId", task.parentTaskId ?: JSONObject.NULL)
             put("priority", task.priority)
             put("source", task.source)
+            put("cronExpression", task.cronExpression ?: JSONObject.NULL)
+            put("taskType", task.taskType)
+            put("isRecurring", task.isRecurring)
         }
     }
 
@@ -429,7 +435,10 @@ class TaskMemoryManager(context: Context) {
             maxRetries = json.optInt("maxRetries", 3),
             parentTaskId = if (json.has("parentTaskId") && !json.isNull("parentTaskId")) json.getString("parentTaskId") else null,
             priority = json.optInt("priority", 0),
-            source = json.optString("source", "user")
+            source = json.optString("source", "user"),
+            cronExpression = if (json.has("cronExpression") && !json.isNull("cronExpression")) json.getString("cronExpression") else null,
+            taskType = json.optString("taskType", "COMMAND"),
+            isRecurring = json.optBoolean("isRecurring", false)
         )
     }
 }

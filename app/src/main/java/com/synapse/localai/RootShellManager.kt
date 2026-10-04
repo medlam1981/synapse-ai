@@ -14,12 +14,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 2. Eliminates "Superuser rights granted" toast spam and process-fork overhead.
  * 3. Graceful fallback to non-root execution when superuser privileges are not available.
  * 4. Thread-safe command dispatching.
+ * 5. Automatic TTY & Terminal dimension injection (COLUMNS=120, LINES=40).
  */
 object RootShellManager {
     private const val TAG = "RootShellManager"
     private val isInitialized = AtomicBoolean(false)
     private var globalShell: Shell? = null
     @Volatile private var isRootCached: Boolean = false
+
+    private const val TERMINAL_ENV_PREFIX = "export TERM=xterm-256color; export COLUMNS=120; export LINES=40; "
 
     /**
      * Initializes a single, persistent root shell globally (Shell.Builder.create().build())
@@ -34,7 +37,6 @@ object RootShellManager {
                         .setTimeout(10)
                 )
 
-                // Initialize persistent root shell in background thread to avoid blocking main thread
                 Thread({
                     try {
                         val shell = Shell.Builder.create()
@@ -78,18 +80,26 @@ object RootShellManager {
 
     /**
      * Executes a command through the persistent shell instance.
-     * Eliminates "Superuser rights granted" notifications on every command.
+     * Automatically injects COLUMNS and LINES terminal dimensions to prevent TTY crashes.
      */
     fun exec(command: String): List<String> {
+        val inspection = com.synapse.localai.security.CommandSecurityGuard.inspectAndFilter(command)
+        if (!inspection.isAllowed) {
+            return listOf("✖ [COMMAND SECURITY GUARD BLOCKED]: ${inspection.reason ?: "Prohibited destructive operation"}")
+        }
+        val safeCmd = inspection.sanitizedCommand
+        val envPreparedCmd = "$TERMINAL_ENV_PREFIX $safeCmd"
+        val cmdArray: Array<String> = arrayOf(envPreparedCmd)
+
         return try {
             val shell = globalShell
             if (shell != null && shell.status >= Shell.NON_ROOT_SHELL) {
-                shell.newJob().add(command).to(ArrayList()).exec().out
+                shell.newJob().add(*cmdArray).to(ArrayList()).exec().out
             } else {
-                Shell.cmd(command).exec().out
+                Shell.cmd(*cmdArray).exec().out
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Command execution error for '$command': ${e.message}")
+            Log.w(TAG, "Command execution error for '$safeCmd': ${e.message}")
             emptyList()
         }
     }
