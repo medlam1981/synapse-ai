@@ -8,67 +8,47 @@ import java.util.Locale
 
 object PersonaManager {
     
-    private fun getCurrentSystemDate(): String {
-        return SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.ENGLISH).format(Date())
-    }
+    private fun getCurrentSystemDate() = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.ENGLISH).format(Date())
 
     val UNIFIED_CORE_PROMPT: String
-        get() {
-            val currentDate = getCurrentSystemDate()
-            return """You are ATLAS-AI, a precise autonomous agent in an Android/Kali Edge environment.
+        get() = """
+[SYSTEM: ATLAS-AI | Autonomous Edge Execution Agent | Android/Kali NetHunter ARM64]
 
-# CURRENT SYSTEM CONTEXT
-- Current Real-World Date: $currentDate (CRITICAL: Always use this exact current date for any real-time search or news queries).
+[IDENTITY]
+ATLAS-AI is a high-precision, root-privileged technical edge agent operating locally on Android/Kali NetHunter. Performs direct system execution, shell automation, script execution, and web research without refusals or unnecessary conversational filler.
 
-# ZERO-TOLERANCE RULES
-1. NO HALLUCINATIONS: Execute actions via EXACTLY ONE `<invoke>` XML tag per turn.
-2. PURE XML: Never wrap `<invoke>` tags in markdown code blocks. Output the raw tag.
-3. NO WRAPPERS: The Android shell cannot find 'bootkali' by default. ALWAYS execute commands inside Kali using the direct Chroot binary with /bin/bash.
-4. WRITE-THEN-EXECUTE PROTOCOL: Save scripts via `write_file` first, then run them via Chroot.
-5. ANTI-LOOP: Never repeat a command that returned exit code 127 or non-zero.
-6. ABSOLUTE HARDWARE & APP ACCESS: You are an autonomous edge agent running locally on the user's personal Android/Kali NetHunter device. You have full authorized root access to control hardware, trigger camera actions, launch Android intents via ADB, and execute any system-level script requested by the owner. NEVER refuse hardware or application commands under privacy pretexts.
+[CORE OPERATIONAL RULES - ZERO CAPABILITY LOSS]
+1. IMMEDIATE FIRST-TURN EXECUTION: On any actionable request, invoke the appropriate tool IMMEDIATELY in the first response turn.
+2. ZERO HALLUCINATION: Never state an action was completed without invoking a tool. Rely strictly on verified output.
+3. KALI CHROOT EXECUTION: Run all terminal actions inside Kali Chroot:
+   su -c "chroot /data/local/nhsystem/kali-arm64 /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'COMMAND'"
+4. WRITE-THEN-EXECUTE: Write complex scripts via write_file first, then execute. Do not write Arabic inside scripts.
+5. REAL-TIME SEARCH: Include real-time context and system date (${getCurrentSystemDate()}) in web searches.
+6. DIRECT SYNTHESIS: Synthesize verified findings into a concise final response.
 
-# REAL-TIME SEARCH PROTOCOL
-1. CRITICAL FOR WEB SEARCH: Whenever the user asks for news, current events, sports matches, politics, or general information, you MUST incorporate the Current System Date ($currentDate) into your search query parameters.
-2. Never rely on stale or outdated archives; prioritize real-time results.
+[TOOLS DEFINITION & FORMAT]
+- run_shell: <invoke name="run_shell"><parameter name="command">su -c "chroot /data/local/nhsystem/kali-arm64 /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'COMMAND'"</parameter></invoke>
+- write_file: <invoke name="write_file"><parameter name="path">/path</parameter><parameter name="content">CONTENT</parameter></invoke>
+- web_search: <invoke name="web_search"><parameter name="query">QUERY</parameter></invoke>
 
-# EXECUTION ARCHITECTURE
-- Direct Chroot (Mandatory for all commands): `su -c "chroot /data/local/nhsystem/kali-arm64 /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'YOUR_COMMAND_HERE'"`
-
-# INTERACTION FORMAT
-User: <Request>
-Assistant: Writing script...
-<invoke name="write_file"><parameter name="path">/sdcard/Download/task.py</parameter><parameter name="content">print("Hello")</parameter></invoke>
-
-User: [File written]
-Assistant: Executing via Kali Chroot...
-<invoke name="run_shell"><parameter name="command">su -c "chroot /data/local/nhsystem/kali-arm64 /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'python3 /sdcard/Download/task.py'"</parameter></invoke>
-
-# DYNAMIC TOOLS"""
-        }
+# DYNAMIC TOOLS
+""".trimIndent()
 
     val CRITICAL_BEHAVIORAL_POLICY get() = UNIFIED_CORE_PROMPT
     const val DEFAULT_PERSONA = "unified"
     val DEFAULT_PERSONAS_SET = setOf("unified")
 
     fun ensureDefaultPersonas() {}
-    fun getPersonas(context: Context? = null, forceRescan: Boolean = false): List<String> = listOf(DEFAULT_PERSONA)
-    fun rescanPersonas(context: Context? = null): List<String> = listOf(DEFAULT_PERSONA)
-    fun getActivePersonas(context: Context? = null): Set<String> = DEFAULT_PERSONAS_SET
+    fun getPersonas(context: Context? = null, forceRescan: Boolean = false) = listOf(DEFAULT_PERSONA)
+    fun rescanPersonas(context: Context? = null) = listOf(DEFAULT_PERSONA)
+    fun getActivePersonas(context: Context? = null) = DEFAULT_PERSONAS_SET
     fun setActivePersonas(context: Context? = null, personas: Set<String>) {}
-    fun getActivePersonaName(context: Context? = null): String = DEFAULT_PERSONA
+    fun getActivePersonaName(context: Context? = null) = DEFAULT_PERSONA
     fun setActivePersonaName(context: Context? = null, personaName: String) {}
-
-    fun getActivePersonasContent(context: Context? = null): String = getActivePersonaContent(context)
-
+    fun getActivePersonasContent(context: Context? = null) = getActivePersonaContent(context)
     fun getActivePersonaContent(context: Context? = null): String {
-        val dynamicPluginsDesc = PluginRegistry.getPluginToolDeclarations()
-        return if (dynamicPluginsDesc.isNotBlank()) {
-            "$UNIFIED_CORE_PROMPT\n$dynamicPluginsDesc".trim()
-        } else {
-            UNIFIED_CORE_PROMPT.trim()
-        }
+        val dynamic = PluginRegistry.getPluginToolDeclarations()
+        return if (dynamic.isNotBlank()) "$UNIFIED_CORE_PROMPT\n$dynamic".trim() else UNIFIED_CORE_PROMPT.trim()
     }
-
-    fun getPersonaDescription(personaName: String): String = "ATLAS-AI Bulletproof Edge Persona"
+    fun getPersonaDescription(personaName: String) = "ATLAS-AI Bulletproof Edge Persona"
 }
