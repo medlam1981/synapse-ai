@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.TimeUnit
 import org.json.JSONArray
@@ -164,7 +166,7 @@ data class AgentConfig(
     val sdLowMemoryMode: Boolean = true,
     val sdThreads: Int = 4,
     val sdEngineMode: String = "SD_TURBO",
-    val sdComputeDevice: String = "CPU"
+    val sdComputeDevice: String = "AUTO"
 )
 
 enum class EngineState { IDLE, RUNNING }
@@ -610,11 +612,13 @@ class AgentViewModel : ViewModel() {
         return charCapped.trim().ifEmpty { "[No search data found]" }
     }
 
-    suspend fun executeSafeProcess(command: String): Pair<Int, String> = withContext(Dispatchers.IO) {
+    suspend fun executeSafeProcess(command: String, timeoutMs: Long = 0L): Pair<Int, String> = withContext(Dispatchers.IO) {
         if (command.isBlank()) return@withContext -1 to "[Process completed with no output]"
         try {
-            val (exitCode, rawOutput) = runProcessWithWatchdog(command, "sh", 12_000L)
+            val (exitCode, rawOutput) = runProcessWithWatchdog(command, "sh", timeoutMs)
             exitCode to sanitizeProcessOutput(rawOutput)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             -1 to sanitizeProcessOutput("Execution error: ${e.message ?: e.javaClass.simpleName}")
         }
@@ -819,7 +823,11 @@ class AgentViewModel : ViewModel() {
 
         if (finalConfig.preferredModelType == ModelType.GGUF) {
             ggufClient?.temperature = finalConfig.temperature
-            if (finalConfig.localModelPath != oldConfig.localModelPath || finalConfig.draftModelPath != oldConfig.draftModelPath || !isModelLoaded()) {
+            if (finalConfig.localModelPath != oldConfig.localModelPath ||
+                finalConfig.draftModelPath != oldConfig.draftModelPath ||
+                finalConfig.gpuLayers != oldConfig.gpuLayers ||
+                !isModelLoaded()
+            ) {
                 closeAllModels()
                 viewModelScope.launch(Dispatchers.IO) {
                     delay(300)
@@ -974,6 +982,14 @@ class AgentViewModel : ViewModel() {
                     temperature = prefs.getFloat("temperature", 0.30f),
                     activePersona = activePersonaName,
                     activePersonas = activePersonasSet,
+                    sdSteps = prefs.getInt("sd_steps", 0),
+                    sdCfgScale = prefs.getFloat("sd_cfg_scale", 0f),
+                    sdWidth = prefs.getInt("sd_width", 256),
+                    sdHeight = prefs.getInt("sd_height", 256),
+                    sdLowMemoryMode = prefs.getBoolean("sd_low_memory_mode", true),
+                    sdThreads = prefs.getInt("sd_threads", 4),
+                    sdEngineMode = prefs.getString("sd_engine_mode", "SD_TURBO") ?: "SD_TURBO",
+                    sdComputeDevice = prefs.getString("sd_compute_device", "AUTO") ?: "AUTO",
                     ttsEnabled = false
                 )
 
@@ -1009,50 +1025,124 @@ class AgentViewModel : ViewModel() {
         }
     }
 
-    suspend fun triggerModelLoad(context: Context, path: String) = withContext(Dispatchers.IO) {
-        if (isModelLoadingInProgress && currentLoadingPath == path) return@withContext
-        isModelLoadingInProgress = true
-        currentLoadingPath = path
-        modelLoadJob?.cancel()
+    suspend fun triggerModelLoad(context: Context, path: String): Unit = withContext(Dispatchers.IO) {
+        val shouldStart = synchronized(modelLoadLock) {
+            if (isModelLoadingInProgress) {
+                if (currentLoadingPath != path) {
+                    pendingModelLoad = context.applicationContext to path
+                }
+                false
+            } else {
+                isModelLoadingInProgress = true
+                currentLoadingPath = path
+                true
+            }
+        }
+        if (!shouldStart) return@withContext
 
         modelLoadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val modelName = File(path).nameWithoutExtension
-                _uiState.update { it.copy(localModelLoading = true, localModelLoaded = false, activeModelType = null) }
+                _uiState.update {
+                    it.copy(
+                        localModelLoading = true,
+                        localModelLoaded = false,
+                        modelLoadFailed = false,
+                        loadingProgress = 0f,
+                        loadingStatusText = "Preparing $modelName..."
+                    )
+                }
+                ModelEngineService.start(context, "Loading local model: ${modelName.take(36)}")
                 
                 val config = _uiState.value.config
                 val client = GGUFModelClient().apply {
                     serverHost = config.serverHost
                     serverPort = config.serverPort
                     contextLength = config.contextLength.coerceIn(1024, 4096)
-                    threadCount = config.threadCount.coerceIn(4, 8)
+                    threadCount = config.threadCount.coerceIn(1, 8)
                     maxTokens = 2048
                     temperature = config.temperature
                     useMmap = config.useMmap
                     gpuLayers = config.gpuLayers
                 }
                 ggufClient = client
+                var latestLoadStatus = "Preparing $modelName..."
                 client.loadModel(
                     context = context,
                     path = path,
-                    onStatus = { addSystemLog(it) },
+                    onStatus = { status ->
+                        latestLoadStatus = status
+                        addSystemLog(status)
+                        _uiState.update {
+                            if (it.localModelLoading) it.copy(loadingStatusText = status.take(240)) else it
+                        }
+                    },
                     onProgress = { p, s -> _uiState.update { it.copy(loadingProgress = p, loadingStatusText = s) } },
                     onLoaded = {
-                        isModelLoadingInProgress = false
-                        currentLoadingPath = null
                         if (client.isLoaded) {
                             _uiState.update { it.copy(localModelLoaded = true, localModelLoading = false, activeModelType = ModelType.GGUF, activeModelName = modelName) }
+                            ModelEngineService.updateStatus(context, "Local model ready: ${modelName.take(36)}")
+                        } else {
+                            _uiState.update {
+                                it.copy(
+                                    localModelLoaded = false,
+                                    localModelLoading = false,
+                                    modelLoadFailed = true,
+                                    loadingStatusText = latestLoadStatus.take(240)
+                                )
+                            }
+                            ModelEngineService.updateStatus(context, "Local model startup failed")
                         }
                     }
                 )
+                if (client.isLoaded) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        try {
+                            val personaPrompt = getEffectivePersonaPrompt(context)
+                            val systemPrompt = buildSystemPrompt(
+                                context = context,
+                                forLocalModel = true,
+                                dynamicPersonaPrompt = personaPrompt
+                            )
+                            withTimeoutOrNull(30_000L) {
+                                client.warmupPersonaKVCache(systemPrompt)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Local model persona warmup failed: ${e.message}")
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Local model startup failed for $path", e)
+                _uiState.update {
+                    it.copy(
+                        localModelLoaded = false,
+                        localModelLoading = false,
+                        modelLoadFailed = true,
+                        loadingStatusText = "Model startup error: ${e.message ?: "unknown error"}"
+                    )
+                }
+                ModelEngineService.updateStatus(context, "Local model startup error")
             } finally {
-                isModelLoadingInProgress = false
-                currentLoadingPath = null
+                val pending = synchronized(modelLoadLock) {
+                    isModelLoadingInProgress = false
+                    currentLoadingPath = null
+                    pendingModelLoad.also { pendingModelLoad = null }
+                }
+                if (pending != null) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        triggerModelLoad(pending.first, pending.second)
+                    }
+                }
             }
         }
     }
 
+    private val modelLoadLock = Any()
     private var modelLoadJob: Job? = null
+    private var pendingModelLoad: Pair<Context, String>? = null
     @Volatile private var isModelLoadingInProgress = false
     @Volatile private var currentLoadingPath: String? = null
 
@@ -1108,16 +1198,19 @@ class AgentViewModel : ViewModel() {
     }
 
     private fun isModelLoaded(): Boolean = (ggufClient?.isLoaded == true) || (geminiClient?.isLoaded == true)
+    fun isReadyForBackgroundTasks(): Boolean = isModelLoaded()
 
     fun closeAllModels() {
+        synchronized(modelLoadLock) {
+            pendingModelLoad = null
+        }
         modelLoadJob?.cancel()
         modelLoadJob = null
-        isModelLoadingInProgress = false
         GGUFModelClient.stopGlobalServer()
         ggufClient?.close()
         ggufClient = null
         geminiClient = null
-        _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false, activeModelType = null) }
+        _uiState.update { it.copy(localModelLoaded = false, localModelLoading = false, modelLoadFailed = false, activeModelType = null) }
     }
 
     @Volatile private var cachedStaticPrefix: String? = null
@@ -1206,6 +1299,17 @@ class AgentViewModel : ViewModel() {
         val effectivePersona = (dynamicPersonaPrompt ?: _customPersonaPrompt.value.ifBlank {
             actualContext?.let { PersonaDataStore.getCustomPersonaPromptSync(it) } ?: PersonaDataStore.DEFAULT_PROMPT
         }).trim()
+        val isDefaultPersona = effectivePersona == PersonaManager.UNIFIED_CORE_PROMPT.trim()
+        val useCompactLocalPersona = forLocalModel &&
+            actualContext?.let { DeviceProfile.detect(it).totalRamMb < 8_192L } == true
+        val localPersona = if (useCompactLocalPersona && isDefaultPersona) {
+            """You are ATLAS-AI, a capable and concise technical assistant. Follow the user's active persona.
+                |Be accurate; never claim an action succeeded without verified tool output.
+                |For actionable tasks, invoke the appropriate tool immediately using its required format.
+                |Run shell tasks through the configured Kali chroot. Preserve user context and respond in the user's language.""".trimMargin()
+        } else {
+            effectivePersona
+        }
 
         val detectedLang = detectLanguage(userPrompt)
 
@@ -1215,10 +1319,10 @@ class AgentViewModel : ViewModel() {
 
         val greetingDirective = if (isGreeting) {
             when (detectedLang) {
-                DetectedLanguage.ARABIC -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in Arabic ('$userPrompt'). Return the greeting warmly and concisely in pure Arabic (e.g. 'أهلاً بك! أنا ATLAS-AI، مهندسك ومساعدك الذكي. كيف يمكنني مساعدتك اليوم؟'). Do not call tools or execute diagnostics."
-                DetectedLanguage.FRENCH -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in French ('$userPrompt'). Return the greeting warmly and concisely in pure French (e.g. 'Bonjour! Je suis ATLAS-AI, votre ingénieur IA et assistant technique. Comment puis-je vous aider aujourd\\'hui?'). Do not call tools or execute diagnostics."
-                DetectedLanguage.SPANISH -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in Spanish ('$userPrompt'). Return the greeting warmly and concisely in pure Spanish (e.g. '¡Hola! Soy ATLAS-AI, tu asistente técnico e ingeniero de IA. ¿Cómo puedo ayudarte hoy?'). Do not call tools or execute diagnostics."
-                DetectedLanguage.ENGLISH -> "\n\n[MANDATORY GREETING DIRECTIVE]: The user greeted you in English ('$userPrompt'). Return the greeting warmly and concisely in pure ENGLISH ONLY (e.g. 'Hello! I am ATLAS-AI, your AI engineer and technical assistant. How can I assist you today?'). NEVER use Arabic words or letters when addressed in English! Do not call tools or execute diagnostics."
+                DetectedLanguage.ARABIC -> "\n\n[GREETING]: Reply as the model with one short, natural Arabic greeting. Do not introduce yourself, list your roles, or explain anything unless the user explicitly asks who you are."
+                DetectedLanguage.FRENCH -> "\n\n[GREETING]: Reply as the model with one short, natural French greeting. Do not introduce yourself or explain anything unless explicitly asked."
+                DetectedLanguage.SPANISH -> "\n\n[GREETING]: Reply as the model with one short, natural Spanish greeting. Do not introduce yourself or explain anything unless explicitly asked."
+                DetectedLanguage.ENGLISH -> "\n\n[GREETING]: Reply as the model with one short, natural English greeting. Do not introduce yourself, list your roles, or explain anything unless the user explicitly asks who you are."
             }
         } else ""
 
@@ -1268,10 +1372,16 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
 
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
-            val localGreetingNote = if (isGreeting) "\n$greetingDirective" else ""
+            if (isGreeting) {
+                return """$languageEnforcement
+
+$localPersona$greetingDirective$custom
+""".trimIndent()
+            }
             return """$languageEnforcement
 
-$effectivePersona$localGreetingNote
+$localPersona
+Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
 Tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
@@ -1392,7 +1502,7 @@ $languageEnforcement""".trimIndent()
                     addLog(LogEntry(sender = "AGENT", text = "No model active. Please configure Gemini API keys or load a local GGUF model.", isError = false))
                     return@launch
                 }
-                
+
                 synchronized(conversationHistory) { conversationHistory.add("user" to finalCommand) }
 
                 val mediaIntent = if (finalCommand.trim().startsWith("/image", ignoreCase = true)) {
@@ -2092,7 +2202,7 @@ $langFinalInstruction"""
         sb.toString()
     }
 
-    private fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): Pair<Int, String> {
+    private suspend fun runProcessWithWatchdog(cmd: String, shell: String, timeoutMs: Long): Pair<Int, String> {
         val pb = ProcessBuilder(shell, "-c", cmd)
         pb.redirectErrorStream(true)
         val env = pb.environment()
@@ -2102,15 +2212,18 @@ $langFinalInstruction"""
         val process = pb.start()
         try { process.outputStream.close() } catch (_: Exception) {}
 
-        val outputSb = StringBuilder()
+        val outputSb = StringBuffer()
+        val maxOutputChars = 64 * 1024
         val readerThread = Thread({
             try {
                 process.inputStream.bufferedReader().use { reader ->
                     val buffer = CharArray(2048)
                     var charsRead: Int
                     while (reader.read(buffer).also { charsRead = it } != -1) {
-                        outputSb.append(buffer, 0, charsRead)
-                        if (outputSb.length > 64 * 1024) break
+                        synchronized(outputSb) {
+                            val remaining = maxOutputChars - outputSb.length
+                            if (remaining > 0) outputSb.append(buffer, 0, minOf(charsRead, remaining))
+                        }
                     }
                 }
             } catch (_: Exception) {}
@@ -2118,16 +2231,37 @@ $langFinalInstruction"""
         readerThread.isDaemon = true
         readerThread.start()
 
+        val startedAt = System.currentTimeMillis()
+        var lastProgressUpdate = startedAt
         try {
-            val exitedInTime = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-            if (!exitedInTime) {
-                try { process.destroyForcibly() } catch (_: Exception) {}
-                try { readerThread.join(300) } catch (_: Exception) {}
-                return -1 to "[Process Timed Out]"
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                if (process.waitFor(1, TimeUnit.SECONDS)) break
+
+                val now = System.currentTimeMillis()
+                val elapsedMs = now - startedAt
+                if (timeoutMs > 0L && elapsedMs >= timeoutMs) {
+                    process.destroyForcibly()
+                    readerThread.join(500)
+                    return -1 to "[Process timed out after ${timeoutMs / 1000}s and was terminated]\n$outputSb"
+                }
+                if (now - lastProgressUpdate >= 15_000L) {
+                    val elapsedSeconds = elapsedMs / 1000
+                    _uiState.update {
+                        it.copy(
+                            currentPhase = AgentActionPhase.EXECUTING_TOOL,
+                            activeStatusDetail = "Command still running in background (${elapsedSeconds}s); waiting for completion..."
+                        )
+                    }
+                    lastProgressUpdate = now
+                }
             }
-            try { readerThread.join(500) } catch (_: Exception) {}
+            readerThread.join(1000)
             val exitCode = try { process.exitValue() } catch (_: Exception) { 0 }
             return exitCode to outputSb.toString()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            process.destroyForcibly()
+            throw e
         } finally {
             try { process.inputStream?.close() } catch (_: Exception) {}
             try { process.errorStream?.close() } catch (_: Exception) {}
@@ -2136,23 +2270,29 @@ $langFinalInstruction"""
         }
     }
 
-    suspend fun runShellWithExitCode(cmd: String, timeoutMs: Long = 12_000L): Pair<Int, String> = withContext(Dispatchers.IO) {
+    suspend fun runShellWithExitCode(cmd: String, timeoutMs: Long = 0L): Pair<Int, String> = withContext(Dispatchers.IO) {
         if (cmd.isBlank()) return@withContext -1 to "[Process completed with no output]"
         val tryRoot = _uiState.value.isRootAvailable
         try {
             if (tryRoot) {
                 try {
-                    val lines = RootShellManager.execAsync(cmd)
-                    if (lines.isNotEmpty()) return@withContext 0 to sanitizeProcessOutput(lines.joinToString("\n"))
-                } catch (_: Exception) {}
+                    val (exitCode, lines) = RootShellManager.execWithExitCodeAsync(cmd)
+                    return@withContext exitCode to sanitizeProcessOutput(lines.joinToString("\n"))
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@withContext -1 to sanitizeProcessOutput("Root command execution failed: ${e.message ?: e.javaClass.simpleName}")
+                }
             }
-            executeSafeProcess(cmd)
+            executeSafeProcess(cmd, timeoutMs)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             -1 to sanitizeProcessOutput("Error executing command: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
-    suspend fun runShellInternal(cmd: String, timeoutMs: Long = 15_000L): String = runShellWithExitCode(cmd, timeoutMs).second
+    suspend fun runShellInternal(cmd: String, timeoutMs: Long = 0L): String = runShellWithExitCode(cmd, timeoutMs).second
 
     private fun interceptHeredocFileWrite(cmd: String): Triple<String, Int, String>? {
         val trimmed = cmd.trim()
@@ -2186,14 +2326,14 @@ $langFinalInstruction"""
         }
     }
 
-    private suspend fun executeToolLoop(response: String, context: Context? = null): Pair<Boolean, String?> = withTimeoutOrNull(25_000L) {
+    private suspend fun executeToolLoop(response: String, context: Context? = null): Pair<Boolean, String?> {
         val actualContext = context ?: appContext ?: MainActivity.instance
         val toolCalls = StreamDemultiplexer.parseAllToolCalls(response)
-        if (toolCalls.isEmpty()) return@withTimeoutOrNull false to null
+        if (toolCalls.isEmpty()) return false to null
 
         val summaries = mutableListOf<String>()
         var actionToolUsed = false
-        try {
+        return try {
             for (call in toolCalls) {
                 val action = call.name.trim().lowercase()
                 val params = call.params
@@ -2384,7 +2524,7 @@ $langFinalInstruction"""
                                 isSuccess = true
                             )
                             summaries.add(structuredSummary)
-                            return@withTimeoutOrNull false to summaries.joinToString("\n\n")
+                            return false to summaries.joinToString("\n\n")
                         }
                         "run_plugin", "plugin", "exec_plugin" -> {
                             actualContext?.let { initTaskSystem(it) }
@@ -2443,10 +2583,13 @@ $langFinalInstruction"""
                 }
             }
             actionToolUsed to (if (summaries.isNotEmpty()) summaries.joinToString("\n\n") else null)
-        } catch (_: Exception) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Tool execution failed", e)
             false to null
         }
-    } ?: (false to null)
+    }
 
     fun initTaskSystem(context: Context) {
         if (taskMemory == null) {

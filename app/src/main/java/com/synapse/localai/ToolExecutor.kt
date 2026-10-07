@@ -583,13 +583,13 @@ object ToolExecutor {
     }
 
     /**
-     * Headless shell command execution utility with strict timeout watchdog.
+     * Headless shell command execution utility. Long commands are allowed to finish.
      */
-    fun executeShellCommand(cmd: String, timeoutMs: Long = 15_000L): String {
+    fun executeShellCommand(cmd: String, timeoutMs: Long = 0L): String {
         return try {
-            val lines = RootShellManager.exec(cmd)
-            if (lines.isNotEmpty()) {
-                lines.joinToString("\n")
+            val (exitCode, lines) = RootShellManager.execWithExitCode(cmd)
+            if (exitCode >= 0) {
+                "Exit code: $exitCode\n${lines.joinToString("\n")}".trim()
             } else {
                 runProcessWithWatchdog(cmd, "sh", timeoutMs)
             }
@@ -632,7 +632,12 @@ object ToolExecutor {
         thread.isDaemon = true
         thread.start()
 
-        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        val finished = if (timeoutMs > 0L) {
+            process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        } else {
+            process.waitFor()
+            true
+        }
         if (!finished) {
             try { process.destroyForcibly() } catch (_: Exception) {}
             try { thread.join(500) } catch (_: Exception) {}

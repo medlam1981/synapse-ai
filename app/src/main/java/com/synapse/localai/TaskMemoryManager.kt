@@ -114,6 +114,53 @@ class TaskMemoryManager(context: Context) {
         }
     }
 
+    fun recoverInterruptedTasks(): Int {
+        val recovered = mutableListOf<AgentTask>()
+        val failed = mutableListOf<AgentTask>()
+        synchronized(tasks) {
+            val iterator = tasks.listIterator()
+            while (iterator.hasNext()) {
+                val task = iterator.next()
+                if (task.status != TaskStatus.RUNNING) continue
+                if (task.retryCount < task.maxRetries) {
+                    val retry = task.copy(
+                        status = TaskStatus.PENDING,
+                        executeAt = System.currentTimeMillis() + 30_000L,
+                        retryCount = task.retryCount + 1,
+                        result = "Resuming after app process stopped"
+                    )
+                    iterator.set(retry)
+                    recovered.add(retry)
+                } else {
+                    val interrupted = task.copy(
+                        status = TaskStatus.FAILED,
+                        completedAt = System.currentTimeMillis(),
+                        result = "Stopped before completion after ${task.retryCount} retries"
+                    )
+                    iterator.remove()
+                    failed.add(interrupted)
+                }
+            }
+            if (recovered.isNotEmpty() || failed.isNotEmpty()) saveTasks()
+        }
+        if (failed.isNotEmpty()) {
+            synchronized(taskHistory) {
+                taskHistory.addAll(failed)
+                saveHistory()
+            }
+        }
+        if (recovered.isNotEmpty() || failed.isNotEmpty()) {
+            Log.i(TAG, "Recovered ${recovered.size} interrupted tasks; archived ${failed.size} exhausted tasks")
+        }
+        return recovered.size
+    }
+
+    fun deferTask(id: String, retryAt: Long, reason: String) {
+        updateTask(id) { task ->
+            task.copy(status = TaskStatus.PENDING, executeAt = retryAt, result = reason)
+        }
+    }
+
     fun getDueTasks(): List<AgentTask> {
         val now = System.currentTimeMillis()
         synchronized(tasks) {

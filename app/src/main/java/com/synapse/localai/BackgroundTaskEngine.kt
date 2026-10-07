@@ -74,6 +74,7 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
             return
         }
 
+        taskMemory.recoverInterruptedTasks()
         val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
             Log.e(TAG, "Uncaught exception in engine scope", throwable)
         }
@@ -281,6 +282,21 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
      * @return `true` if the task completed successfully.
      */
     private suspend fun executeTask(task: AgentTask): Boolean {
+        val internalTask = task.command.startsWith("__INTERNAL_MAINTENANCE_")
+        val viewModel = if (internalTask) null else waitForViewModel()
+        if (!internalTask && (viewModel == null || !viewModel.isReadyForBackgroundTasks())) {
+            val retryAt = System.currentTimeMillis() + 30_000L
+            taskMemory.deferTask(
+                task.id,
+                retryAt,
+                if (viewModel == null) "Waiting for the agent runtime to initialize"
+                else "Waiting for an AI model to finish loading"
+            )
+            Log.i(TAG, "Deferred task ${task.id} until the agent model is ready")
+            updateState()
+            return false
+        }
+
         currentTaskId = task.id
         taskMemory.updateTaskStatus(task.id, TaskStatus.RUNNING)
         updateState(currentTask = task.copy(status = TaskStatus.RUNNING))
@@ -296,30 +312,17 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                 }
             } else if (task.taskType == "AGENT_TASK") {
                 // Route complex agent tasks through the autonomous ReAct loop
-                val viewModel = waitForViewModel()
-                if (viewModel == null) {
-                    taskMemory.markFailed(task.id, "AgentViewModel not available")
-                    failedCount++
-                    return false
-                }
+                val activeViewModel = requireNotNull(viewModel)
                 val orchestrator = com.synapse.localai.orchestration.MultiWorkerOrchestrator(
                     sessionId = task.id,
-                    isCloudMode = viewModel.isCloudMode(),
-                    modelInvoker = { sys, usr, onChunk -> viewModel.runSingleLlmPass(sys, usr, onChunk) },
+                    isCloudMode = activeViewModel.isCloudMode(),
+                    modelInvoker = { sys, usr, onChunk -> activeViewModel.runSingleLlmPass(sys, usr, onChunk) },
                     onTelemetryUpdate = { _ -> },
                     onTerminalLogUpdate = { log -> Log.d(TAG, "Orchestrator: $log") }
                 )
                 orchestrator.executeAutonomousAgent(task.command)
             } else {
-                // Wait for AgentViewModel to become available
-                val viewModel = waitForViewModel()
-                if (viewModel == null) {
-                    Log.w(TAG, "AgentViewModel not available after timeout — failing task ${task.id}")
-                    taskMemory.markFailed(task.id, "AgentViewModel not available")
-                    failedCount++
-                    return false
-                }
-                viewModel.executeBackgroundTask(task.command, task.id)
+                requireNotNull(viewModel).executeBackgroundTask(task.command, task.id)
             }
 
             // Success

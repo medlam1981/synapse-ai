@@ -82,10 +82,12 @@ object RootShellManager {
      * Executes a command through the persistent shell instance.
      * Automatically injects COLUMNS and LINES terminal dimensions to prevent TTY crashes.
      */
-    fun exec(command: String): List<String> {
+    fun exec(command: String): List<String> = execWithExitCode(command).second
+
+    fun execWithExitCode(command: String): Pair<Int, List<String>> {
         val inspection = com.synapse.localai.security.CommandSecurityGuard.inspectAndFilter(command)
         if (!inspection.isAllowed) {
-            return listOf("✖ [COMMAND SECURITY GUARD BLOCKED]: ${inspection.reason ?: "Prohibited destructive operation"}")
+            return 126 to listOf("✖ [COMMAND SECURITY GUARD BLOCKED]: ${inspection.reason ?: "Prohibited destructive operation"}")
         }
         val safeCmd = inspection.sanitizedCommand
         val envPreparedCmd = "$TERMINAL_ENV_PREFIX $safeCmd"
@@ -93,14 +95,15 @@ object RootShellManager {
 
         return try {
             val shell = globalShell
-            if (shell != null && shell.status >= Shell.NON_ROOT_SHELL) {
-                shell.newJob().add(*cmdArray).to(ArrayList()).exec().out
+            val result = if (shell != null && shell.status >= Shell.NON_ROOT_SHELL) {
+                shell.newJob().add(*cmdArray).to(ArrayList()).exec()
             } else {
-                Shell.cmd(*cmdArray).exec().out
+                Shell.cmd(*cmdArray).exec()
             }
+            result.code to (result.out + result.err)
         } catch (e: Throwable) {
             Log.w(TAG, "Command execution error for '$safeCmd': ${e.message}")
-            emptyList()
+            -1 to listOf("Error executing command: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
@@ -117,6 +120,10 @@ object RootShellManager {
      */
     suspend fun execAsync(command: String): List<String> = withContext(Dispatchers.IO) {
         exec(command)
+    }
+
+    suspend fun execWithExitCodeAsync(command: String): Pair<Int, List<String>> = withContext(Dispatchers.IO) {
+        execWithExitCode(command)
     }
 
     /**

@@ -32,9 +32,11 @@ class GGUFModelClient {
 
     companion object {
         private const val TAG = "GGUFModel"
+        private const val AUTO_GPU_LAYER_COUNT = 999
         private const val DEFAULT_HOST = "127.0.0.1"
         private const val DEFAULT_PORT = 8088
-        private const val SERVER_START_TIMEOUT_MS = 120_000L
+        private const val SERVER_START_TIMEOUT_MIN_MS = 120_000L
+        private const val SERVER_START_TIMEOUT_MAX_MS = 360_000L
         private const val SERVER_POLL_INTERVAL_MS = 500L
 
         @Volatile private var globalServerThread: Thread? = null
@@ -42,35 +44,34 @@ class GGUFModelClient {
         @Volatile private var globalLoadedDraftPath: String? = null
         @Volatile private var globalLoadedUseMmap: Boolean? = null
         @Volatile private var globalLoadedDraftUseMmap: Boolean? = null
+        @Volatile private var globalLoadedGpuRequest: Int? = null
         @Volatile private var isWarmingUp = false
         private val serverMutex = Mutex()
 
         fun stopGlobalServer() {
             try {
-                LlamaServerJNI.stop()
+                LlamaServerJNI.safeStop()
                 fileLog("Stopped llama-server via JNI stopGlobalServer")
             } catch (t: Throwable) {
                 fileLog("Could not stop JNI server: ${t.message}")
             }
-            globalServerThread?.interrupt()
-            globalServerThread = null
+            val serverThread = globalServerThread
+            try {
+                serverThread?.join(1_500L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            if (serverThread?.isAlive == true) {
+                fileLog("Native server has not exited yet; retaining its thread handle to prevent an overlapping model load.")
+                return
+            }
+            serverThread?.interrupt()
+            if (globalServerThread === serverThread) globalServerThread = null
             globalLoadedPath = null
             globalLoadedDraftPath = null
             globalLoadedUseMmap = null
             globalLoadedDraftUseMmap = null
-
-            // Give the server thread up to 1.5 seconds to exit and free port 8088
-            val waitStart = System.currentTimeMillis()
-            while (System.currentTimeMillis() - waitStart < 1500L) {
-                try {
-                    val socket = java.net.Socket()
-                    socket.connect(java.net.InetSocketAddress(DEFAULT_HOST, DEFAULT_PORT), 100)
-                    socket.close()
-                    Thread.sleep(100)
-                } catch (_: Exception) {
-                    break // Port closed cleanly
-                }
-            }
+            globalLoadedGpuRequest = null
         }
 
         private fun fileLog(msg: String) {
@@ -207,11 +208,11 @@ class GGUFModelClient {
             conn.connectTimeout = 1500
             conn.readTimeout = 1500
             val code = conn.responseCode
-            if (code == 200) {
-                val response = conn.inputStream.bufferedReader().readText()
-                response.contains("ok")
-            } else {
+            if (code !in 200..299) {
                 false
+            } else {
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                body.isBlank() || body.contains("ok", ignoreCase = true)
             }
         } catch (_: Exception) {
             false
@@ -262,20 +263,21 @@ class GGUFModelClient {
                l.contains("sigsegv")
     }
 
-    private fun checkLogFileForDraftError(logFile: File): Boolean {
-        if (!logFile.exists()) return false
+    private fun readRecentLog(logFile: File, maxBytes: Long = 64 * 1024L): String {
+        if (!logFile.exists()) return ""
         return try {
-            val recentLog = java.io.RandomAccessFile(logFile, "r").use { file ->
-                val length = file.length()
-                val start = (length - 64 * 1024L).coerceAtLeast(0L)
+            java.io.RandomAccessFile(logFile, "r").use { file ->
+                val start = (file.length() - maxBytes).coerceAtLeast(0L)
                 file.seek(start)
-                ByteArray((length - start).toInt()).also(file::readFully)
-            }.toString(Charsets.UTF_8)
-            val lines = recentLog.lineSequence()
-            lines.any { isDraftErrorLine(it) }
+                ByteArray((file.length() - start).toInt()).also(file::readFully).toString(Charsets.UTF_8)
+            }
         } catch (_: Exception) {
-            false
+            ""
         }
+    }
+
+    private fun checkLogFileForDraftError(logFile: File): Boolean {
+        return readRecentLog(logFile).lineSequence().any { isDraftErrorLine(it) }
     }
 
     private fun checkRecentErrors(): Boolean {
@@ -351,6 +353,54 @@ class GGUFModelClient {
         }
     }
 
+    private fun startupTimeoutMs(modelFile: File): Long {
+        val sizeMb = modelFile.length() / (1024 * 1024)
+        return (SERVER_START_TIMEOUT_MIN_MS + sizeMb * 45L)
+            .coerceAtMost(SERVER_START_TIMEOUT_MAX_MS)
+    }
+
+    private fun modelMemoryRejection(modelFile: File): String? {
+        return if (!modelFile.isFile || modelFile.length() <= 0L) {
+            "Model file is missing, empty, or unreadable: ${modelFile.name}"
+        } else {
+            null
+        }
+    }
+
+    private fun lowerMemoryArgs(args: List<String>): List<String> {
+        val reduced = args.toMutableList()
+        fun setOption(option: String, value: String) {
+            val index = reduced.indexOf(option)
+            if (index >= 0 && index + 1 < reduced.size) reduced[index + 1] = value
+        }
+        val ctxIndex = reduced.indexOf("--ctx-size")
+        if (ctxIndex >= 0 && ctxIndex + 1 < reduced.size) {
+            val current = reduced[ctxIndex + 1].toIntOrNull() ?: 1024
+            reduced[ctxIndex + 1] = current.coerceAtMost(1024).toString()
+        }
+        setOption("-b", "64")
+        setOption("-ub", "32")
+        setOption("--n-gpu-layers", "0")
+        setOption("--cache-type-k", "f16")
+        setOption("--cache-type-v", "f16")
+        return reduced
+    }
+
+    private suspend fun stopNativeServerAndWait(): Boolean {
+        val thread = globalServerThread
+        try {
+            LlamaServerJNI.safeStop()
+        } catch (t: Throwable) {
+            fileLog("Native server stop request failed: ${t.message}")
+        }
+        var waitedMs = 0L
+        while (thread?.isAlive == true && waitedMs < 5_000L) {
+            delay(100)
+            waitedMs += 100
+        }
+        return thread?.isAlive != true
+    }
+
     private fun getProcessRssMb(): Long {
         return try {
             val status = File("/proc/self/status")
@@ -396,15 +446,19 @@ class GGUFModelClient {
             onStatus("Synchronizing with inference pipeline... ⏳")
             onProgress(0.06f, "Awaiting engine lock...")
         }
+
         serverMutex.withLock {
             PageCacheAdvisor.assert64BitArchitecture()
             fileLog("startServer requested for: $resolvedPath (PageSize=${PageCacheAdvisor.pageSize}B)")
 
             val effectiveDraft = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
+            val requestedGpuLayers = this@GGUFModelClient.gpuLayers.coerceAtLeast(0)
+                .let { if (it == 0) AUTO_GPU_LAYER_COUNT else it }
             val isSameInstance = globalLoadedPath == resolvedPath &&
                 globalLoadedDraftPath == effectiveDraft &&
                 globalLoadedUseMmap == useMmap &&
-                globalLoadedDraftUseMmap == draftUseMmap
+                globalLoadedDraftUseMmap == draftUseMmap &&
+                globalLoadedGpuRequest == requestedGpuLayers
 
             if (isSameInstance) {
                 activeDraftModelPath = effectiveDraft
@@ -438,6 +492,29 @@ class GGUFModelClient {
                 }
             }
 
+            isLoaded = false
+
+            val modelFile = File(resolvedPath)
+            val deviceMemory = appContext?.let { DeviceProfile.detect(it) }
+            val availableRamMb = getAvailableRamMb()
+            val memoryRejection = modelMemoryRejection(modelFile)
+            if (memoryRejection != null) {
+                fileLog("Model startup stopped: $memoryRejection")
+                onProgress(0f, "Invalid model file")
+                onStatus("❌ $memoryRejection")
+                return@withLock false
+            }
+            val preflightModelSizeMb = modelFile.length() / (1024 * 1024)
+            val totalRamMb = deviceMemory?.totalRamMb ?: 0L
+            if (availableRamMb < maxOf(768L, preflightModelSizeMb / 2L) ||
+                totalRamMb in 1 until (preflightModelSizeMb + 1_024L)
+            ) {
+                fileLog(
+                    "Low-memory model startup: ${availableRamMb}MB available, ${totalRamMb}MB total RAM, " +
+                        "${preflightModelSizeMb}MB model. Continuing with mmap and adaptive CPU settings."
+                )
+            }
+
             // Ensure all native dependencies including Vulkan and Synapse Bridge are initialized
             try { LlamaNativeEngine.load() } catch (_: Throwable) {}
             if (!LlamaServerJNI.load()) {
@@ -449,30 +526,28 @@ class GGUFModelClient {
             // 1. Clean previous state and zombie processes if any server is still running or lingering
             if (globalLoadedPath != null || globalServerThread != null || isServerAlive() || isServerReady()) {
                 onStatus("Stopping previous instance...")
-                try { LlamaServerJNI.stop() } catch (_: Throwable) {}
-                delay(300)
-                var waitCount = 0
-                while ((isServerAlive() || globalServerThread?.isAlive == true) && waitCount < 20) {
-                    delay(150)
-                    waitCount++
+                if (!stopNativeServerAndWait()) {
+                    fileLog("Previous native server did not stop; aborting startup to prevent overlapping model instances.")
+                    onStatus("Previous model is still stopping. Retry loading in a moment.")
+                    return@withLock false
                 }
                 try { globalServerThread?.interrupt() } catch (_: Exception) {}
                 globalServerThread = null
                 globalLoadedPath = null
+                globalLoadedDraftPath = null
+                globalLoadedUseMmap = null
+                globalLoadedDraftUseMmap = null
+                globalLoadedGpuRequest = null
                 serverThread = null
             }
 
-            try {
-                Runtime.getRuntime().exec(arrayOf("sh", "-c", "killall -9 llama-server 2>/dev/null; pkill -9 llama-server 2>/dev/null"))
-            } catch (_: Exception) {}
             delay(300)
             System.gc()
 
             appContext?.let { ZramOptimizer.optimizeMemoryAndZram(it) }
-            ZramOptimizer.disableOomKiller()
             ZramOptimizer.optimizeKernelReadAhead()
             try {
-                RootShellManager.exec("echo 4096 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null || echo 4096 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null")
+                RootShellManager.exec("echo 1024 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null || echo 1024 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null")
             } catch (_: Exception) {}
 
             val internalLogDir = File("/sdcard/Medlam-Ai")
@@ -481,33 +556,53 @@ class GGUFModelClient {
             try { logFile.delete() } catch (_: Exception) {}
 
             // 2. Model Architecture & Metadata Detection
-            val hw = appContext?.let { DeviceProfile.detect(it) }
-            val modelFile = File(resolvedPath)
+            val hw = deviceMemory
             val meta = ChatTemplateEngine.extractMetadata(modelFile)
             currentMetadata = meta
 
             val freeRam = getAvailableRamMb()
             val modelSizeMb = modelFile.length() / (1024 * 1024)
-            // Ultra-fast f16 KV cache: zero runtime dequantization overhead on ARM NEON
+            // llama.cpp requires Flash Attention for quantized V cache; this ARM profile disables it.
             val kvCacheType = "f16"
 
             // Compute Allocation: strictly dedicate all 4 Kryo Gold Big performance cores (Cores 4-7)
-            val effectiveThreads = hw?.let { DeviceProfile.optimalThreads(it) }?.coerceIn(4, 8) ?: 4
-            val effectiveBatchThreads = hw?.let { DeviceProfile.optimalBatchThreads(it) }?.coerceIn(4, 8) ?: 4
-            val resolvedCtx = (this@GGUFModelClient.contextLength).coerceIn(1024, 4096)
-            var effectiveGpuLayers = this@GGUFModelClient.gpuLayers.coerceAtLeast(0)
-            if (effectiveGpuLayers > 0) {
-                val vkSupported = LlamaServerJNI.safeRegisterVulkan()
-                if (!vkSupported) {
-                    fileLog("⚠️ Vulkan GPU compute not supported on this SoC. Safely offloading to high-speed Big CPU cores.")
-                    effectiveGpuLayers = 0
+            val effectiveThreads = when {
+                freeRam < 768L -> 1
+                freeRam < 1_536L -> 2
+                else -> hw?.let { DeviceProfile.optimalThreads(it) }?.coerceIn(1, 8) ?: 4
+            }
+            val effectiveBatchThreads = effectiveThreads.coerceAtMost(4)
+            val resolvedCtx = when {
+                freeRam < 1_536L -> 1024
+                else -> this@GGUFModelClient.contextLength.coerceIn(1024, 4096)
+            }
+            val vkSupported = LlamaServerJNI.safeRegisterVulkan()
+            val autoGpuFitsMemory = (hw?.totalRamMb ?: 0L) >= 8_192L &&
+                freeRam >= (modelSizeMb * 2L + 1_536L)
+            val effectiveGpuLayers = if (vkSupported) {
+                if (requestedGpuLayers == AUTO_GPU_LAYER_COUNT && !autoGpuFitsMemory) {
+                    fileLog("Automatic Vulkan offload skipped: device RAM headroom is insufficient (${freeRam}MB available, ${modelSizeMb}MB model); using memory-mapped CPU mode.")
+                    0
+                } else if (requestedGpuLayers != AUTO_GPU_LAYER_COUNT &&
+                    freeRam < (modelSizeMb + 1_536L)
+                ) {
+                    fileLog("Requested Vulkan offload skipped: insufficient memory headroom; using CPU to avoid process termination.")
+                    0
                 } else {
-                    fileLog("⚡ Vulkan GPU backend successfully activated with $effectiveGpuLayers layers.")
+                    requestedGpuLayers
                 }
+            } else {
+                fileLog("Vulkan is unavailable on this device; using CPU inference.")
+                0
             }
 
-            val effectiveBatch = 512
-            val effectiveUbatch = 128
+            val effectiveBatch = when {
+                freeRam >= 6_144L -> 256
+                freeRam >= 3_072L -> 128
+                freeRam >= 1_536L -> 64
+                else -> 32
+            }
+            val effectiveUbatch = effectiveBatch.coerceAtMost(64)
             // CPU inference: Flash Attention disabled on ARM Cortex-A73 to avoid tiling overhead
             val flashAttnArg = "off"
 
@@ -536,6 +631,7 @@ class GGUFModelClient {
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString(),
                 "--no-warmup",
+                "--fit", "off",
                 "--log-file", logFile.absolutePath
             )
 
@@ -557,11 +653,13 @@ class GGUFModelClient {
                 baseArgs.add("--no-mmap")
             }
 
-            // Speculative Decoding Configuration
+            // Speculative decoding is only enabled on devices with additional physical-RAM headroom.
             var activeDraftPath = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
             if (draftModelPath != "STANDALONE" && activeDraftPath.isNullOrBlank()) {
-                // Safeguard: Only auto-link companion MTP draft if physical RAM is sufficient (>= 1500MB available)
-                if (freeRam >= 1500L) {
+                // Require memory headroom for both the base model and the companion draft.
+                if ((hw?.totalRamMb ?: 0L) >= 8_192L &&
+                    freeRam >= modelSizeMb * 2L + 1_536L
+                ) {
                     val matched = ModelScanner.findMatchingMtpModel(resolvedPath, appContext)
                     if (matched != null && matched.exists()) {
                         activeDraftPath = matched.absolutePath
@@ -574,6 +672,7 @@ class GGUFModelClient {
 
             val hasDraft = !activeDraftPath.isNullOrBlank() && activeDraftPath != "STANDALONE" && File(activeDraftPath).exists()
             val trialArgs = baseArgs.toMutableList()
+            PageCacheAdvisor.adviseModelActive(resolvedPath)
 
             if (hasDraft) {
                 activeDraftModelPath = activeDraftPath
@@ -623,13 +722,13 @@ class GGUFModelClient {
             globalLoadedDraftPath = activeDraftPath
             globalLoadedUseMmap = useMmap
             globalLoadedDraftUseMmap = draftUseMmap
-            ZramOptimizer.disableOomKiller()
-
+            globalLoadedGpuRequest = requestedGpuLayers
             val startTime = System.currentTimeMillis()
             var serverBecameAlive = false
             var draftFailureDetected = false
             var lastLogcatCheckTime = 0L
-            val maxStartupWait = SERVER_START_TIMEOUT_MS
+            var nativeReturnObserved = false
+            val maxStartupWait = startupTimeoutMs(modelFile)
 
             while (System.currentTimeMillis() - startTime < maxStartupWait) {
                 if (isServerReady()) {
@@ -657,10 +756,20 @@ class GGUFModelClient {
                 }
 
                 val retCode = nativeReturnCode.get()
-                if (retCode != null && retCode != 0) {
-                    fileLog("⚠️ Native server failed to launch with return code: $retCode")
-                    draftFailureDetected = true
-                    break
+                if (retCode != null) {
+                    if (retCode != 0) {
+                        fileLog("⚠️ Native server failed to launch with return code: $retCode")
+                        draftFailureDetected = true
+                        break
+                    }
+                    if (!nativeReturnObserved) {
+                        nativeReturnObserved = true
+                        fileLog("Native server returned success before health became ready; waiting for model loading to finish.")
+                    }
+                    val elapsedSec = (System.currentTimeMillis() - startTime) / 1000L
+                    onStatus("Loading model weights (${elapsedSec}s)...")
+                    delay(SERVER_POLL_INTERVAL_MS)
+                    continue
                 }
 
                 if (hasDraft && System.currentTimeMillis() - lastLogcatCheckTime >= 5_000L) {
@@ -680,11 +789,14 @@ class GGUFModelClient {
 
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                 val progress = (elapsedSec / 20f).coerceIn(0.08f, 0.95f)
-                val statusText = if (serverBecameAlive) {
-                    "Loading tensors into RAM (${elapsedSec.toInt()}s)..."
-                } else {
-                    "Binding Neural Core (${elapsedSec.toInt()}s)..."
+                val recentLog = readRecentLog(logFile, 16 * 1024L).lowercase()
+                val loadPhase = when {
+                    recentLog.contains("load_tensors") || recentLog.contains("loading model") -> "Reading model weights"
+                    recentLog.contains("allocating") || recentLog.contains("context") -> "Allocating inference memory"
+                    serverBecameAlive -> "Initializing model runtime"
+                    else -> "Starting native server"
                 }
+                val statusText = "$loadPhase (${elapsedSec.toInt()}s)..."
 
                 onProgress(progress, statusText)
                 onStatus(statusText)
@@ -692,14 +804,18 @@ class GGUFModelClient {
                 delay(SERVER_POLL_INTERVAL_MS)
             }
 
-            val finalError = try { if (logFile.exists()) logFile.readLines().takeLast(6).joinToString(" | ") else "" } catch (_: Exception) { "" }
+            val finalError = readRecentLog(logFile, 8 * 1024L).lines().takeLast(6).joinToString(" | ")
             fileLog("Startup pass ended. isReady=${isServerReady()}, hasDraft=$hasDraft, draftFailureDetected=$draftFailureDetected. Output: $finalError")
 
             if (hasDraft && !isLoaded) {
                 fileLog("Draft companion failed to load. Falling back to STANDALONE mode...")
                 onStatus("Draft failed: Falling back to STANDALONE mode... ⏳")
                 
-                try { LlamaServerJNI.stop() } catch (_: Throwable) {}
+                if (!stopNativeServerAndWait()) {
+                    fileLog("Draft server did not stop; refusing to start a concurrent fallback server.")
+                    onStatus("Draft server is still shutting down...")
+                    return@withLock false
+                }
                 try { newThread.interrupt() } catch (_: Exception) {}
                 serverThread = null
                 globalServerThread = null
@@ -714,8 +830,54 @@ class GGUFModelClient {
                 }
             }
 
-            onProgress(0f, "Boot Timeout")
-            onStatus(if (finalError.isNotBlank()) "❌ $finalError" else "❌ Error: Boot Timeout")
+            if (effectiveGpuLayers > 0 && !isLoaded) {
+                fileLog("Vulkan startup failed; retrying this model on CPU to keep local inference available.")
+                onStatus("GPU initialization failed: retrying with CPU…")
+                if (!stopNativeServerAndWait()) {
+                    fileLog("GPU server did not stop; refusing to start a concurrent CPU fallback.")
+                    onStatus("GPU server is still shutting down...")
+                    return@withLock false
+                }
+                try { newThread.interrupt() } catch (_: Exception) {}
+                serverThread = null
+                globalServerThread = null
+                activeDraftModelPath = null
+                delay(300)
+
+                val cpuArgs = baseArgs.toMutableList()
+                val gpuLayerArg = cpuArgs.indexOf("--n-gpu-layers")
+                if (gpuLayerArg >= 0 && gpuLayerArg + 1 < cpuArgs.size) {
+                    cpuArgs[gpuLayerArg + 1] = "0"
+                }
+                if (startServerStandalone(resolvedPath, cpuArgs.toTypedArray(), logFile, onStatus, onProgress)) {
+                    activeDraftModelPath = null
+                    onStatus("Local Model Ready (CPU fallback) ✓")
+                    return@withLock true
+                }
+            }
+
+            val lowMemoryArgs = lowerMemoryArgs(baseArgs)
+            if (lowMemoryArgs != baseArgs) {
+                fileLog("Retrying model startup with low-memory profile: ctx=1024, batch=64, GPU=off.")
+                onStatus("Retrying with low-memory CPU profile...")
+                if (stopNativeServerAndWait()) {
+                    if (startServerStandalone(resolvedPath, lowMemoryArgs.toTypedArray(), logFile, onStatus, onProgress)) {
+                        activeDraftModelPath = null
+                        onStatus("Local Model Ready (low-memory mode) ✓")
+                        return@withLock true
+                    }
+                } else {
+                    fileLog("Previous native server did not stop; refusing overlapping startup attempts.")
+                }
+            }
+
+            val finalLog = readRecentLog(logFile, 8 * 1024L).lines().takeLast(10).joinToString(" | ")
+            onProgress(0f, "Model startup failed")
+            onStatus(
+                if (finalLog.isNotBlank()) "❌ Model failed to start: $finalLog"
+                else if (finalError.isNotBlank()) "❌ Model failed to start: $finalError"
+                else "❌ Model startup failed. Check gguf_log.txt and native_log.txt."
+            )
             return@withLock false
         }
     }
@@ -778,11 +940,11 @@ class GGUFModelClient {
         try {
             /* Thermal Safety: Core forcing disabled */
         } catch (_: Exception) {}
-        try { LlamaServerJNI.stop() } catch (_: Throwable) {}
-        try {
-            Runtime.getRuntime().exec(arrayOf("sh", "-c", "killall -9 llama-server 2>/dev/null; pkill -9 llama-server 2>/dev/null"))
-        } catch (_: Exception) {}
-        delay(300)
+        if (!stopNativeServerAndWait()) {
+            fileLog("Cannot start fallback while the previous native server thread is still active.")
+            onStatus("Native server is still stopping; retrying shortly...")
+            return@withContext false
+        }
 
         val fallbackReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
         val newThread = Thread {
@@ -801,10 +963,9 @@ class GGUFModelClient {
         globalLoadedDraftPath = null
         globalLoadedUseMmap = useMmap
         globalLoadedDraftUseMmap = false
-        ZramOptimizer.disableOomKiller()
 
         val startTime = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startTime < SERVER_START_TIMEOUT_MS) {
+        while (System.currentTimeMillis() - startTime < startupTimeoutMs(File(resolvedPath))) {
             if (isServerReady()) {
                 val totalSec = (System.currentTimeMillis() - startTime) / 1000
                 LlamaNativeEngine.pinToBigCores()
@@ -818,7 +979,7 @@ class GGUFModelClient {
             }
 
             val fbCode = fallbackReturnCode.get()
-            if (fbCode != null && fbCode != 0) {
+            if (fbCode != null) {
                 fileLog("⚠️ Standalone server failed to launch with code: $fbCode")
                 break
             }
@@ -857,11 +1018,14 @@ class GGUFModelClient {
         modelPath = path
 
         val effectiveDraft = if (draftModelPath == "STANDALONE" || draftModelPath.isNullOrBlank()) null else draftModelPath
+        val requestedGpuLayers = gpuLayers.coerceAtLeast(0)
+            .let { if (it == 0) AUTO_GPU_LAYER_COUNT else it }
         val isSameInstance = isServerReady() && 
             globalLoadedPath == resolvedPath && 
             globalLoadedDraftPath == effectiveDraft &&
             globalLoadedUseMmap == useMmap &&
-            globalLoadedDraftUseMmap == draftUseMmap
+            globalLoadedDraftUseMmap == draftUseMmap &&
+            globalLoadedGpuRequest == requestedGpuLayers
         if (isSameInstance) {
             activeDraftModelPath = effectiveDraft
             isLoaded = true
@@ -877,6 +1041,11 @@ class GGUFModelClient {
 
     suspend fun warmupPersonaKVCache(systemPrompt: String): Boolean = withContext(Dispatchers.IO) {
         if (!isServerReady()) return@withContext false
+        val totalRamMb = appContext?.let { DeviceProfile.detect(it).totalRamMb } ?: 0L
+        if (totalRamMb in 1 until 8_192L) {
+            fileLog("Skipping persona KV prefill on a ${totalRamMb}MB device; persona instructions are included in each request.")
+            return@withContext false
+        }
         if (isWarmingUp) return@withContext true
         isWarmingUp = true
         fileLog("Initiating Neural Core Warmup & Persona KV Prefill...")
@@ -1018,13 +1187,19 @@ class GGUFModelClient {
         val targetUrl = "$serverUrl/completion"
 
         var waitAttempts = 0
-        while (!isServerReady() && waitAttempts < 25) {
+        val readinessWaitStartedAt = System.currentTimeMillis()
+        while (!isServerReady() && waitAttempts < 100) {
             waitAttempts++
             delay(800)
         }
 
         if (!isServerReady()) {
-            emit("[ERROR: Model engine still initializing. Please wait a moment and retry.]")
+            val waitedSeconds = (System.currentTimeMillis() - readinessWaitStartedAt) / 1000
+            fileLog(
+                "Inference refused after waiting ${waitedSeconds}s: model endpoint $serverUrl/health did not report ready; " +
+                    "clientLoaded=$isLoaded, serverThreadAlive=${serverThread?.isAlive == true}."
+            )
+            emit("[ERROR: Local model endpoint is not ready after ${waitedSeconds}s. The model may have stopped; reload it and retry.]")
             return@flow
         }
 
@@ -1322,6 +1497,7 @@ class GGUFModelClient {
         }
         globalLoadedPath = null
         globalLoadedDraftPath = null
+        globalLoadedGpuRequest = null
         serverThread = null
         isLoaded = false
         try {

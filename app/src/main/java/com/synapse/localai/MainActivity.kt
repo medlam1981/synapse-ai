@@ -392,7 +392,6 @@ class MainActivity : ComponentActivity() {
             if (isRoot) {
                 Log.i("MainActivity", "Superuser privileges verified via persistent libsu shell (root active)")
                 ZramOptimizer.optimizeMemoryAndZram(this@MainActivity)
-                ZramOptimizer.disableOomKiller()
             } else {
                 Log.i("MainActivity", "Standard user execution (non-root)")
             }

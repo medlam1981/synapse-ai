@@ -1,5 +1,6 @@
 package com.synapse.localai
 
+import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -222,8 +223,20 @@ object DynamicMediaBroker {
         val isArabic = intent.isArabic
 
         val prefs = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
-        val userWidth = prefs.getInt("sd_width", 512).let { if (it <= 0) 512 else it }
-        val userHeight = prefs.getInt("sd_height", 512).let { if (it <= 0) 512 else it }
+        val requestedWidth = prefs.getInt("sd_width", 256).let { if (it <= 0) 256 else it }
+        val requestedHeight = prefs.getInt("sd_height", 256).let { if (it <= 0) 256 else it }
+        val memoryInfo = ActivityManager.MemoryInfo().also {
+            (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
+        }
+        val maxImageSide = when {
+            memoryInfo.availMem >= 5L * 1024 * 1024 * 1024 -> 768
+            memoryInfo.availMem >= 3L * 1024 * 1024 * 1024 -> 512
+            memoryInfo.availMem >= 1536L * 1024 * 1024 -> 384
+            else -> 256
+        }
+        val scale = minOf(1f, maxImageSide.toFloat() / maxOf(requestedWidth, requestedHeight))
+        val userWidth = ((requestedWidth * scale).toInt() / 64 * 64).coerceAtLeast(256)
+        val userHeight = ((requestedHeight * scale).toInt() / 64 * 64).coerceAtLeast(256)
 
         // Step 1: Resilient Dynamic Discovery
         var modelDesc = GgufCapabilityRegistry.getBestImageModel(context)
@@ -256,6 +269,7 @@ object DynamicMediaBroker {
         val userSteps = prefs.getInt("sd_steps", 0)
         val userCfg = prefs.getFloat("sd_cfg_scale", 0f)
         val numThreads = prefs.getInt("sd_threads", 4).let { if (it <= 0) 4 else it }
+        val forceCpu = prefs.getString("sd_compute_device", "AUTO").equals("CPU", ignoreCase = true)
 
         val modelNameLower = modelFile.name.lowercase()
         val isFastModel = modelNameLower.contains("turbo") ||
@@ -265,10 +279,10 @@ object DynamicMediaBroker {
                           modelNameLower.contains("xs") ||
                           modelNameLower.contains("qwen-image")
 
-        val effectiveSteps = if (userSteps > 0) userSteps else (if (isFastModel) 1 else 15)
+        val effectiveSteps = if (userSteps > 0) userSteps else (if (isFastModel) 1 else 8)
         val effectiveCfg = if (userCfg > 0f) userCfg else (if (isFastModel) 1.0f else 7.0f)
 
-        Log.i(TAG, "Inference Parameters: steps=$effectiveSteps, cfg=$effectiveCfg, dim=${userWidth}x${userHeight}, threads=$numThreads (FastModel=$isFastModel)")
+        Log.i(TAG, "Inference Parameters: steps=$effectiveSteps, cfg=$effectiveCfg, dim=${userWidth}x${userHeight}, availableRAM=${memoryInfo.availMem / (1024 * 1024)}MB, threads=$numThreads (FastModel=$isFastModel)")
 
         // Step 5: Storage-Streamed Execution with Kernel Page Management
         val modelPath = modelFile.absolutePath
@@ -276,10 +290,6 @@ object DynamicMediaBroker {
             PageCacheAdvisor.assert64BitArchitecture()
             try {
                 PageCacheAdvisor.adviseModelIdle()
-                System.gc()
-                if (RootShellManager.isRootAvailable()) {
-                    RootShellManager.exec("echo 3 > /proc/sys/vm/drop_caches")
-                }
             } catch (_: Exception) {}
 
             PageCacheAdvisor.adviseModelActive(modelPath)
@@ -294,7 +304,8 @@ object DynamicMediaBroker {
                 steps = effectiveSteps,
                 cfgScale = effectiveCfg,
                 numThreads = numThreads,
-                onStatusUpdate = onStatusUpdate
+                onStatusUpdate = onStatusUpdate,
+                forceCpu = forceCpu
             )
         } catch (t: Throwable) {
             Log.e(TAG, "Image generation error: ${t.message}", t)
@@ -302,9 +313,6 @@ object DynamicMediaBroker {
         } finally {
             try {
                 PageCacheAdvisor.adviseModelIdle(modelPath)
-                if (RootShellManager.isRootAvailable()) {
-                    RootShellManager.exec("echo 3 > /proc/sys/vm/drop_caches")
-                }
                 val activeLlmPath = prefs.getString("local_model_path", null)
                 if (!activeLlmPath.isNullOrBlank() && File(activeLlmPath).exists()) {
                     PageCacheAdvisor.adviseModelActive(activeLlmPath)
@@ -359,7 +367,7 @@ object DynamicMediaBroker {
 
     /**
      * Executes authentic neural diffusion inference using compiled native stable-diffusion.cpp (sd-cli).
-     * Enforces Zero-RAM mmap CPU streaming, VAE tiling, and Dynamic Latent Seed Randomization.
+     * Prefers Vulkan when available, falls back to CPU, and uses mmap/VAE tiling to limit RAM spikes.
      */
     private suspend fun executeNativeStableDiffusion(
         context: Context,
@@ -371,10 +379,12 @@ object DynamicMediaBroker {
         steps: Int,
         cfgScale: Float,
         numThreads: Int,
-        onStatusUpdate: ((String) -> Unit)?
+        onStatusUpdate: ((String) -> Unit)?,
+        forceCpu: Boolean = false
     ): MediaResult = withContext(Dispatchers.IO) {
-        val deviceLabel = "CPU (SIMD NEON)"
-        onStatusUpdate?.invoke("Denoising via $deviceLabel (Zero-RAM mmap)...")
+        val useVulkan = !forceCpu && LlamaServerJNI.safeIsVulkanSupported()
+        val deviceLabel = if (useVulkan) "Vulkan GPU" else "CPU (SIMD NEON)"
+        onStatusUpdate?.invoke("Denoising via $deviceLabel with mmap and VAE tiling...")
 
         // 1. Locate native sd-cli binary
         val sdBinary = locateSdCliBinary(context)
@@ -417,9 +427,9 @@ object DynamicMediaBroker {
         cmd.add("--seed")
         cmd.add(randomSeed.toString())
 
-        // Compute Backend: Strictly CPU for zero-RAM stability
+        // Use Vulkan when the device supports it; retry with CPU if GPU inference fails.
         cmd.add("--backend")
-        cmd.add("cpu")
+        cmd.add(if (useVulkan) "vulkan0" else "cpu")
 
         // Enforce hardware memory mapping (--mmap) unconditionally to prevent RAM allocation
         cmd.add("--mmap")
@@ -454,8 +464,7 @@ object DynamicMediaBroker {
 
         try {
             if (RootShellManager.isRootAvailable()) {
-                RootShellManager.exec("echo -900 > /proc/${android.os.Process.myPid()}/oom_score_adj")
-                RootShellManager.exec("echo 3 > /proc/sys/vm/drop_caches")
+                RootShellManager.exec("echo 100 > /proc/sys/vm/swappiness 2>/dev/null")
             }
         } catch (_: Exception) {}
 
@@ -471,7 +480,7 @@ object DynamicMediaBroker {
 
             try {
                 if (RootShellManager.isRootAvailable()) {
-                    RootShellManager.exec("pgrep -f sd-cli | while read p; do echo -800 > /proc/\$p/oom_score_adj; done")
+                    RootShellManager.exec("echo 100 > /proc/sys/vm/swappiness 2>/dev/null")
                 }
             } catch (_: Exception) {}
 
@@ -484,9 +493,9 @@ object DynamicMediaBroker {
                 Log.d(TAG, "[sd.cpp] $l")
 
                 if (l.contains("loading tensors", ignoreCase = true) || l.contains("tensors in", ignoreCase = true)) {
-                    onStatusUpdate?.invoke("Streaming tensors via Zero-RAM mmap...")
+                    onStatusUpdate?.invoke("Loading diffusion tensors via mmap...")
                 } else if (l.contains("sampling", ignoreCase = true) || l.contains("generating image", ignoreCase = true) || l.contains("step", ignoreCase = true)) {
-                    onStatusUpdate?.invoke("Denoising visual concepts via Big Cores CPU...")
+                    onStatusUpdate?.invoke("Denoising visual concepts via $deviceLabel...")
                 } else if (l.contains("decoding", ignoreCase = true) || l.contains("vae", ignoreCase = true) || l.contains("latent", ignoreCase = true)) {
                     onStatusUpdate?.invoke("Decoding VAE tiles into RGB pixels...")
                 } else if (l.contains("save result image", ignoreCase = true)) {
@@ -498,7 +507,7 @@ object DynamicMediaBroker {
             Log.i(TAG, "sd.cpp finished with exit code $exitCode")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to execute native sd-cli process: ${e.message}", e)
-            return@withContext MediaResult.Error("Native execution error: ${e.message}")
+            outputLog.append("Native execution error: ${e.message}")
         } finally {
             try {
                 activeProcess?.destroyForcibly()
@@ -506,14 +515,12 @@ object DynamicMediaBroker {
             activeProcess = null
             try {
                 if (RootShellManager.isRootAvailable()) {
-                    RootShellManager.exec("echo 0 > /proc/${android.os.Process.myPid()}/oom_score_adj")
-                    RootShellManager.exec("echo 3 > /proc/sys/vm/drop_caches")
+                    RootShellManager.exec("echo 100 > /proc/sys/vm/swappiness 2>/dev/null")
                 }
             } catch (_: Exception) {}
             try {
                 PageCacheAdvisor.adviseModelIdle(modelFile.absolutePath)
             } catch (_: Exception) {}
-            System.gc()
         }
 
         if (exitCode == 0 && outputImage.exists() && outputImage.length() > 0) {
@@ -528,6 +535,24 @@ object DynamicMediaBroker {
             )
         } else {
             val rawErr = outputLog.toString().trim()
+            if (useVulkan) {
+                outputImage.delete()
+                Log.w(TAG, "Vulkan image inference failed; retrying the same request on CPU.")
+                onStatusUpdate?.invoke("GPU failed; retrying image generation on CPU...")
+                return@withContext executeNativeStableDiffusion(
+                    context = context,
+                    modelFile = modelFile,
+                    isAllInOne = isAllInOne,
+                    prompt = prompt,
+                    width = width,
+                    height = height,
+                    steps = steps,
+                    cfgScale = cfgScale,
+                    numThreads = numThreads,
+                    onStatusUpdate = onStatusUpdate,
+                    forceCpu = true
+                )
+            }
             val finalErrMsg = if (rawErr.isNotEmpty()) {
                 "sd.cpp error (code $exitCode):\n$rawErr"
             } else {

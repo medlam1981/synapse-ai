@@ -11,90 +11,65 @@ object ZramOptimizer {
     private const val TAG = "ZramOptimizer"
 
     /**
-     * Completely immune the current process and all child threads from Linux OOM killer
-     * and Android low-memory killer daemon (lmkd).
-     * By writing -1000 to /proc/$PID/oom_score_adj, the kernel considers this process
-     * unkillable (OOM_SCORE_ADJ_MIN).
-     */
-    suspend fun disableOomKiller(): Boolean = withContext(Dispatchers.IO) {
-        val pid = Process.myPid()
-        val commands = listOf(
-            "echo -1000 > /proc/$pid/oom_score_adj",
-            "chmod 444 /proc/$pid/oom_score_adj 2>/dev/null",
-            "echo -17 > /proc/$pid/oom_adj 2>/dev/null",
-            "for p in \$(pgrep -f com.synapse.localai); do echo -1000 > /proc/\$p/oom_score_adj 2>/dev/null; chmod 444 /proc/\$p/oom_score_adj 2>/dev/null; done",
-            "for p in \$(pgrep llama-server); do echo -1000 > /proc/\$p/oom_score_adj 2>/dev/null; chmod 444 /proc/\$p/oom_score_adj 2>/dev/null; done"
-        )
-
-
-        val cmd = commands.joinToString(" && ")
-        val success = executeSuperuserCommand(cmd)
-        if (success) {
-            Log.i(TAG, "✓ OOM Killer disabled successfully for PID $pid (oom_score_adj=-1000)")
-        } else {
-            Log.w(TAG, "⚠️ Failed to disable OOM killer (Root permission required)")
-        }
-        success
-    }
-
-    /**
-     * Configures aggressive ZRAM compression, tunes virtual memory subsystem,
-     * reclaims cached memory buffers, and defragments RAM to bypass low-memory limits.
+     * Enables available ZRAM swap and applies conservative storage/memory tuning.
      */
     suspend fun optimizeMemoryAndZram(context: Context): Boolean = withContext(Dispatchers.IO) {
-        val pid = Process.myPid()
         val script = StringBuilder().apply {
-            append("am kill-all 2>/dev/null; ")
-            // PRESERVE PAGE CACHE: Never drop_caches before or during inference!
+            // Preserve application state and model pages; do not kill apps or drop page cache.
             append("echo 1 > /proc/sys/vm/compact_memory 2>/dev/null; ")
-            append("for p in /proc/[0-9]*; do adj=\$(cat \$p/oom_score_adj 2>/dev/null); if [ \"\$adj\" -ge 900 ] 2>/dev/null; then kill -9 \$(basename \$p) 2>/dev/null; fi; done; ")
-            append("for c in /dev/cpuset /dev/cpuset/*; do [ -f \"\$c/cpus\" ] && echo 0-7 > \"\$c/cpus\" 2>/dev/null; done; ")
-            append("echo $pid > /dev/cpuset/top-app/cgroup.procs 2>/dev/null; ")
-            append("echo $pid > /dev/cpuset/top-app/tasks 2>/dev/null; ")
-            append("echo $pid > /dev/stune/top-app/tasks 2>/dev/null; ")
-            append("echo 60 > /proc/sys/vm/swappiness 2>/dev/null; ")
-            append("echo 20 > /proc/sys/vm/watermark_scale_factor 2>/dev/null; ")
+            append("echo 100 > /proc/sys/vm/swappiness 2>/dev/null; ")
             append("echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null; ")
-            append("echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null; ")
-            append("if [ -f /sys/block/zram0/disksize ]; then ")
-            append("  if ! grep -q zram /proc/swaps; then ")
-            append("    echo 4294967296 > /sys/block/zram0/disksize 2>/dev/null; ")
-            append("    mkswap /dev/block/zram0 2>/dev/null; ")
-            append("    swapon -p 32767 /dev/block/zram0 2>/dev/null; ")
+            append("if ! grep -qE '^[^[:space:]]*zram[0-9]*[[:space:]]' /proc/swaps 2>/dev/null; then ")
+            append("  zram_dev=/dev/block/zram0; [ -b \"\$zram_dev\" ] || zram_dev=/dev/zram0; ")
+            append("  if [ -f /sys/block/zram0/disksize ] && [ -b \"\$zram_dev\" ]; then ")
+            append("    zram_bytes=\$(cat /sys/block/zram0/disksize 2>/dev/null); ")
+            append("    case \"\$zram_bytes\" in ''|*[!0-9]*) zram_bytes=0;; esac; ")
+            append("    if [ \"\$zram_bytes\" = 0 ]; then ")
+            append("      mem_kb=\$(awk '/MemTotal:/ {print \$2}' /proc/meminfo); ")
+            append("      case \"\$mem_kb\" in ''|*[!0-9]*) mem_kb=0;; esac; ")
+            append("      if [ \"\$mem_kb\" -gt 0 ]; then ")
+            append("        zram_bytes=\$((mem_kb * 512)); ")
+            append("        [ \"\$zram_bytes\" -le 4294967296 ] || zram_bytes=4294967296; ")
+            append("        echo \"\$zram_bytes\" > /sys/block/zram0/disksize 2>/dev/null; ")
+            append("      fi; ")
+            append("    fi; ")
+            append("    if [ \"\$zram_bytes\" -gt 0 ]; then mkswap \"\$zram_dev\" >/dev/null 2>&1 && swapon -p 100 \"\$zram_dev\" 2>/dev/null; fi; ")
             append("  fi; ")
             append("fi; ")
-            append("if [ -f /sys/block/mmcblk0/queue/read_ahead_kb ]; then echo 4096 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null; elif [ -f /sys/block/sda/queue/read_ahead_kb ]; then echo 4096 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null; fi; ")
-            append("echo -1000 > /proc/$pid/oom_score_adj; ")
-            append("echo -17 > /proc/$pid/oom_adj 2>/dev/null")
+            append("if grep -qE '^[^[:space:]]*zram[0-9]*[[:space:]]' /proc/swaps 2>/dev/null; then echo ZRAM_SWAP_ENABLED; else echo ZRAM_SWAP_UNAVAILABLE; fi; ")
+            append("if [ -f /sys/block/mmcblk0/queue/read_ahead_kb ]; then echo 1024 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null; elif [ -f /sys/block/sda/queue/read_ahead_kb ]; then echo 1024 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null; fi")
         }.toString()
 
         ensureNoMedia()
-        val success = executeSuperuserCommand(script)
+        val success = try {
+            RootShellManager.exec(script).any { it.trim() == "ZRAM_SWAP_ENABLED" }
+        } catch (e: Exception) {
+            Log.e(TAG, "ZRAM configuration failed: ${e.message}")
+            false
+        }
         if (success) {
-            Log.i(TAG, "✓ ZRAM compression & virtual memory subsystem tuned for low-memory bypass")
+            Log.i(TAG, "✓ Swap preference, ZRAM availability, and model-storage read-ahead configured")
         } else {
-            Log.w(TAG, "⚠️ ZRAM optimization skipped or root not granted")
+            Log.w(TAG, "⚠️ ZRAM could not be confirmed active; root, device support, or swap configuration may be unavailable")
         }
         success
     }
 
     /**
-     * Kernel Read-Ahead Optimization (Root Execution):
-     * Accelerates mmap page faults for the massive Base Model by expanding
-     * the block device read-ahead buffer to 4096 KB (eMMC mmcblk0 with UFS sda fallback).
+     * Kernel read-ahead tuning for sequential model mmap workloads.
      */
     suspend fun optimizeKernelReadAhead(): Boolean = withContext(Dispatchers.IO) {
         val script = "if [ -f /sys/block/mmcblk0/queue/read_ahead_kb ]; then " +
-                "echo 4096 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null; " +
+                "echo 1024 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null; " +
                 "elif [ -f /sys/block/sda/queue/read_ahead_kb ]; then " +
-                "echo 4096 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null; " +
+                "echo 1024 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null; " +
                 "fi"
         val success = executeSuperuserCommand(script)
         if (success) {
-            Log.i(TAG, "✓ Kernel read_ahead_kb set to 4096 KB successfully")
+            Log.i(TAG, "✓ Kernel read_ahead_kb set to 1024 KB successfully")
         } else {
             // Direct command execution fallback
-            executeSuperuserCommand("su -c \"echo 4096 > /sys/block/mmcblk0/queue/read_ahead_kb\" 2>/dev/null || su -c \"echo 4096 > /sys/block/sda/queue/read_ahead_kb\" 2>/dev/null")
+            executeSuperuserCommand("su -c \"echo 1024 > /sys/block/mmcblk0/queue/read_ahead_kb\" 2>/dev/null || su -c \"echo 1024 > /sys/block/sda/queue/read_ahead_kb\" 2>/dev/null")
         }
         success
     }
@@ -175,29 +150,8 @@ object ZramOptimizer {
         } catch (_: Exception) {}
     }
 
-    /**
-     * Terminates cached background Android tasks, drops Linux kernel pagecache, dentries,
-     * and inodes (drop_caches=3), defragments memory, and freezes idle CPU tasks.
-     */
-    suspend fun closeCachedCpuProcesses(): Boolean = withContext(Dispatchers.IO) {
-        val script = """
-            am kill-all 2>/dev/null
-            echo 1 > /proc/sys/vm/compact_memory 2>/dev/null
-            for p in /proc/[0-9]*; do
-                if [ -f ${'$'}p/oom_score_adj ]; then
-                    adj=${'$'}(cat ${'$'}p/oom_score_adj 2>/dev/null)
-                    if [ "${'$'}adj" -ge 900 ] 2>/dev/null; then
-                        pid=${'$'}(basename ${'$'}p)
-                        kill -9 ${'$'}pid 2>/dev/null
-                    fi
-                fi
-            done
-        """.trimIndent()
-        val ok = executeSuperuserCommand(script)
-        if (ok) {
-            Log.i(TAG, "✓ Cached CPU processes terminated and memory compacted")
-        }
-        ok
+    suspend fun compactMemoryForInference(): Boolean = withContext(Dispatchers.IO) {
+        executeSuperuserCommand("echo 1 > /proc/sys/vm/compact_memory 2>/dev/null")
     }
 
     private fun executeSuperuserCommand(cmd: String): Boolean {

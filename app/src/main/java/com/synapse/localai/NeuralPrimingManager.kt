@@ -89,6 +89,12 @@ object NeuralPrimingManager {
                             isPriming = false
                             return@loadModel
                         }
+                        val totalRamMb = DeviceProfile.detect(appContext).totalRamMb
+                        if (totalRamMb < 8_192L) {
+                            Log.i(TAG, "Skipping optional persona KV prefill on a ${totalRamMb}MB device; persona instructions remain active per request.")
+                            isPriming = false
+                            return@loadModel
+                        }
                         scope.launch {
                             try {
                                 val distilledPrompt = ChatTemplateEngine.ATLAS_SYSTEM_DIRECTIVE

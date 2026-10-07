@@ -1243,7 +1243,7 @@ fun SettingsScreenContent(
                                 }
                             },
                             enabled = true,
-                            label = { Text("GPU (ngl)") },
+                            label = { Text("GPU layers (0 = Auto)") },
                             modifier = Modifier.weight(1f),
                             colors = settingsFieldColors(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
@@ -1267,7 +1267,7 @@ fun SettingsScreenContent(
                         )
                         Text(
                             text = if (isVkSupported) {
-                                "⚡ Vulkan Compute 16-Bit Active • GPU Acceleration Enabled (ngl)"
+                                "⚡ Vulkan available • automatic GPU offload with CPU fallback"
                             } else {
                                 "⚙️ Adreno 610 (No 16-bit storage) • Scaled to High-Performance Big CPU Cores"
                             },
@@ -1396,7 +1396,11 @@ fun SettingsScreenContent(
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                if (config.sdComputeDevice == "GPU") "GPU (VULKAN ADRENO)" else "CPU (SIMD NEON 4-CORES)",
+                                when (config.sdComputeDevice) {
+                                    "CPU" -> "CPU (SIMD NEON)"
+                                    "GPU" -> "GPU (VULKAN)"
+                                    else -> "AUTO (GPU → CPU fallback)"
+                                },
                                 color = primary,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1405,6 +1409,7 @@ fun SettingsScreenContent(
                         }
                         SettingsOptionSelector(
                             options = listOf(
+                                "AUTO" to "⚡ AUTO (GPU → CPU)",
                                 "CPU" to "⚡ CPU (NEON)",
                                 "GPU" to "🎮 GPU (VULKAN)"
                             ),
