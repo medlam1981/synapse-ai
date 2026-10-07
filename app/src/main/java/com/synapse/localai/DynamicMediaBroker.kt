@@ -2,12 +2,15 @@ package com.synapse.localai
 
 import android.app.ActivityManager
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.util.zip.ZipFile
 import kotlin.random.Random
 
 /**
@@ -455,8 +458,14 @@ object DynamicMediaBroker {
             }
         }
 
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
-        val ldPath = "/data/local/tmp:$nativeLibDir:${sdBinary.parent}:/vendor/lib64:/system/lib64"
+        val nativeLibDir = try {
+            extractSdCliDependencies(context)
+        } catch (e: Exception) {
+            val message = "Unable to prepare native diffusion libraries: ${e.message ?: e.javaClass.simpleName}"
+            Log.e(TAG, message, e)
+            return@withContext MediaResult.Error(message)
+        }
+        val ldPath = "$nativeLibDir:/data/local/tmp:${context.applicationInfo.nativeLibraryDir}:${sdBinary.parent}:/vendor/lib64:/system/lib64"
         val shellScript = "export LD_LIBRARY_PATH=\"$ldPath:\$LD_LIBRARY_PATH\" && export OMP_NUM_THREADS=$numThreads && export OMP_WAIT_POLICY=passive && export KMP_BLOCKTIME=0 && taskset f0 nice -n -10 \"$@\""
         val fullCmd = listOf("/system/bin/sh", "-c", shellScript, "sh") + cmd
 
@@ -620,6 +629,51 @@ object DynamicMediaBroker {
         } catch (_: Exception) {}
 
         return File("/data/local/tmp/sd-cli")
+    }
+
+    @Synchronized
+    private fun extractSdCliDependencies(context: Context): File {
+        val requiredLibraries = listOf("libstable-diffusion.so", "libomp.so", "libc++_shared.so")
+        val apkFile = File(context.applicationInfo.sourceDir)
+        val outputDir = File(context.filesDir, "sd-cli-libraries-${apkFile.lastModified()}")
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            throw IllegalStateException("Cannot create native library directory: ${outputDir.absolutePath}")
+        }
+
+        ZipFile(apkFile).use { apk ->
+            val abi = Build.SUPPORTED_ABIS.firstOrNull { candidate ->
+                apk.getEntry("lib/$candidate/libstable-diffusion.so") != null &&
+                    apk.getEntry("lib/$candidate/libomp.so") != null &&
+                    apk.getEntry("lib/$candidate/libc++_shared.so") != null
+            } ?: throw IllegalStateException("APK does not contain sd-cli dependencies for a supported ABI")
+
+            for (library in requiredLibraries) {
+                val entryName = "lib/$abi/$library"
+                val entry = apk.getEntry(entryName)
+                    ?: throw IllegalStateException("Missing native dependency $entryName")
+                val outputFile = File(outputDir, library)
+                if (outputFile.isFile && outputFile.length() == entry.size) continue
+
+                val temporaryFile = File(outputDir, "$library.tmp")
+                try {
+                    apk.getInputStream(entry).use { input ->
+                        FileOutputStream(temporaryFile).use { output -> input.copyTo(output) }
+                    }
+                    if (temporaryFile.length() != entry.size) {
+                        throw IllegalStateException("Incomplete extraction of $library")
+                    }
+                    if (outputFile.exists() && !outputFile.delete()) {
+                        throw IllegalStateException("Cannot replace stale native dependency $library")
+                    }
+                    if (!temporaryFile.renameTo(outputFile)) {
+                        throw IllegalStateException("Cannot finalize native dependency $library")
+                    }
+                } finally {
+                    if (temporaryFile.exists()) temporaryFile.delete()
+                }
+            }
+        }
+        return outputDir
     }
 
     private fun findCompanionWeights(context: Context): Pair<String?, String?>? {
