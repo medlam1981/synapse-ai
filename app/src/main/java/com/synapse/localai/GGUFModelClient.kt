@@ -265,7 +265,13 @@ class GGUFModelClient {
     private fun checkLogFileForDraftError(logFile: File): Boolean {
         if (!logFile.exists()) return false
         return try {
-            val lines = logFile.readLines()
+            val recentLog = java.io.RandomAccessFile(logFile, "r").use { file ->
+                val length = file.length()
+                val start = (length - 64 * 1024L).coerceAtLeast(0L)
+                file.seek(start)
+                ByteArray((length - start).toInt()).also(file::readFully)
+            }.toString(Charsets.UTF_8)
+            val lines = recentLog.lineSequence()
             lines.any { isDraftErrorLine(it) }
         } catch (_: Exception) {
             false
@@ -622,6 +628,7 @@ class GGUFModelClient {
             val startTime = System.currentTimeMillis()
             var serverBecameAlive = false
             var draftFailureDetected = false
+            var lastLogcatCheckTime = 0L
             val maxStartupWait = SERVER_START_TIMEOUT_MS
 
             while (System.currentTimeMillis() - startTime < maxStartupWait) {
@@ -656,9 +663,12 @@ class GGUFModelClient {
                     break
                 }
 
-                if (hasDraft && checkRecentErrors()) {
-                    draftFailureDetected = true
-                    break
+                if (hasDraft && System.currentTimeMillis() - lastLogcatCheckTime >= 5_000L) {
+                    lastLogcatCheckTime = System.currentTimeMillis()
+                    if (checkRecentErrors()) {
+                        draftFailureDetected = true
+                        break
+                    }
                 }
 
                 if (hasDraft && logFile.exists()) {

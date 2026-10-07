@@ -1,41 +1,47 @@
 package com.synapse.localai
 
-import android.util.Log
 import android.graphics.BitmapFactory
 import android.util.Base64
-import org.json.JSONArray
-import org.json.JSONObject
+import android.util.Log
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlockThreshold
+import com.google.ai.client.generativeai.type.Content
+import com.google.ai.client.generativeai.type.FunctionCallPart
 import com.google.ai.client.generativeai.type.HarmCategory
 import com.google.ai.client.generativeai.type.SafetySetting
 import com.google.ai.client.generativeai.type.Tool
-import com.google.ai.client.generativeai.type.defineFunction
-import com.google.ai.client.generativeai.type.Schema
-import com.google.ai.client.generativeai.type.FunctionCallPart
-import com.google.ai.client.generativeai.type.Content
 import com.google.ai.client.generativeai.type.content
+import com.google.ai.client.generativeai.type.defineFunction
 import com.google.ai.client.generativeai.type.generationConfig
+import com.google.ai.client.generativeai.type.Schema
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import java.io.File
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.Date
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
+import kotlin.math.pow
+import kotlin.random.Random
 
 class GeminiModelClient(
     private val apiKeys: List<String>,
     initialKeyIndex: Int = 0,
     private val onKeyRotated: ((Int) -> Unit)? = null,
-    private val onKeyUsed: ((String) -> Unit)? = null,
+    private val onKeyUsed: ((String, Long) -> Unit)? = null,
+    private val getKeyUsage: ((String) -> Long)? = null,
     private val onKeyValidated: ((Int) -> Unit)? = null,
     private val onModelAutoSwitched: ((String) -> Unit)? = null
 ) {
@@ -45,9 +51,10 @@ class GeminiModelClient(
     }
 
     private var currentKeyIndex = initialKeyIndex.coerceIn(0, (apiKeys.size - 1).coerceAtLeast(0))
-    // Track cooldown timestamps for degraded or rate-limited keys
-    private val keyCooldowns = java.util.concurrent.ConcurrentHashMap<Int, Long>()
-    private val keyFailureCounts = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+    private var nextKeyIndex = if (apiKeys.isEmpty()) 0 else (currentKeyIndex + 1) % apiKeys.size
+    private val keyCooldowns = ConcurrentHashMap<Int, Long>()
+    private val keyFailureCounts = ConcurrentHashMap<Int, Int>()
+    private val inFlightByKey = ConcurrentHashMap<Int, Int>()
 
     var modelName: String = AgentViewModel.DEFAULT_GEMINI_MODEL
         set(value) {
@@ -61,7 +68,7 @@ class GeminiModelClient(
                 fileLog("Model changed to '$sanitized'. Cleared key cooldowns and chat state.")
             }
         }
-    var maxTokens: Int = 8192 // Maximized API ceiling to 8192 for unbounded output streaming
+    var maxTokens: Int = 8192
     var temperature: Float = 0.30f
     var isLoaded: Boolean = apiKeys.isNotEmpty()
 
@@ -75,7 +82,7 @@ class GeminiModelClient(
         try {
             val dir = File("/sdcard/Medlam-Ai")
             if (!dir.exists()) dir.mkdirs()
-            File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] [GEMINI] $msg\n")
+            File(dir, "gguf_log.txt").appendText("[${Date()}] [GEMINI] $msg\n")
         } catch (_: Exception) {}
     }
 
@@ -83,72 +90,58 @@ class GeminiModelClient(
         val failures = (keyFailureCounts[keyIdx] ?: 0) + 1
         keyFailureCounts[keyIdx] = failures
 
-        // Cooldown SLA: Quota (429) -> 60s cooldown; Timeout / Server 5xx -> 30s back-off
-        val cooldownDuration = if (isQuota) 60_000L else 30_000L
+        // زيادة مدة الـ Cooldown تصاعدياً حسب عدد الفشلات المتكررة
+        val baseCooldown = if (isQuota) 60_000L else 20_000L
+        val multiplier = 1.5.pow(failures.coerceAtMost(4).toDouble())
+        val cooldownDuration = (baseCooldown * multiplier).toLong()
         val cooldownUntil = System.currentTimeMillis() + cooldownDuration
         keyCooldowns[keyIdx] = cooldownUntil
 
         val apiKey = apiKeys.getOrNull(keyIdx) ?: ""
-        if (isQuota) {
-            onKeyUsed?.invoke(apiKey + "_EXHAUSTED")
-        }
-        fileLog("Key #${keyIdx + 1}/${apiKeys.size} marked ${if (isQuota) "EXHAUSTED (429)" else "DEGRADED"}. Cooldown ${cooldownDuration / 1000}s. Error: $errorMsg")
+        KeyUsageManager.markCooldown(apiKey, cooldownDuration)
+        fileLog("Key #${keyIdx + 1}/${apiKeys.size} marked ${if (isQuota) "RATE-LIMITED (429)" else "DEGRADED/COOLDOWN"}. Cooldown ${cooldownDuration / 1000}s (Failures: $failures). Error: $errorMsg")
     }
 
-    private fun markKeySuccess(keyIdx: Int) {
+    private fun markKeySuccess(keyIdx: Int, tokensUsed: Long) {
         keyFailureCounts[keyIdx] = 0
-        keyCooldowns.remove(keyIdx)
         onKeyValidated?.invoke(keyIdx)
-        apiKeys.getOrNull(keyIdx)?.let { onKeyUsed?.invoke(it) }
+        apiKeys.getOrNull(keyIdx)?.let { onKeyUsed?.invoke(it, tokensUsed.coerceAtLeast(1L)) }
     }
 
-    private fun getNextValidKey(forceRotate: Boolean): Pair<String, Int>? {
+    @Synchronized
+    private fun getNextValidKey(): Pair<String, Int>? {
         if (apiKeys.isEmpty()) return null
         val totalKeys = apiKeys.size
         val now = System.currentTimeMillis()
 
-        // Clean up expired cooldowns
         keyCooldowns.entries.removeIf { it.value <= now }
 
-        // If ALL keys are cooling down, un-cooldown only the earliest degraded key for retry
-        if (keyCooldowns.size >= totalKeys) {
-            val oldestCooldownKey = keyCooldowns.minByOrNull { it.value }?.key
-            if (oldestCooldownKey != null) {
-                keyCooldowns.remove(oldestCooldownKey)
-                fileLog("All keys in cooldown pool. Released earliest key #${oldestCooldownKey + 1}/$totalKeys for retry.")
-            }
-        }
+        val availableKeys = (0 until totalKeys)
+            .map { offset -> (nextKeyIndex + offset) % totalKeys }
+            .filter { (keyCooldowns[it] ?: 0L) <= now }
+        val idleKeys = availableKeys.filter { (inFlightByKey[it] ?: 0) == 0 }
+        val candidates = idleKeys.ifEmpty { availableKeys }
+        val selectedKey = candidates.minByOrNull { idx ->
+            getKeyUsage?.invoke(apiKeys[idx]) ?: 0L
+        } ?: return null
 
-        if (forceRotate) {
-            // Strict circular round-robin sequence: N+1, N+2, ...
-            for (i in 1..totalKeys) {
-                val nextIdx = (currentKeyIndex + i) % totalKeys
-                val cooldownUntil = keyCooldowns[nextIdx] ?: 0L
-                if (now >= cooldownUntil) {
-                    currentKeyIndex = nextIdx
-                    onKeyRotated?.invoke(currentKeyIndex)
-                    fileLog("Rotated to key #${currentKeyIndex + 1}/$totalKeys")
-                    break
-                }
-            }
-        } else {
-            // Check if current key is valid; if cooling down, find next available
-            val currentCooldown = keyCooldowns[currentKeyIndex] ?: 0L
-            if (now < currentCooldown) {
-                for (i in 1 until totalKeys) {
-                    val nextIdx = (currentKeyIndex + i) % totalKeys
-                    val cooldownUntil = keyCooldowns[nextIdx] ?: 0L
-                    if (now >= cooldownUntil) {
-                        currentKeyIndex = nextIdx
-                        onKeyRotated?.invoke(currentKeyIndex)
-                        fileLog("Current key in cooldown. Advanced to key #${currentKeyIndex + 1}/$totalKeys")
-                        break
-                    }
-                }
-            }
-        }
-
+        currentKeyIndex = selectedKey
+        nextKeyIndex = (selectedKey + 1) % totalKeys
+        inFlightByKey[selectedKey] = (inFlightByKey[selectedKey] ?: 0) + 1
+        onKeyRotated?.invoke(currentKeyIndex)
+        fileLog("Rotated to key #${currentKeyIndex + 1}/$totalKeys")
         return apiKeys[currentKeyIndex] to currentKeyIndex
+    }
+
+    @Synchronized
+    private fun releaseKey(keyIdx: Int) {
+        val remaining = (inFlightByKey[keyIdx] ?: 1) - 1
+        if (remaining > 0) inFlightByKey[keyIdx] = remaining else inFlightByKey.remove(keyIdx)
+    }
+
+    private fun getCooldownWaitMs(): Long {
+        val earliestCooldown = keyCooldowns.values.minOrNull() ?: return 1_000L
+        return (earliestCooldown - System.currentTimeMillis()).coerceAtLeast(250L)
     }
 
     init {
@@ -170,18 +163,15 @@ class GeminiModelClient(
         systemPrompt: String = "",
         onRetry: (() -> Unit)? = null
     ): Flow<String> = flow {
-        Log.d(TAG, "Generating with Gemini (Ollama Vision Engine)...")
-
-        val chatHistory = mutableListOf<com.google.ai.client.generativeai.type.Content>()
+        val chatHistory = mutableListOf<Content>()
         var promptText = ""
-        var promptImages = mutableListOf<android.graphics.Bitmap>()
+        val promptImages = mutableListOf<android.graphics.Bitmap>()
 
         for (i in 0 until messages.length()) {
             val msg = messages.getJSONObject(i)
             val role = msg.optString("role", "user")
             val contentStr = msg.optString("content", "")
             val imagesArray = msg.optJSONArray("images")
-
             val geminiRole = if (role == "user") "user" else "model"
 
             if (i == messages.length() - 1 && role == "user") {
@@ -217,24 +207,71 @@ class GeminiModelClient(
             }
         }
 
-        var attempt = 0
-        var demandRetryCount = 0
+        executeResilientInference(
+            chatHistory = chatHistory,
+            promptText = promptText,
+            promptImages = promptImages,
+            systemPrompt = systemPrompt,
+            onRetry = onRetry
+        ).collect { emit(it) }
+    }.flowOn(Dispatchers.IO)
+
+    suspend fun generateStreamWithHistory(
+        history: List<Pair<String, String>>,
+        systemPrompt: String = "",
+        onRetry: (() -> Unit)? = null
+    ): Flow<String> = flow {
+        val chatHistory = mutableListOf<Content>()
+        for (msg in history) {
+            val contentStr = msg.second.trim()
+            if (contentStr.isBlank()) continue
+            val role = if (msg.first == "user") "user" else "model"
+            chatHistory.add(content(role = role) { text(contentStr) })
+        }
+
+        val lastUserMsg = if (chatHistory.isNotEmpty()) chatHistory.removeAt(chatHistory.size - 1) else null
+        val promptText = lastUserMsg?.parts?.filterIsInstance<com.google.ai.client.generativeai.type.TextPart>()
+            ?.joinToString(" ") { it.text } ?: ""
+
+        executeResilientInference(
+            chatHistory = chatHistory,
+            promptText = promptText,
+            promptImages = emptyList(),
+            systemPrompt = systemPrompt,
+            onRetry = onRetry
+        ).collect { emit(it) }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Unified Core Inference Engine مع معالجة حماية الضغط الذكية وحلقة المحاولات مع Exponential Backoff.
+     */
+    private fun executeResilientInference(
+        chatHistory: List<Content>,
+        promptText: String,
+        promptImages: List<android.graphics.Bitmap>,
+        systemPrompt: String,
+        onRetry: (() -> Unit)?
+    ): Flow<String> = flow {
         val totalKeys = apiKeys.size
-        val maxAttempts = minOf(totalKeys, 6)
+        if (totalKeys == 0) throw IllegalStateException("No Gemini API keys are configured.")
+        var attempt = 0
         var success = false
         var lastErrorDetail = ""
-        var currentPair = getNextValidKey(forceRotate = false)
+        var retryHistory = chatHistory.toMutableList()
+        var retryPrompt = promptText
+        var retryImages = promptImages
+        var hasEmittedAnyOutput = false
+        var currentPair = getNextValidKey()
 
-        while (attempt < maxAttempts && !success) {
+        while (!success) {
             if (currentPair == null) {
-                delay(5000L)
-                currentPair = getNextValidKey(forceRotate = false)
-                if (currentPair == null) {
-                    attempt++
-                    continue
-                }
+                delay(getCooldownWaitMs())
+                currentPair = getNextValidKey()
+                continue
             }
             val (apiKey, keyIdx) = currentPair
+            val attemptOutput = StringBuilder()
+            val attemptTokenUsage = AtomicLong(0L)
 
             val channel = Channel<String>(Channel.BUFFERED)
             val streamScope = CoroutineScope(coroutineContext + Job())
@@ -259,11 +296,11 @@ class GeminiModelClient(
                         systemInstruction = content { text(systemPrompt) }
                     )
 
-                    val chat = generativeModel.startChat(chatHistory)
+                    val chat = generativeModel.startChat(retryHistory)
                     activeChat = chat
                     val responseFlow = chat.sendMessageStream(content(role = "user") {
-                        text(promptText)
-                        for (img in promptImages) {
+                        text(retryPrompt)
+                        for (img in retryImages) {
                             image(img)
                         }
                     })
@@ -276,13 +313,15 @@ class GeminiModelClient(
                         if (functionCallDetected) return@collect
                         val candidate = chunk.candidates.firstOrNull()
                         val reason = candidate?.finishReason?.name
-                        if (!reason.isNullOrBlank()) {
-                            lastFinishReason = reason
-                        }
+                        if (!reason.isNullOrBlank()) lastFinishReason = reason
+
                         val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
-                        if (candTokens > 0) {
-                            lastTokenCount = candTokens
+                        if (candTokens > 0) lastTokenCount = candTokens
+                        val totalTokens = chunk.usageMetadata?.totalTokenCount ?: 0
+                        if (totalTokens > 0) {
+                            attemptTokenUsage.updateAndGet { current -> maxOf(current, totalTokens.toLong()) }
                         }
+
                         val fns = chunk.functionCalls
                         if (fns.isNotEmpty()) {
                             val call = fns.first()
@@ -292,7 +331,7 @@ class GeminiModelClient(
                                     "<parameter name=\"$k\">$v</parameter>"
                                 }
                             } else ""
-                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (args: ${call.args})")
+                            fileLog("Gemini native FunctionCall intercepted: ${call.name}")
                             val toolXml = "<invoke name=\"${call.name}\">\n$paramsXml\n</invoke>"
                             channel.send(toolXml)
                             channel.close()
@@ -310,11 +349,10 @@ class GeminiModelClient(
                 } catch (t: Throwable) {
                     val errorStr = t.message ?: t.toString()
                     val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
-                                      errorStr.contains("MAX_TOKENS", ignoreCase = true)
+                            errorStr.contains("MAX_TOKENS", ignoreCase = true)
                     if (isMaxTokens) {
                         lastFinishReason = "MAX_TOKENS"
                         if (lastTokenCount == 0) lastTokenCount = maxTokens
-                        fileLog("Response stopped cleanly with MAX_TOKENS at stream level")
                         try {
                             if (t is com.google.ai.client.generativeai.type.ResponseStoppedException) {
                                 val remainingText = t.response?.text
@@ -331,8 +369,8 @@ class GeminiModelClient(
             }
 
             try {
-                // 30-Second timeout for initial connection & response chunk (Gemini thinking mode may take up to 15s to emit first token)
-                val firstChunk = withTimeoutOrNull(30_000L) {
+                // مهلة 25 ثانية لاستقبال الحزمة الأولى لمنع التجمد
+                val firstChunk = withTimeoutOrNull(25_000L) {
                     val res = channel.receiveCatching()
                     if (res.isClosed) {
                         val cause = res.exceptionOrNull()
@@ -346,123 +384,91 @@ class GeminiModelClient(
                 if (firstChunk == null) {
                     if (!channel.isClosedForReceive) {
                         streamJob.cancel()
-                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 30-second timeout: zero response chunks received within 30000ms")
+                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys timeout: zero response chunks received")
                     } else {
-                        throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty response stream")
+                        throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty stream")
                     }
                 }
 
-                // First byte received: Validate key & persist immediately
-                markKeySuccess(keyIdx)
+                attemptOutput.append(firstChunk)
                 emit(firstChunk)
+                hasEmittedAnyOutput = true
 
-                // Stream the remainder of the response
                 for (chunk in channel) {
                     if (coroutineContext.isActive) {
+                        attemptOutput.append(chunk)
                         emit(chunk)
+                        hasEmittedAnyOutput = true
                     }
                 }
 
+                markKeySuccess(keyIdx, attemptTokenUsage.get())
+                releaseKey(keyIdx)
                 success = true
-                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys (FinishReason: $lastFinishReason)")
+                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys")
 
             } catch (t: Throwable) {
-                streamJob.cancel()
-                if (t is kotlinx.coroutines.CancellationException || t.javaClass.simpleName == "SynchronousToolBarrierException" || t.message?.contains("Synchronous ReAct Barrier") == true) {
+                streamJob.cancelAndJoin()
+                releaseKey(keyIdx)
+                val consumedTokens = attemptTokenUsage.get()
+                if (consumedTokens > 0L) onKeyUsed?.invoke(apiKey, consumedTokens)
+                if (t is kotlinx.coroutines.CancellationException ||
+                    t.javaClass.simpleName == "SynchronousToolBarrierException" ||
+                    t.message?.contains("Synchronous ReAct Barrier") == true
+                ) {
                     throw t
                 }
 
                 val errorMsg = t.message ?: t.toString()
-                val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
-                                  errorMsg.contains("MAX_TOKENS", ignoreCase = true)
-                if (isMaxTokens) {
-                    lastFinishReason = "MAX_TOKENS"
-                    if (lastTokenCount == 0) lastTokenCount = maxTokens
-                    markKeySuccess(keyIdx)
-                    success = true
-                    fileLog("Inference reached MAX_TOKENS ceiling with Key #${keyIdx + 1}/$totalKeys (Graceful continuation trigger)")
-                    break
+                val lowerError = errorMsg.lowercase()
+                val targetModel = AgentViewModel.sanitizeGeminiModelName(modelName)
+
+                fileLog("Key #${keyIdx + 1}/$totalKeys Error: $errorMsg")
+
+                // الأخطاء الدائمة: 404
+                val isNotFound = lowerError.contains("404") || lowerError.contains("not found")
+                if (isNotFound) {
+                    throw RuntimeException("Gemini Model Error 404: Model '$targetModel' not found.")
                 }
+
+                val isBadRequest = lowerError.contains("400") || lowerError.contains("bad request")
+                if (isBadRequest) {
+                    throw RuntimeException("Gemini API Error 400: $errorMsg")
+                }
+
+                // تحديد أخطاء الضغط والكوتا
+                val isHighDemand503 = lowerError.contains("503") || lowerError.contains("high demand") ||
+                        lowerError.contains("overloaded") || lowerError.contains("unavailable")
+                val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") || lowerError.contains("resource_exhausted")
+                val isTimeoutOrServer = t is java.net.SocketTimeoutException || lowerError.contains("timeout") ||
+                        lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("504")
 
                 lastErrorDetail = errorMsg
-                val lowerError = errorMsg.lowercase()
-
-                fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
-
-                val targetModel = AgentViewModel.sanitizeGeminiModelName(modelName)
-                val isNotFound = lowerError.contains("404") ||
-                    lowerError.contains("not found") ||
-                    lowerError.contains("not_found") ||
-                    lowerError.contains("is not supported for generatecontent")
-
-                if (isNotFound) {
-                    fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
-                }
-
-                val isBadRequest = lowerError.contains("400") ||
-                    lowerError.contains("bad request") ||
-                    lowerError.contains("invalid_argument") ||
-                    lowerError.contains("invalid argument")
-
-                // HTTP 400 Bad Request = protocol/payload error, NOT a key issue.
-                // Rotating keys would cause an infinite loop. Throw immediately.
-                if (isBadRequest) {
-                    fileLog("HTTP 400 Bad Request on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini API Error 400 (Bad Request): $errorMsg")
-                }
-
-                val isHighDemand503 = lowerError.contains("503") ||
-                    lowerError.contains("high demand") ||
-                    lowerError.contains("spikes in demand") ||
-                    lowerError.contains("overloaded") ||
-                    (lowerError.contains("unavailable") && !lowerError.contains("not found")) ||
-                    (lowerError.contains("missingfieldexception") && lowerError.contains("details"))
-
-                if (isHighDemand503) {
-                    if (demandRetryCount == 0) {
-                        demandRetryCount++
-                        fileLog("Model '$targetModel' experiencing high demand (503). Retrying once in 2000ms on Key #${keyIdx + 1}/$totalKeys...")
-                        delay(2000L)
-                        continue
-                    } else {
-                        fileLog("Model '$targetModel' 503 high demand persisted after retry. Halting key rotation to avoid futile loops.")
-                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or enter another model in Settings.")
-                    }
-                }
-
-                val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
-                    lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
-
-                val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
-                    lowerError.contains("timeout") ||
-                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("504") ||
-                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest)
-
                 markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
 
-                val shouldRetry = isQuotaExhausted || isTimeoutOrServer ||
-                    lowerError.contains("limit") ||
-                    lowerError.contains("deadline") ||
-                    lowerError.contains("safety") ||
-                    lowerError.contains("recitation") ||
-                    lowerError.contains("serialization") ||
-                    t is java.io.IOException ||
-                    t.javaClass.simpleName.contains("SerializationException")
+                val shouldRetry = isQuotaExhausted || isHighDemand503 || isTimeoutOrServer ||
+                        lowerError.contains("limit") || lowerError.contains("empty stream") ||
+                        t is java.io.IOException
 
-                if (shouldRetry && attempt + 1 < maxAttempts) {
-                    attempt++
-                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
-                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
-                    onRetry?.invoke()
-
-                    // Fast 250ms failover between keys:
-                    delay(250L)
-
-                    // Advance key and update UI after short failover delay
-                    currentPair = getNextValidKey(forceRotate = true)
-                } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
-                    throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
+                if (shouldRetry) {
+                    if (attempt < Int.MAX_VALUE) attempt++
+                    // حساب مدة الانتظار التصاعدية (Exponential Backoff + Jitter) عند الضغط
+                    val backoffDelay = (250L * 2.0.pow(attempt.coerceAtMost(8).toDouble())).toLong()
+                        .coerceAtMost(60_000L) + Random.nextLong(100L, 300L)
+                    fileLog("Key #${keyIdx + 1} failed (retry $attempt). Rotating in ${backoffDelay}ms...")
+                    if (!hasEmittedAnyOutput) {
+                        onRetry?.invoke()
+                    } else {
+                        retryHistory.add(content(role = "user") {
+                            text(retryPrompt)
+                            for (img in retryImages) image(img)
+                        })
+                        retryHistory.add(content(role = "model") { text(attemptOutput.toString()) })
+                        retryPrompt = "Continue your previous response from exactly where it stopped. Do not repeat any text already written. Preserve the conversation, persona, requested format, and intent, and complete the response."
+                        retryImages = emptyList()
+                    }
+                    delay(backoffDelay)
+                    currentPair = getNextValidKey()
                 } else {
                     throw RuntimeException("Gemini Error: $errorMsg")
                 }
@@ -470,279 +476,9 @@ class GeminiModelClient(
         }
 
         if (!success) {
-            throw RuntimeException("All tried API keys in pool failed or timed out. Last error: $lastErrorDetail")
+            throw RuntimeException("All API keys in pool failed or are in cooldown. Last error: $lastErrorDetail")
         }
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun generateStreamWithHistory(
-        history: List<Pair<String, String>>,
-        systemPrompt: String = "",
-        onRetry: (() -> Unit)? = null
-    ): Flow<String> = flow {
-        Log.d(TAG, "Generating with Gemini (Resilient Engine)...")
-
-        val chatHistory = mutableListOf<com.google.ai.client.generativeai.type.Content>()
-        for (msg in history) {
-            val content = msg.second.trim()
-            if (content.isBlank()) continue
-            val role = if (msg.first == "user") "user" else "model"
-            chatHistory.add(content(role = role) { text(content) })
-        }
-
-        val lastUserMsg = chatHistory.removeAt(chatHistory.size - 1)
-        val promptText = lastUserMsg.parts.filterIsInstance<com.google.ai.client.generativeai.type.TextPart>().joinToString(" ") { it.text }
-
-        var attempt = 0
-        var demandRetryCount = 0
-        val totalKeys = apiKeys.size
-        val maxAttempts = minOf(totalKeys, 6)
-        var success = false
-        var lastErrorDetail = ""
-        var currentPair = getNextValidKey(forceRotate = false)
-
-        while (attempt < maxAttempts && !success) {
-            if (currentPair == null) {
-                delay(5000L)
-                currentPair = getNextValidKey(forceRotate = false)
-                if (currentPair == null) {
-                    attempt++
-                    continue
-                }
-            }
-            val (apiKey, keyIdx) = currentPair
-
-            val channel = Channel<String>(Channel.BUFFERED)
-            val streamScope = CoroutineScope(coroutineContext + Job())
-            val streamJob = streamScope.launch {
-                try {
-                    val effectiveModelName = AgentViewModel.sanitizeGeminiModelName(modelName)
-
-                    val generativeModel = GenerativeModel(
-                        modelName = effectiveModelName,
-                        apiKey = apiKey,
-                        generationConfig = generationConfig {
-                            this.temperature = this@GeminiModelClient.temperature
-                            this.maxOutputTokens = this@GeminiModelClient.maxTokens
-                        },
-                        safetySettings = listOf(
-                            SafetySetting(HarmCategory.HARASSMENT, BlockThreshold.NONE),
-                            SafetySetting(HarmCategory.HATE_SPEECH, BlockThreshold.NONE),
-                            SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, BlockThreshold.NONE),
-                            SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.NONE)
-                        ),
-                        tools = getAgentTools(),
-                        systemInstruction = content { text(systemPrompt) }
-                    )
-
-                    val chat = generativeModel.startChat(chatHistory)
-                    activeChat = chat
-                    val responseFlow = chat.sendMessageStream(promptText)
-
-                    lastFinishReason = null
-                    lastTokenCount = 0
-
-                    var functionCallDetected = false
-                    responseFlow.collect { chunk ->
-                        if (functionCallDetected) return@collect
-                        val candidate = chunk.candidates.firstOrNull()
-                        val reason = candidate?.finishReason?.name
-                        if (!reason.isNullOrBlank()) {
-                            lastFinishReason = reason
-                        }
-                        val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
-                        if (candTokens > 0) {
-                            lastTokenCount = candTokens
-                        }
-                        val fns = chunk.functionCalls
-                        if (fns.isNotEmpty()) {
-                            val call = fns.first()
-                            lastFunctionCall = call
-                            val paramsXml = if (call.args.isNotEmpty()) {
-                                call.args.entries.joinToString("\n") { (k, v) ->
-                                    "<parameter name=\"$k\">$v</parameter>"
-                                }
-                            } else ""
-                            fileLog("Gemini native FunctionCall intercepted: ${call.name} (args: ${call.args})")
-                            val toolXml = "<invoke name=\"${call.name}\">\n$paramsXml\n</invoke>"
-                            channel.send(toolXml)
-                            channel.close()
-                            functionCallDetected = true
-                            return@collect
-                        }
-                        if (isActive && chunk.text != null) {
-                            channel.send(chunk.text!!)
-                        }
-                    }
-                    if (lastFinishReason == "MAX_TOKENS" && lastTokenCount == 0) {
-                        lastTokenCount = maxTokens
-                    }
-                    channel.close()
-                } catch (t: Throwable) {
-                    val errorStr = t.message ?: t.toString()
-                    val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
-                                      errorStr.contains("MAX_TOKENS", ignoreCase = true)
-                    if (isMaxTokens) {
-                        lastFinishReason = "MAX_TOKENS"
-                        if (lastTokenCount == 0) lastTokenCount = maxTokens
-                        fileLog("Response stopped cleanly with MAX_TOKENS at stream level")
-                        try {
-                            if (t is com.google.ai.client.generativeai.type.ResponseStoppedException) {
-                                val remainingText = t.response?.text
-                                if (!remainingText.isNullOrEmpty()) {
-                                    channel.send(remainingText)
-                                }
-                            }
-                        } catch (_: Exception) {}
-                        channel.close()
-                    } else {
-                        channel.close(t)
-                    }
-                }
-            }
-
-            try {
-                // 30-Second timeout for initial connection & response chunk (Gemini thinking mode may take up to 15s to emit first token)
-                val firstChunk = withTimeoutOrNull(30_000L) {
-                    val res = channel.receiveCatching()
-                    if (res.isClosed) {
-                        val cause = res.exceptionOrNull()
-                        if (cause != null) throw cause
-                        null
-                    } else {
-                        res.getOrNull()
-                    }
-                }
-
-                if (firstChunk == null) {
-                    if (!channel.isClosedForReceive) {
-                        streamJob.cancel()
-                        throw java.net.SocketTimeoutException("Key #${keyIdx + 1}/$totalKeys 30-second timeout: zero response chunks received within 30000ms")
-                    } else {
-                        throw IllegalStateException("Key #${keyIdx + 1}/$totalKeys returned empty response stream")
-                    }
-                }
-
-                // First byte received: Validate key & persist immediately
-                markKeySuccess(keyIdx)
-                emit(firstChunk)
-
-                // Stream the remainder of the response
-                for (chunk in channel) {
-                    if (coroutineContext.isActive) {
-                        emit(chunk)
-                    }
-                }
-
-                success = true
-                fileLog("Inference successful with Key #${keyIdx + 1}/$totalKeys (FinishReason: $lastFinishReason)")
-
-            } catch (t: Throwable) {
-                streamJob.cancel()
-                if (t is kotlinx.coroutines.CancellationException || t.javaClass.simpleName == "SynchronousToolBarrierException" || t.message?.contains("Synchronous ReAct Barrier") == true) {
-                    throw t
-                }
-
-                val errorMsg = t.message ?: t.toString()
-                val isMaxTokens = t is com.google.ai.client.generativeai.type.ResponseStoppedException ||
-                                  errorMsg.contains("MAX_TOKENS", ignoreCase = true)
-                if (isMaxTokens) {
-                    lastFinishReason = "MAX_TOKENS"
-                    if (lastTokenCount == 0) lastTokenCount = maxTokens
-                    markKeySuccess(keyIdx)
-                    success = true
-                    fileLog("Inference reached MAX_TOKENS ceiling with Key #${keyIdx + 1}/$totalKeys (Graceful continuation trigger)")
-                    break
-                }
-
-                lastErrorDetail = errorMsg
-                val lowerError = errorMsg.lowercase()
-
-                fileLog("Key #${keyIdx + 1}/$totalKeys [${t.javaClass.simpleName}] Error: $errorMsg")
-
-                val targetModel = AgentViewModel.sanitizeGeminiModelName(modelName)
-                val isNotFound = lowerError.contains("404") ||
-                    lowerError.contains("not found") ||
-                    lowerError.contains("not_found") ||
-                    lowerError.contains("is not supported for generatecontent")
-
-                if (isNotFound) {
-                    fileLog("Gemini model '$targetModel' NOT FOUND (404) on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini Model Error 404: The model '$targetModel' was not found on Google Cloud. Please check the model name in Settings.")
-                }
-
-                val isBadRequest = lowerError.contains("400") ||
-                    lowerError.contains("bad request") ||
-                    lowerError.contains("invalid_argument") ||
-                    lowerError.contains("invalid argument")
-
-                // HTTP 400 Bad Request = protocol/payload error, NOT a key issue.
-                // Rotating keys would cause an infinite loop. Throw immediately.
-                if (isBadRequest) {
-                    fileLog("HTTP 400 Bad Request on Key #${keyIdx + 1}/$totalKeys — halting rotation immediately. Error: $errorMsg")
-                    throw RuntimeException("Gemini API Error 400 (Bad Request): $errorMsg")
-                }
-
-                val isHighDemand503 = lowerError.contains("503") ||
-                    lowerError.contains("high demand") ||
-                    lowerError.contains("spikes in demand") ||
-                    lowerError.contains("overloaded") ||
-                    (lowerError.contains("unavailable") && !lowerError.contains("not found")) ||
-                    (lowerError.contains("missingfieldexception") && lowerError.contains("details"))
-
-                if (isHighDemand503) {
-                    if (demandRetryCount == 0) {
-                        demandRetryCount++
-                        fileLog("Model '$targetModel' experiencing high demand (503). Retrying once in 2000ms on Key #${keyIdx + 1}/$totalKeys...")
-                        delay(2000L)
-                        continue
-                    } else {
-                        fileLog("Model '$targetModel' 503 high demand persisted after retry. Halting key rotation to avoid futile loops.")
-                        throw RuntimeException("Google Cloud 503: Model '$targetModel' is currently experiencing high demand on Google servers. Please retry in a few moments, or enter another model in Settings.")
-                    }
-                }
-
-                val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") ||
-                    lowerError.contains("exhausted") || lowerError.contains("resource_exhausted")
-
-                val isTimeoutOrServer = t is java.net.SocketTimeoutException ||
-                    lowerError.contains("timeout") ||
-                    lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("504") ||
-                    (t.javaClass.simpleName.contains("ServerException") && !isNotFound && !isBadRequest)
-
-                markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
-
-                val shouldRetry = isQuotaExhausted || isTimeoutOrServer ||
-                    lowerError.contains("limit") ||
-                    lowerError.contains("deadline") ||
-                    lowerError.contains("safety") ||
-                    lowerError.contains("recitation") ||
-                    lowerError.contains("serialization") ||
-                    t is java.io.IOException ||
-                    t.javaClass.simpleName.contains("SerializationException")
-
-                if (shouldRetry && attempt + 1 < maxAttempts) {
-                    attempt++
-                    fileLog("Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
-                    Log.w(TAG, "Key #${keyIdx + 1}/$totalKeys failed ($attempt/$maxAttempts). Fast failover to next key in 250ms...")
-                    onRetry?.invoke()
-
-                    // Fast 250ms failover between keys:
-                    delay(250L)
-
-                    // Advance key and update UI after short failover delay
-                    currentPair = getNextValidKey(forceRotate = true)
-                } else if (lowerError.contains("location") || lowerError.contains("unsupported")) {
-                    throw RuntimeException("Region Blocked: Gemini is not available in your region. Use a VPN.")
-                } else {
-                    throw RuntimeException("Gemini Error: $errorMsg")
-                }
-            }
-        }
-
-        if (!success) {
-            throw RuntimeException("All tried API keys in pool failed or timed out. Last error: $lastErrorDetail")
-        }
-    }.flowOn(Dispatchers.IO)
+    }
 
     suspend fun sendFunctionResponseStream(
         name: String,
@@ -782,13 +518,11 @@ class GeminiModelClient(
                 responseFlow.collect { chunk ->
                     val candidate = chunk.candidates.firstOrNull()
                     val reason = candidate?.finishReason?.name
-                    if (!reason.isNullOrBlank()) {
-                        lastFinishReason = reason
-                    }
+                    if (!reason.isNullOrBlank()) lastFinishReason = reason
+
                     val candTokens = chunk.usageMetadata?.candidatesTokenCount ?: 0
-                    if (candTokens > 0) {
-                        lastTokenCount = candTokens
-                    }
+                    if (candTokens > 0) lastTokenCount = candTokens
+
                     val text = chunk.text
                     if (!text.isNullOrEmpty()) {
                         collectedAnyText = true
@@ -797,13 +531,10 @@ class GeminiModelClient(
                 }
             } catch (t: Throwable) {
                 fileLog("Native sendFunctionResponseStream failed: ${t.message}. Initiating multi-turn fallback.")
-                Log.w(TAG, "Native sendFunctionResponseStream failed: ${t.message}. Initiating multi-turn fallback.", t)
             }
         }
 
-        // If native SDK response failed or produced no output, stream via resilient multi-turn Ollama engine
         if (!collectedAnyText && fallbackMessages != null) {
-            fileLog("Executing resilient second-turn synthesis via generateStreamWithOllamaMessages")
             generateStreamWithOllamaMessages(fallbackMessages, systemPrompt).collect { chunk ->
                 emit(chunk)
             }
@@ -816,31 +547,31 @@ class GeminiModelClient(
                 listOf(
                     defineFunction(
                         name = "run_shell",
-                        description = "Execute a shell command with root or adb permissions (e.g. to inspect system resources, RAM, CPU, storage, processes, or run bash scripts)",
+                        description = "Execute a shell command with root or adb permissions",
                         parameters = listOf(Schema.str("command", "The bash shell command to execute")),
                         requiredParameters = listOf("command")
                     ),
                     defineFunction(
                         name = "open_app",
-                        description = "Launch an Android application dynamically using package name or app alias (e.g. 'youtube', 'whatsapp', 'settings', 'chrome')",
+                        description = "Launch an Android application dynamically",
                         parameters = listOf(Schema.str("package_name", "Android package name or application name/alias")),
                         requiredParameters = listOf("package_name")
                     ),
                     defineFunction(
                         name = "click",
                         description = "Click an element by text, ID, or direct screen coordinates 'x,y'",
-                        parameters = listOf(Schema.str("target", "Text, resource ID, or 'x,y' coordinates of the element")),
+                        parameters = listOf(Schema.str("target", "Text, resource ID, or 'x,y' coordinates")),
                         requiredParameters = listOf("target")
                     ),
                     defineFunction(
                         name = "swipe",
-                        description = "Perform a swipe or scroll gesture ('up'/'اعلى', 'down'/'اسفل', 'left'/'يسار', 'right'/'يمين' or 'startX,startY,endX,endY')",
-                        parameters = listOf(Schema.str("direction", "Direction ('up', 'down', 'left', 'right') or coordinate trajectory")),
+                        description = "Perform a swipe or scroll gesture",
+                        parameters = listOf(Schema.str("direction", "Direction ('up', 'down', 'left', 'right') or coordinates")),
                         requiredParameters = listOf("direction")
                     ),
                     defineFunction(
                         name = "input_text",
-                        description = "Inject text into an editable element or currently active input field",
+                        description = "Inject text into an editable element",
                         parameters = listOf(
                             Schema.str("text", "The text to type"),
                             Schema.str("target", "Optional target element text or ID")
@@ -849,51 +580,51 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "capture_screen",
-                        description = "Capture the active screen framebuffer buffer to a PNG image file",
-                        parameters = listOf(Schema.str("save_path", "Optional file path to save screenshot")),
+                        description = "Capture screen framebuffer buffer",
+                        parameters = listOf(Schema.str("save_path", "Optional file path")),
                         requiredParameters = emptyList()
                     ),
                     defineFunction(
                         name = "ocr_screen",
-                        description = "Inspect visual elements, extract text labels, and map button coordinates via ML Kit OCR",
-                        parameters = listOf(Schema.str("image_path", "Optional path to image file, or active screen if empty")),
+                        description = "Inspect visual elements and text labels via ML Kit OCR",
+                        parameters = listOf(Schema.str("image_path", "Optional image path")),
                         requiredParameters = emptyList()
                     ),
                     defineFunction(
                         name = "write_file",
-                        description = "Create or overwrite a local file atomically",
+                        description = "Create or overwrite a local file",
                         parameters = listOf(
                             Schema.str("path", "File path on disk"),
-                            Schema.str("content", "Text content to write into file")
+                            Schema.str("content", "Text content to write")
                         ),
                         requiredParameters = listOf("path", "content")
                     ),
                     defineFunction(
                         name = "read_file_range",
-                        description = "Read chunk slices from large files safely without OOM",
+                        description = "Read chunk slices from large files safely",
                         parameters = listOf(
                             Schema.str("path", "Path of file to read"),
-                            Schema.str("start_line", "Start line (1-indexed)"),
+                            Schema.str("start_line", "Start line"),
                             Schema.str("line_count", "Number of lines to read")
                         ),
                         requiredParameters = listOf("path")
                     ),
                     defineFunction(
                         name = "web_search",
-                        description = "Query live search engines for real-time facts and documentation",
-                        parameters = listOf(Schema.str("query", "Search terms or question")),
+                        description = "Query live search engines for real-time facts",
+                        parameters = listOf(Schema.str("query", "Search terms")),
                         requiredParameters = listOf("query")
                     ),
                     defineFunction(
                         name = "fetch_web_content",
                         description = "Extract clean text content from web URLs",
-                        parameters = listOf(Schema.str("url", "Web page URL to fetch")),
+                        parameters = listOf(Schema.str("url", "Web page URL")),
                         requiredParameters = listOf("url")
                     ),
                     defineFunction(
                         name = "run_python",
-                        description = "Execute local Python code for advanced mathematics, algorithms, and computation",
-                        parameters = listOf(Schema.str("script", "Python source code to execute")),
+                        description = "Execute local Python code for calculations",
+                        parameters = listOf(Schema.str("script", "Python source code")),
                         requiredParameters = listOf("script")
                     ),
                     defineFunction(
@@ -901,23 +632,23 @@ class GeminiModelClient(
                         description = "Register delayed execution with hardware alarm triggers",
                         parameters = listOf(
                             Schema.str("description", "Description of scheduled task"),
-                            Schema.str("command", "Command or action to run"),
-                            Schema.str("delay_minutes", "Delay in minutes before triggering")
+                            Schema.str("command", "Command to run"),
+                            Schema.str("delay_minutes", "Delay in minutes")
                         ),
                         requiredParameters = listOf("description", "command", "delay_minutes")
                     ),
                     defineFunction(
                         name = "queue_background_task",
-                        description = "Defer heavy compute workloads to asynchronous background threads",
-                        parameters = listOf(Schema.str("command", "Command or workload to run in background")),
+                        description = "Defer heavy workloads to asynchronous background threads",
+                        parameters = listOf(Schema.str("command", "Workload command")),
                         requiredParameters = listOf("command")
                     ),
                     defineFunction(
                         name = "complete",
-                        description = "Finalize task execution cycles and return direct output summary",
+                        description = "Finalize task execution cycles",
                         parameters = listOf(
                             Schema.str("summary", "Structured summary of completed actions"),
-                            Schema.str("task", "Name or description of completed task")
+                            Schema.str("task", "Name or description of task")
                         ),
                         requiredParameters = listOf("summary")
                     )

@@ -266,7 +266,7 @@ class AgentViewModel : ViewModel() {
         private val RE_THOUGHT_EMOJI = Regex("""^💭[\s\S]*?\n\n""", RegexOption.DOT_MATCHES_ALL)
         private val RE_CODE_FENCE_COMPACT = Regex("""```([a-zA-Z0-9_\-]*)\n([\s\S]*?)```""")
 
-        const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+        const val DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 
         fun sanitizeGeminiModelName(raw: String?): String {
             val clean = (raw ?: "").trim()
@@ -1077,8 +1077,13 @@ class AgentViewModel : ViewModel() {
                 _uiState.update { it.copy(currentKeyIndex = idx, totalKeys = keys.size) }
                 targetCtx?.let { prefs(it).edit().putInt("current_key_index", idx).apply() }
             },
-            onKeyUsed = { key ->
-                targetCtx?.let { KeyUsageManager.incrementUsage(it.applicationContext, key) }
+            onKeyUsed = { key, tokensUsed ->
+                targetCtx?.let {
+                    KeyUsageManager.incrementUsage(it.applicationContext, key, safeModelName, tokensUsed)
+                }
+            },
+            getKeyUsage = { key ->
+                targetCtx?.let { KeyUsageManager.getTokenUsage(it.applicationContext, key, safeModelName) } ?: 0L
             },
             onModelAutoSwitched = { validModelName ->
                 _uiState.update { it.copy(
