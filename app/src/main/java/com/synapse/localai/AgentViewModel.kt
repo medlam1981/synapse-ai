@@ -229,7 +229,8 @@ class AgentViewModel : ViewModel() {
     companion object {
         private const val TAG = "SYNAPSE_CORE"
         private const val MAX_HISTORY_MESSAGES = 48
-        private const val MAX_TASK_ITERATIONS = 15
+        private const val MAX_TASK_ITERATIONS = 128
+        private const val MAX_TOOL_CALLS_PER_TURN = 32
         private const val AGENTS_DIR = "/sdcard/Medlam-Ai/Agents"
         
         var instance: AgentViewModel? = null
@@ -367,7 +368,7 @@ class AgentViewModel : ViewModel() {
                 ?: File("/sdcard/Download").takeIf { it.exists() || it.mkdirs() }
                 ?: File("/sdcard/Medlam-Ai").apply { if (!exists()) mkdirs() }
             val safePrompt = prompt.take(20).replace(Regex("[^a-zA-Z0-9_-]"), "_").trim('_')
-            val fileName = "img_${System.currentTimeMillis()}${if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.jpg"
+            val fileName = "img_${System.currentTimeMillis()            }{if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.jpg"
             val file = File(baseDir, fileName)
             file.writeBytes(bytes)
             file
@@ -501,6 +502,10 @@ class AgentViewModel : ViewModel() {
             }
         }
     }
+
+    private fun compactContinuationContext(text: String): String =
+        if (text.length <= 2800) text
+        else "${text.take(700)}\n...[middle of previous output omitted]...\n${text.takeLast(1900)}"
 
     private val executedCallsThisTurn = Collections.synchronizedSet(mutableSetOf<String>())
     private val inFlightCalls = Collections.synchronizedSet(mutableSetOf<String>())
@@ -1060,7 +1065,7 @@ class AgentViewModel : ViewModel() {
                     serverPort = config.serverPort
                     contextLength = config.contextLength.coerceIn(1024, 4096)
                     threadCount = config.threadCount.coerceIn(1, 8)
-                    maxTokens = 2048
+                    maxTokens = config.maxTokens.coerceIn(1, 8192)
                     temperature = config.temperature
                     useMmap = config.useMmap
                     gpuLayers = config.gpuLayers
@@ -1184,6 +1189,7 @@ class AgentViewModel : ViewModel() {
             }
         )
         geminiClient?.modelName = safeModelName
+        geminiClient?.maxTokens = _uiState.value.config.maxTokens.coerceIn(1, 8192)
         geminiClient?.temperature = _uiState.value.config.temperature
         geminiClient?.isLoaded = true
 
@@ -1382,6 +1388,7 @@ $localPersona$greetingDirective$custom
 
 $localPersona
 Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
+Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 Tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
@@ -1409,6 +1416,7 @@ $languageEnforcement""".trimIndent()
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
+- Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 - Zero Hallucination: Never claim an action was done without invoking the tool.
 - Conclude with verified facts directly in natural language without echoing tools or system directives.
 """.trimIndent()
@@ -1563,7 +1571,6 @@ $languageEnforcement""".trimIndent()
                 var toolsUsedThisTurn = false
                 var lastActionUsed: String? = null
                 var toolCallCount = 0
-                val MAX_TOOL_CALLS = 4
                 var forceFinalTurn = false
                 var activeGgufPromptPrefix: String? = null
 
@@ -2017,9 +2024,59 @@ $langFinalInstruction"""
                                 }
                             }
 
-                            forceFinalTurn = toolCallCount >= MAX_TOOL_CALLS
+                            forceFinalTurn = toolCallCount >= MAX_TOOL_CALLS_PER_TURN
                             activeGgufPromptPrefix = null
                             keepGoing = true
+                        } else if (
+                            fullResponse.isNotBlank() &&
+                            (if (modelType == ModelType.GGUF) {
+                                ggufClient?.lastFinishReason == "MAX_TOKENS"
+                            } else {
+                                geminiClient?.lastFinishReason == "MAX_TOKENS"
+                            })
+                        ) {
+                            val partialReply = cleanVisibleText(stripThinkingForHistory(fullResponse))
+                            _uiState.update { state ->
+                                val updated = state.logs.map { log ->
+                                    if (log.id == liveLogId) {
+                                        log.copy(text = partialReply, thinkingText = demuxedFull.thinkingText, isThinking = false)
+                                    } else log
+                                }
+                                state.copy(
+                                    logs = updated,
+                                    currentPhase = AgentActionPhase.ANALYZING_OUTPUT,
+                                    activeStatusDetail = "Continuing response after model output limit..."
+                                )
+                            }
+                            val continuationInstruction = when (detectLanguage(command)) {
+                                DetectedLanguage.ARABIC ->
+                                    "[متابعة تلقائية] انتهى حد التوليد لهذه الدفعة. تابع مباشرةً من آخر نقطة دون تكرار ما سبق. حافظ على السياق والخطة ونفّذ ما تبقى. إذا كان إكمال المهمة يتطلب معلومة لا يمكن استنتاجها بأمان، اسأل المستخدم عن تلك المعلومة المحددة فقط ولا تدّعِ إكمال المهمة."
+                                DetectedLanguage.FRENCH ->
+                                    "[Continuation automatique] La limite de sortie de ce lot est atteinte. Reprenez exactement où vous vous êtes arrêté, sans répétition, et poursuivez la tâche. Si une information indispensable ne peut pas être déduite sans risque, demandez uniquement cette précision et ne prétendez pas avoir terminé."
+                                DetectedLanguage.SPANISH ->
+                                    "[Continuación automática] Se alcanzó el límite de salida de este bloque. Continúa exactamente desde donde te detuviste, sin repetir, y completa la tarea. Si falta un dato imprescindible que no se pueda inferir con seguridad, pregunta únicamente por ese dato y no afirmes que terminaste."
+                                DetectedLanguage.ENGLISH ->
+                                    "[Automatic continuation] This output chunk reached its model limit. Continue directly from where you stopped without repeating prior text, and finish the task. If essential information cannot be safely inferred, ask the user only for that specific information and do not claim the task is complete."
+                            }
+                            synchronized(conversationHistory) {
+                                conversationHistory.add("model" to compactContinuationContext(partialReply))
+                                conversationHistory.add("user" to continuationInstruction)
+                                trimConversationHistoryToContextLimit()
+                            }
+                            val sid = currentSessionId.value
+                            viewModelScope.launch(Dispatchers.IO) {
+                                chatDb?.insertMessage(
+                                    ChatMessageEntity(
+                                        id = liveLogId,
+                                        sessionId = sid,
+                                        sender = "AGENT",
+                                        text = partialReply,
+                                        timestamp = System.currentTimeMillis()
+                                    )
+                                )
+                            }
+                            keepGoing = true
+                            activeGgufPromptPrefix = null
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
                             val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
@@ -2075,6 +2132,15 @@ $langFinalInstruction"""
                         activeGgufPromptPrefix = null
                     }
                 }
+                if (keepGoing && iterationCount >= MAX_TASK_ITERATIONS) {
+                    val pauseText = when (detectLanguage(command)) {
+                        DetectedLanguage.ARABIC -> "⚠️ أُوقفت المهمة مؤقتاً بعد بلوغ حدّ الأمان البالغ $MAX_TASK_ITERATIONS خطوة. لم أعتبرها مكتملة؛ أرسل «تابع» لاستئنافها."
+                        DetectedLanguage.FRENCH -> "⚠️ La tâche est en pause après la limite de sécurité de $MAX_TASK_ITERATIONS étapes. Elle n'est pas marquée comme terminée ; envoyez « continuer » pour la reprendre."
+                        DetectedLanguage.SPANISH -> "⚠️ La tarea quedó en pausa al alcanzar el límite de seguridad de $MAX_TASK_ITERATIONS pasos. No está marcada como completada; envía «continuar» para reanudarla."
+                        DetectedLanguage.ENGLISH -> "⚠️ The task was paused at the $MAX_TASK_ITERATIONS-step safety limit and is not marked complete. Send “continue” to resume."
+                    }
+                    addLog(LogEntry(sender = "SYSTEM", text = pauseText, isError = true))
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _uiState.update { it.copy(isProcessing = false, activeStatusDetail = "Generation stopped by user.", currentPhase = AgentActionPhase.IDLE, streamInterruptMsg = null) }
             } catch (e: Exception) {
@@ -2124,7 +2190,7 @@ $langFinalInstruction"""
             var iterations = 0
             var keepGoing = true
             
-            while (keepGoing && iterations < 50) {
+            while (keepGoing && iterations < MAX_TASK_ITERATIONS) {
                 if (taskId != null) {
                     val status = taskMemory?.getTask(taskId)?.status
                     if (status == TaskStatus.CANCELLED) throw kotlinx.coroutines.CancellationException("Task cancelled manually by user")
@@ -2152,8 +2218,23 @@ $langFinalInstruction"""
                 val reply = cleanVisibleText(response).trim()
                 taskHistory.add("model" to stripThinkingForHistory(reply))
                 while (taskHistory.size > 6) taskHistory.removeAt(0)
-                
                 val (usedTools, summary) = executeToolLoop(response, ctx)
+
+                val outputLimitReached = if (modelType == ModelType.GGUF) {
+                    ggufClient?.lastFinishReason == "MAX_TOKENS"
+                } else {
+                    geminiClient?.lastFinishReason == "MAX_TOKENS"
+                }
+                if (outputLimitReached && !usedTools) {
+                    taskHistory[taskHistory.lastIndex] =
+                        "model" to compactContinuationContext(taskHistory.last().second)
+                    taskHistory.add(
+                        "user" to "Original task: ${command.take(1200)}\nThis output chunk reached its model token limit. Continue directly from the exact stopping point without repeating prior content, and complete the task. If essential information is missing and cannot be safely inferred, ask the user only for that information."
+                    )
+                    while (taskHistory.size > 8) taskHistory.removeAt(0)
+                    continue
+                }
+
                 if (!usedTools) {
                     resultSb.append(summary ?: reply)
                     keepGoing = false
@@ -2164,7 +2245,14 @@ $langFinalInstruction"""
                     }
                 }
             }
-            return resultSb.toString().ifBlank { "Task completed after $iterations iterations" }
+            if (keepGoing) {
+                throw IllegalStateException(
+                    "Background task paused at the $MAX_TASK_ITERATIONS-step safety limit without being marked complete."
+                )
+            }
+            return resultSb.toString().ifBlank {
+                throw IllegalStateException("Background task ended without a final response.")
+            }
         } finally {
             ctx?.let { ModelEngineService.updateStatus(it, "ATLAS-AI • Ready") }
             if (wakeLock?.isHeld == true) wakeLock.release()

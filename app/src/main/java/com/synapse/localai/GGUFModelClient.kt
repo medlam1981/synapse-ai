@@ -1216,7 +1216,7 @@ class GGUFModelClient {
             allStopTokens.forEach { put(it) }
         }
 
-        val targetMaxTokens = if (maxTokens in 1..2048) maxTokens else 2048
+        val targetMaxTokens = maxTokens.coerceIn(1, 8192)
         val targetTemp = overrideTemperature ?: this@GGUFModelClient.temperature
         val targetTopP = this@GGUFModelClient.topP
         val targetTopK = this@GGUFModelClient.topK
