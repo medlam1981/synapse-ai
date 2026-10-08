@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import com.synapse.localai.tools.WebSearchClient
 import java.io.File
-import java.nio.charset.StandardCharsets
 
 /**
  * ToolHandler — Centralized Autonomous Tool Chaining & Execution Dispatcher.
@@ -63,7 +62,12 @@ object ToolHandler {
     /**
      * Executes write_file tool to local external storage atomically.
      */
-    fun handleWriteFile(path: String, content: String): ToolExecutionResult {
+    fun handleWriteFile(
+        path: String,
+        content: String,
+        journal: FileChangeJournal,
+        transactionId: String? = null
+    ): ToolExecutionResult {
         val cleanPath = path.trim().removeSurrounding("\"").removeSurrounding("'").trim()
         if (cleanPath.isBlank()) {
             return ToolExecutionResult(false, "✖ Tool(write_file) ─── [FAILED]\n✖ Status: Target path is blank.")
@@ -72,9 +76,8 @@ object ToolHandler {
         return try {
             val resolved = ToolExecutor.resolvePath(cleanPath, ToolExecutor.BASE_DIR)
             val file = File(resolved)
-            file.parentFile?.let { if (!it.exists()) it.mkdirs() }
-            file.writeText(content, StandardCharsets.UTF_8)
-            val summary = "✔ Tool(write_file: ${file.name}) ─── [SAVED]\n✔ Status: Wrote ${file.length()} bytes to ${file.absolutePath}"
+            val writeResult = journal.write(transactionId, file, content)
+            val summary = "✔ Tool(write_file: ${file.name}) ─── [SAVED]\n✔ Status: Wrote ${file.length()} bytes to ${file.absolutePath}\n↩ Rollback transaction: ${writeResult.transactionId} (use rollback_file_changes)"
             ToolExecutionResult(true, summary)
         } catch (e: Exception) {
             ToolExecutionResult(false, "✖ Tool(write_file: $cleanPath) ─── [FAILED]\n✖ Status: ${e.message}")

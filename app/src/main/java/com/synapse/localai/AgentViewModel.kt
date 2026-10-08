@@ -808,6 +808,7 @@ class AgentViewModel : ViewModel() {
     }
 
     private var appContext: Context? = null
+    @Volatile private var fileChangeJournal: FileChangeJournal? = null
 
     val settingsViewModel: SettingsViewModel by lazy {
         val app = (appContext as? Application) ?: (MainActivity.instance?.application)
@@ -1003,6 +1004,7 @@ class AgentViewModel : ViewModel() {
 
     fun loadConfig(context: Context) {
         appContext = context.applicationContext
+        fileChangeJournal = FileChangeJournal(File(context.applicationContext.filesDir, "file-change-journal"))
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val loaded = PersonaDataStore.getCustomPersonaPrompt(context)
@@ -1474,7 +1476,8 @@ $localPersona$greetingDirective$custom
 $localPersona
 Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
 Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
-Tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), list_tasks(), resume_task(task_id, user_input).
+File safety: write_file creates a reversible before-image. Use rollback_file_changes(transaction_id) to restore a transaction when a change must be undone. Background writes are grouped under the task ID and automatically rolled back if the task permanently fails or is cancelled. Shell commands are not covered by this file rollback.
+Tools: open_app(package_name), run_shell(command), write_file(path, content), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), list_tasks(), resume_task(task_id, user_input).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - ZERO HALLUCINATION: Never claim you opened an app or ran a command without invoking the tool!
@@ -1496,13 +1499,14 @@ $languageEnforcement""".trimIndent()
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
 </function_calls>
 - Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 - Zero Hallucination: Never claim an action was done without invoking the tool.
+- File safety: write_file changes can be restored with rollback_file_changes(transaction_id); background file changes are grouped by task ID and are automatically restored when the task permanently fails or is cancelled. Shell-side effects are not covered by this rollback.
 - Conclude with verified facts directly in natural language without echoing tools or system directives.
 """.trimIndent()
 
@@ -1671,7 +1675,9 @@ $languageEnforcement""".trimIndent()
 
                     val liveDiskStreamer = ToolExecutor.LiveFileStreamer(
                         baseDir = ToolExecutor.BASE_DIR,
-                        onStatusUpdate = { status -> _uiState.update { it.copy(activeStatusDetail = status, currentPhase = AgentActionPhase.GENERATING_CODE) } }
+                        onStatusUpdate = { status -> _uiState.update { it.copy(activeStatusDetail = status, currentPhase = AgentActionPhase.GENERATING_CODE) } },
+                        fileJournal = fileChangeJournal,
+                        transactionId = UUID.randomUUID().toString()
                     )
 
                     val isSecondTurnAnalysis = toolsUsedThisTurn && iterationCount > 1
@@ -1882,7 +1888,7 @@ $languageEnforcement""".trimIndent()
 
                     if (fullResponse.isNotBlank()) {
                         if (streamInterrupted && validToolCalls.isEmpty()) {
-                            val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
+                            val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream, liveDiskStreamer.transactionId) else fullResponse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val displayText = if (cleanHistoryReply.isNotBlank()) cleanHistoryReply else assistantReply.ifBlank { "[Stream Interrupted: $interruptMsg]" }
                             val cleanDisplay = cleanVisibleText(displayText)
@@ -2164,7 +2170,7 @@ $langFinalInstruction"""
                             activeGgufPromptPrefix = null
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
-                            val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream) else fullResponse
+                            val assistantReply = if (writtenFilesFromStream.isNotEmpty()) ToolExecutor.sanitizePostExecutionSummary(fullResponse, writtenFilesFromStream, liveDiskStreamer.transactionId) else fullResponse
                             val cleanHistoryReply = stripThinkingForHistory(assistantReply)
                             val cleanDisplay = cleanVisibleText(cleanHistoryReply)
                             _uiState.update { state ->
@@ -2385,7 +2391,7 @@ ${acceptanceCriteria.mapIndexed { index, criterion -> "${index + 1}. $criterion"
                         "Tool execution interrupted; verifying before any retry"
                     )
                 }
-                val (usedTools, summary) = executeToolLoop(response, ctx)
+                val (usedTools, summary) = executeToolLoop(response, ctx, taskId)
 
                 val outputLimitReached = if (modelType == ModelType.GGUF) {
                     ggufClient?.lastFinishReason == "MAX_TOKENS"
@@ -2707,7 +2713,11 @@ $evidence
         }
     }
 
-    private suspend fun executeToolLoop(response: String, context: Context? = null): Pair<Boolean, String?> {
+    private suspend fun executeToolLoop(
+        response: String,
+        context: Context? = null,
+        transactionId: String? = null
+    ): Pair<Boolean, String?> {
         val actualContext = context ?: appContext ?: MainActivity.instance
         val toolCalls = StreamDemultiplexer.parseAllToolCalls(response)
         if (toolCalls.isEmpty()) return false to null
@@ -2817,8 +2827,28 @@ $evidence
                             val content = params["content"] ?: params["text"] ?: params["data"] ?: ""
                             if (path.isNotBlank()) {
                                 actionToolUsed = true
-                                val res = ToolHandler.handleWriteFile(path, content)
+                                val journal = fileChangeJournal
+                                    ?: actualContext?.let { FileChangeJournal(File(it.filesDir, "file-change-journal")) }
+                                val res = if (journal != null) {
+                                    ToolHandler.handleWriteFile(path, content, journal, transactionId)
+                                } else {
+                                    ToolHandler.ToolExecutionResult(false, "✖ Tool(write_file) ─── [FAILED]\n✖ Status: App storage is unavailable for a reversible write.")
+                                }
                                 summaries.add(res.summary)
+                            }
+                        }
+                        "rollback_file_changes", "undo_file_changes" -> {
+                            val id = params["transaction_id"] ?: params["task_id"] ?: params["id"] ?: ""
+                            if (id.isNotBlank()) {
+                                actionToolUsed = true
+                                val journal = fileChangeJournal
+                                    ?: actualContext?.let { FileChangeJournal(File(it.filesDir, "file-change-journal")) }
+                                val result = journal?.rollback(id)
+                                    ?: FileChangeJournal.RollbackResult(false, "App storage is unavailable.")
+                                summaries.add(
+                                    if (result.success) "✔ Tool(rollback_file_changes) ─── [RESTORED]\n${result.message}"
+                                    else "✖ Tool(rollback_file_changes) ─── [FAILED]\n${result.message}"
+                                )
                             }
                         }
                         "click", "click_node", "tap" -> {
@@ -2996,6 +3026,9 @@ $evidence
     }
 
     fun initTaskSystem(context: Context) {
+        if (fileChangeJournal == null) {
+            fileChangeJournal = FileChangeJournal(File(context.applicationContext.filesDir, "file-change-journal"))
+        }
         if (taskMemory == null) {
             val tm = TaskMemoryManager(context)
             taskMemory = tm
@@ -3018,6 +3051,20 @@ $evidence
             taskEngineRunning = taskEngine?.engineState?.value?.isRunning ?: false
         ) }
     }
+
+    fun getFileChangeJournal(): FileChangeJournal? {
+        fileChangeJournal?.let { return it }
+        val context = appContext ?: MainActivity.instance?.application ?: return null
+        return synchronized(this) {
+            fileChangeJournal ?: FileChangeJournal(File(context.filesDir, "file-change-journal")).also {
+                fileChangeJournal = it
+            }
+        }
+    }
+
+    fun rollbackTaskFileChanges(taskId: String): FileChangeJournal.RollbackResult =
+        getFileChangeJournal()?.rollback(taskId)
+            ?: FileChangeJournal.RollbackResult(false, "App storage is unavailable.")
 
     fun refreshSessions() {
         viewModelScope.launch(Dispatchers.IO) {

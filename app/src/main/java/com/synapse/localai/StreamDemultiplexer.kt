@@ -97,7 +97,7 @@ object StreamDemultiplexer {
     private val RE_TOOL_CALL = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|$)""", RegexOption.IGNORE_CASE)
     private val RE_FUNCTION_CALL = Regex("""<function_call\b[^>]*>([\s\S]*?)(?:</function_call>|$)""", RegexOption.IGNORE_CASE)
     private val RE_INVOKE = Regex("""<invoke\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)(?:</invoke>|$)""", RegexOption.IGNORE_CASE)
-    private val RE_FUNCTION_CALL_STYLE = Regex("""\b(run_shell|open_app|web_search|write_file|read_file_range|run_python|fetch_web_content|schedule_task|run_plugin|save_memory|search_memory|complete)\s*\(([\s\S]*?)\)""", RegexOption.IGNORE_CASE)
+    private val RE_FUNCTION_CALL_STYLE = Regex("""\b(run_shell|open_app|web_search|write_file|rollback_file_changes|read_file_range|run_python|fetch_web_content|schedule_task|run_plugin|save_memory|search_memory|complete)\s*\(([\s\S]*?)\)""", RegexOption.IGNORE_CASE)
     private val RE_FENCED_JSON = Regex("""```(?:json)?\s*\n?(\{[\s\S]*?\}|\[[\s\S]*?\])\s*\n?```""", RegexOption.IGNORE_CASE)
     private val RE_RAW_JSON = Regex("""(?:\A|\n)\s*(\{\s*\"(?:name|tool|action|type)\"\s*:[\s\S]*?(?:\}\s*(?:\n|\Z)|$))""")
     private val RE_DEMUX_PLACEHOLDER = Regex("""___DEMUX_BLOCK_([a-zA-Z0-9_\-]+)___""")

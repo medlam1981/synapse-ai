@@ -333,6 +333,7 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                     sessionId = task.id,
                     isCloudMode = activeViewModel.isCloudMode(),
                     modelInvoker = { sys, usr, onChunk -> activeViewModel.runSingleLlmPass(sys, usr, onChunk) },
+                    fileChangeJournal = activeViewModel.getFileChangeJournal(),
                     onTelemetryUpdate = { _ -> },
                     onTerminalLogUpdate = { log -> Log.d(TAG, "Orchestrator: $log") }
                 )
@@ -377,6 +378,10 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
             return true
 
         } catch (e: CancellationException) {
+            val rollback = viewModel?.rollbackTaskFileChanges(task.id)
+            if (rollback?.success == true) {
+                Log.i(TAG, "Rolled back file changes for cancelled task ${task.id}: ${rollback.message}")
+            }
             taskMemory.markFailed(task.id, "Cancelled")
             throw e
         } catch (e: TaskNeedsUserInputException) {
@@ -402,9 +407,17 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                             "in ${retryDelay}ms"
                 )
             } else {
-                taskMemory.markFailed(task.id, e.message ?: "Unknown error")
+                val rollback = viewModel?.rollbackTaskFileChanges(task.id)
+                val failure = buildString {
+                    append(e.message ?: "Unknown error")
+                    if (rollback?.success == true) append("\n").append(rollback.message)
+                    else if (rollback != null && rollback.message.startsWith("Rollback incomplete")) {
+                        append("\n").append(rollback.message)
+                    }
+                }
+                taskMemory.markFailed(task.id, failure)
                 failedCount++
-                Log.e(TAG, "Task ${task.id} exhausted retries — marked FAILED")
+                Log.e(TAG, "Task ${task.id} exhausted retries — marked FAILED; ${rollback?.message.orEmpty()}")
             }
             return false
 

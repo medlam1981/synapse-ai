@@ -7,6 +7,7 @@ import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -62,7 +63,9 @@ object ToolExecutor {
 
     class LiveFileStreamer(
         private val baseDir: String = BASE_DIR,
-        private val onStatusUpdate: ((String) -> Unit)? = null
+        private val onStatusUpdate: ((String) -> Unit)? = null,
+        private val fileJournal: FileChangeJournal? = null,
+        val transactionId: String = UUID.randomUUID().toString()
     ) {
         private var inCodeBlock = false
         private var currentFile: File? = null
@@ -118,6 +121,7 @@ object ToolExecutor {
                         try {
                             val targetFile = File(resolved)
                             targetFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
+                            fileJournal?.checkpoint(transactionId, targetFile)
 
                             val fos = FileOutputStream(targetFile, true)
                             currentFos = fos
@@ -132,7 +136,8 @@ object ToolExecutor {
                             }
 
                             Log.i(TAG, "LiveDiskStreamer: Explicit file provisioned (append=true): ${targetFile.absolutePath}")
-                            onStatusUpdate?.invoke("Writing to ${targetFile.absolutePath}...")
+                            val undoText = if (fileJournal != null) " (rollback ID: $transactionId)" else ""
+                            onStatusUpdate?.invoke("Writing to ${targetFile.absolutePath}$undoText...")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed provisioning $resolved: ${e.message}")
                         }
@@ -284,6 +289,7 @@ object ToolExecutor {
                             }
                             if (!f.exists() || f.length() < finalCode.length.toLong() / 2) {
                                 f.parentFile?.let { if (!it.exists()) it.mkdirs() }
+                                fileJournal?.checkpoint(transactionId, f)
                                 f.writeText(finalCode, StandardCharsets.UTF_8)
                                 if (!writtenFiles.contains(f.absolutePath)) {
                                     writtenFiles.add(f.absolutePath)
@@ -336,7 +342,11 @@ object ToolExecutor {
         }
     }
 
-    fun sanitizePostExecutionSummary(rawReply: String, writtenFiles: List<String>): String {
+    fun sanitizePostExecutionSummary(
+        rawReply: String,
+        writtenFiles: List<String>,
+        transactionId: String? = null
+    ): String {
         if (writtenFiles.isEmpty()) return rawReply.trim()
 
         val demuxed = StreamDemultiplexer.demux(rawReply)
@@ -386,6 +396,9 @@ object ToolExecutor {
             sb.append("  - `$path` ($sizeStr)\n")
         }
         sb.append("• **Operational Readiness:** Synchronous disk streaming complete. Files verified on local storage.")
+        if (!transactionId.isNullOrBlank()) {
+            sb.append("\n• **Rollback:** `rollback_file_changes(transaction_id=\"$transactionId\")` restores the prior versions.")
+        }
 
         return sb.toString().trim()
     }
@@ -465,7 +478,11 @@ object ToolExecutor {
         return blocks
     }
 
-    fun extractAndWriteFiles(response: String): List<String> {
+    fun extractAndWriteFiles(
+        response: String,
+        fileJournal: FileChangeJournal? = null,
+        transactionId: String? = null
+    ): List<String> {
         val writtenFiles = mutableListOf<String>()
         val blocks = parseCodeBlocksWithPaths(response)
 
@@ -484,7 +501,7 @@ object ToolExecutor {
                         continue
                     }
 
-                    val written = writeFile(target, block.code)
+                    val written = writeFile(target, block.code, fileJournal, transactionId)
                     if (written != null && !writtenFiles.contains(written)) {
                         writtenFiles.add(written)
                     }
@@ -516,7 +533,12 @@ object ToolExecutor {
         return null
     }
 
-    fun writeFile(rawPath: String, content: String): String? {
+    fun writeFile(
+        rawPath: String,
+        content: String,
+        fileJournal: FileChangeJournal? = null,
+        transactionId: String? = null
+    ): String? {
         return try {
             val resolvedPath = resolvePath(rawPath, BASE_DIR)
             val file = File(resolvedPath)
@@ -533,7 +555,11 @@ object ToolExecutor {
                 content
             }
 
-            file.writeText(finalContent)
+            if (fileJournal != null) {
+                fileJournal.write(transactionId, file, finalContent)
+            } else {
+                file.writeText(finalContent)
+            }
             Log.i(TAG, "✅ File written: ${file.absolutePath} (${finalContent.length} chars)")
             fileLog("Written: ${file.absolutePath}")
             file.absolutePath

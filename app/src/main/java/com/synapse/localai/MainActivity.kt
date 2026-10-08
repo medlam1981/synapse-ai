@@ -1458,6 +1458,65 @@ fun ConsolidatedMasterHeader(
                     contentDescription = "Task Queue"
                 )
             }
+
+            if (uiState.activeTasks.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 1.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    uiState.activeTasks.forEach { task ->
+                        val (statusLabel, statusColor) = when (task.status) {
+                            TaskStatus.RUNNING -> "RUNNING" to Color(0xFF10B981)
+                            TaskStatus.WAITING_FOR_USER -> "NEEDS INPUT" to Color(0xFFF59E0B)
+                            TaskStatus.QUEUED -> "QUEUED" to Color(0xFF38BDF8)
+                            TaskStatus.PENDING -> "PENDING" to Color(0xFF818CF8)
+                            else -> task.status.name to textDim
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(5.dp),
+                            color = statusColor.copy(alpha = 0.08f),
+                            border = BorderStroke(0.6.dp, statusColor.copy(alpha = 0.3f)),
+                            modifier = Modifier.widthIn(max = 240.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(5.dp)
+                                        .clip(CircleShape)
+                                        .background(statusColor)
+                                )
+                                Column {
+                                    Text(
+                                        text = "$statusLabel · ${task.description}",
+                                        color = statusColor,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val progressText = task.progress.takeIf { it.isNotBlank() }
+                                    if (progressText != null) {
+                                        Text(
+                                            text = progressText,
+                                            color = textDim,
+                                            fontSize = 7.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

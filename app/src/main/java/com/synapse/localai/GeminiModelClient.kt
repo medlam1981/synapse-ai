@@ -592,12 +592,18 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "write_file",
-                        description = "Create or overwrite a local file",
+                        description = "Create or overwrite a local file while saving a reversible before-image",
                         parameters = listOf(
                             Schema.str("path", "File path on disk"),
                             Schema.str("content", "Text content to write")
                         ),
                         requiredParameters = listOf("path", "content")
+                    ),
+                    defineFunction(
+                        name = "rollback_file_changes",
+                        description = "Restore files changed by a file-write transaction or task ID",
+                        parameters = listOf(Schema.str("transaction_id", "Transaction ID returned by write_file, or background task ID")),
+                        requiredParameters = listOf("transaction_id")
                     ),
                     defineFunction(
                         name = "read_file_range",

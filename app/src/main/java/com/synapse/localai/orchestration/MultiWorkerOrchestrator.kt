@@ -3,6 +3,7 @@ package com.synapse.localai.orchestration
 import android.util.Log
 import com.synapse.localai.HtmlSanitizer
 import com.synapse.localai.PersonaManager
+import com.synapse.localai.FileChangeJournal
 import com.synapse.localai.ToolExecutor
 import com.synapse.localai.tools.ContentReaderTool
 import com.synapse.localai.tools.PythonExecutionEngine
@@ -27,7 +28,8 @@ class MultiWorkerOrchestrator(
     private val onTelemetryUpdate: (activeTaskCount: Int) -> Unit,
     private val onTerminalLogUpdate: (cliText: String) -> Unit,
     private val onStatusUpdate: ((status: String) -> Unit)? = null,
-    private val shellExecutor: suspend (command: String) -> String = { "" }
+    private val shellExecutor: suspend (command: String) -> String = { "" },
+    private val fileChangeJournal: FileChangeJournal? = null
 ) {
 
     companion object {
@@ -130,10 +132,18 @@ class MultiWorkerOrchestrator(
                                 val path = toolInvocation.params["path"] ?: ""
                                 val content = toolInvocation.params["content"] ?: ""
                                 if (path.isNotBlank()) {
-                                    val f = java.io.File(ToolExecutor.resolvePath(path))
-                                    f.parentFile?.mkdirs(); f.writeText(content)
-                                    "Wrote ${content.length} bytes to${f.absolutePath}"
+                                    val journal = fileChangeJournal
+                                        ?: throw IllegalStateException("Reversible file storage is unavailable.")
+                                    val result = journal.write(sessionId, java.io.File(ToolExecutor.resolvePath(path)), content)
+                                    "Wrote ${content.length} bytes to ${result.file.absolutePath}; rollback transaction: ${result.transactionId}"
                                 } else "[Error: empty path]"
+                            }
+                            "rollback_file_changes", "undo_file_changes" -> {
+                                val transactionId = toolInvocation.params["transaction_id"]
+                                    ?: toolInvocation.params["task_id"]
+                                    ?: sessionId
+                                fileChangeJournal?.rollback(transactionId)?.message
+                                    ?: "[Error: reversible file storage is unavailable]"
                             }
                             "read_file_range" -> {
                                 val path = toolInvocation.params["path"] ?: ""
