@@ -139,7 +139,7 @@ data class AgentConfig(
     val geminiModelName: String = "gemini-3.8-flash",
     val serverHost: String = "0.0.0.0",
     val serverPort: Int = 8088,
-    val contextLength: Int = 2048,
+    val contextLength: Int = 4096,
     val threadCount: Int = 4,
     val maxTokens: Int = 2048,
     val temperature: Float = 0.30f,
@@ -1150,7 +1150,7 @@ class AgentViewModel : ViewModel() {
                 val client = GGUFModelClient().apply {
                     serverHost = config.serverHost
                     serverPort = config.serverPort
-                    contextLength = config.contextLength.coerceIn(1024, 4096)
+                    contextLength = config.contextLength.coerceIn(2048, 4096)
                     threadCount = config.threadCount.coerceIn(1, 8)
                     maxTokens = config.maxTokens.coerceIn(1, 8192)
                     temperature = config.temperature
@@ -2000,10 +2000,12 @@ $languageEnforcement""".trimIndent()
                                         refreshSessions()
                                     }
 
-                                    val observationMsg = """[Command Output (Exit code $exitCode)]:
+                                    val commandStatus = if (exitCode == 0) "COMMAND SUCCEEDED" else "COMMAND FAILED"
+                                    val observationMsg = """[$commandStatus — Exit code $exitCode]:
 $output
 
 MANDATORY PROTOCOL:
+- Treat a non-zero exit code as a failed command, even if the output contains success-like text. Do not tell the user the requested task succeeded until you have corrected the failure and verified the result.
 - If further diagnostic commands, file inspections, or operational actions are required to finish the objective completely, emit the next tool call now.
 - Do NOT close the session prematurely. Never say "I will do this" without running the tool.
 - Once all necessary actions are finished, deliver your structured analysis and final conclusion directly to the user.
@@ -2644,7 +2646,7 @@ $evidence
                 }
             }
             readerThread.join(1000)
-            val exitCode = try { process.exitValue() } catch (_: Exception) { 0 }
+            val exitCode = try { process.exitValue() } catch (_: Exception) { -1 }
             return exitCode to outputSb.toString()
         } catch (e: kotlinx.coroutines.CancellationException) {
             process.destroyForcibly()
@@ -2818,7 +2820,12 @@ $evidence
                             if (cmd.isNotBlank()) {
                                 actionToolUsed = true
                                 val (exitCode, output) = runShellWithExitCode(cmd)
-                                summaries.add("✔ Tool(run_shell: $cmd) [exit: $exitCode]\n$output")
+                                val commandStatus = if (exitCode == 0) {
+                                    "✔ Tool(run_shell: $cmd) [SUCCEEDED, exit: 0]"
+                                } else {
+                                    "✖ Tool(run_shell: $cmd) [FAILED, exit: $exitCode]"
+                                }
+                                summaries.add("$commandStatus\n$output")
                                 addSystemLog("Executed shell: $cmd (exit: $exitCode)")
                             }
                         }

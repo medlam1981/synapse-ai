@@ -128,11 +128,21 @@ object DeviceProfile {
      * Eliminates big.LITTLE core synchronization latency and scales to any core count.
      */
     fun optimalThreads(hw: HardwareProfile): Int {
-        return hw.performanceCores.coerceIn(2, hw.totalCores)
+        return hw.performanceCores.coerceIn(1, hw.totalCores.coerceAtLeast(1))
     }
 
+    fun inferenceThreads(requestedThreads: Int, freeRamMb: Long, hw: HardwareProfile?): Int {
+        if (freeRamMb < 768L) return 1
+        if (freeRamMb < 1_536L) return 2
+        val availablePerformanceThreads = hw?.let { optimalThreads(it) } ?: 4
+        return requestedThreads.coerceIn(1, availablePerformanceThreads.coerceIn(1, 8))
+    }
+
+    fun inferenceContextLength(requestedContextLength: Int, freeRamMb: Long): Int =
+        if (freeRamMb < 1_536L) 2048 else requestedContextLength.coerceIn(2048, 4096)
+
     fun optimalBatchThreads(hw: HardwareProfile): Int {
-        return hw.performanceCores.coerceIn(2, hw.totalCores)
+        return hw.performanceCores.coerceIn(1, hw.totalCores.coerceAtLeast(1))
     }
 
     /**

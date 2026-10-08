@@ -45,6 +45,8 @@ class GGUFModelClient {
         @Volatile private var globalLoadedUseMmap: Boolean? = null
         @Volatile private var globalLoadedDraftUseMmap: Boolean? = null
         @Volatile private var globalLoadedGpuRequest: Int? = null
+        @Volatile private var globalLoadedThreadCount: Int? = null
+        @Volatile private var globalLoadedContextLength: Int? = null
         @Volatile private var isWarmingUp = false
         private val serverMutex = Mutex()
 
@@ -72,6 +74,8 @@ class GGUFModelClient {
             globalLoadedUseMmap = null
             globalLoadedDraftUseMmap = null
             globalLoadedGpuRequest = null
+            globalLoadedThreadCount = null
+            globalLoadedContextLength = null
         }
 
         private fun fileLog(msg: String) {
@@ -91,7 +95,7 @@ class GGUFModelClient {
 
     var serverHost: String = DEFAULT_HOST
     var serverPort: Int = DEFAULT_PORT
-    var contextLength: Int = 2048
+    var contextLength: Int = 4096
     var threadCount: Int = 4
     var maxTokens: Int = 2048
     var temperature: Float = 0.30f
@@ -458,7 +462,9 @@ class GGUFModelClient {
                 globalLoadedDraftPath == effectiveDraft &&
                 globalLoadedUseMmap == useMmap &&
                 globalLoadedDraftUseMmap == draftUseMmap &&
-                globalLoadedGpuRequest == requestedGpuLayers
+                globalLoadedGpuRequest == requestedGpuLayers &&
+                globalLoadedThreadCount == threadCount &&
+                globalLoadedContextLength == contextLength
 
             if (isSameInstance) {
                 activeDraftModelPath = effectiveDraft
@@ -538,6 +544,8 @@ class GGUFModelClient {
                 globalLoadedUseMmap = null
                 globalLoadedDraftUseMmap = null
                 globalLoadedGpuRequest = null
+                globalLoadedThreadCount = null
+                globalLoadedContextLength = null
                 serverThread = null
             }
 
@@ -566,16 +574,9 @@ class GGUFModelClient {
             val kvCacheType = "f16"
 
             // Compute Allocation: strictly dedicate all 4 Kryo Gold Big performance cores (Cores 4-7)
-            val effectiveThreads = when {
-                freeRam < 768L -> 1
-                freeRam < 1_536L -> 2
-                else -> hw?.let { DeviceProfile.optimalThreads(it) }?.coerceIn(1, 8) ?: 4
-            }
+            val effectiveThreads = DeviceProfile.inferenceThreads(threadCount, freeRam, hw)
             val effectiveBatchThreads = effectiveThreads.coerceAtMost(4)
-            val resolvedCtx = when {
-                freeRam < 1_536L -> 1024
-                else -> this@GGUFModelClient.contextLength.coerceIn(1024, 4096)
-            }
+            val resolvedCtx = DeviceProfile.inferenceContextLength(this@GGUFModelClient.contextLength, freeRam)
             val vkSupported = LlamaServerJNI.safeRegisterVulkan()
             val autoGpuFitsMemory = (hw?.totalRamMb ?: 0L) >= 8_192L &&
                 freeRam >= (modelSizeMb * 2L + 1_536L)
@@ -723,6 +724,8 @@ class GGUFModelClient {
             globalLoadedUseMmap = useMmap
             globalLoadedDraftUseMmap = draftUseMmap
             globalLoadedGpuRequest = requestedGpuLayers
+            globalLoadedThreadCount = threadCount
+            globalLoadedContextLength = contextLength
             val startTime = System.currentTimeMillis()
             var serverBecameAlive = false
             var draftFailureDetected = false
@@ -963,6 +966,8 @@ class GGUFModelClient {
         globalLoadedDraftPath = null
         globalLoadedUseMmap = useMmap
         globalLoadedDraftUseMmap = false
+        globalLoadedThreadCount = threadCount
+        globalLoadedContextLength = contextLength
 
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < startupTimeoutMs(File(resolvedPath))) {
@@ -1025,7 +1030,9 @@ class GGUFModelClient {
             globalLoadedDraftPath == effectiveDraft &&
             globalLoadedUseMmap == useMmap &&
             globalLoadedDraftUseMmap == draftUseMmap &&
-            globalLoadedGpuRequest == requestedGpuLayers
+            globalLoadedGpuRequest == requestedGpuLayers &&
+            globalLoadedThreadCount == threadCount &&
+            globalLoadedContextLength == contextLength
         if (isSameInstance) {
             activeDraftModelPath = effectiveDraft
             isLoaded = true
@@ -1241,13 +1248,6 @@ class GGUFModelClient {
         var responseCode = -1
 
         val requestStartTime = System.currentTimeMillis()
-        try {
-            // FIXED: Enforce performance cores allocation before dispatching inference
-            LlamaNativeEngine.pinToBigCores()
-            LlamaServerJNI.safeBindPerformanceCores()
-            ZramOptimizer.pinToPerformanceCores("f0")
-        } catch (_: Exception) {}
-
         var attempts = 0
         while (coroutineContext.isActive && attempts < 8) {
             attempts++
@@ -1289,6 +1289,10 @@ class GGUFModelClient {
         }
 
         var tokenCount = 0
+        var serverPredictedTokens: Int? = null
+        var serverPredictedMs: Double? = null
+        var serverPromptTokens: Int? = null
+        var serverPromptMs: Double? = null
         var firstTokenTime = 0L
         val reader = BufferedReader(InputStreamReader(conn.inputStream))
         var line: String? = null
@@ -1323,6 +1327,16 @@ class GGUFModelClient {
 
                 try {
                     val json = JSONObject(data)
+                    json.optJSONObject("timings")?.let { timings ->
+                        val predictedN = timings.optInt("predicted_n", -1)
+                        val predictedMs = timings.optDouble("predicted_ms", -1.0)
+                        val promptN = timings.optInt("prompt_n", -1)
+                        val promptMs = timings.optDouble("prompt_ms", -1.0)
+                        if (predictedN >= 0) serverPredictedTokens = predictedN
+                        if (predictedMs >= 0.0) serverPredictedMs = predictedMs
+                        if (promptN >= 0) serverPromptTokens = promptN
+                        if (promptMs >= 0.0) serverPromptMs = promptMs
+                    }
                     val isStopped = json.optBoolean("stop", false)
                     val choice0 = json.optJSONArray("choices")?.optJSONObject(0)
                     val finishReason = choice0?.optString("finish_reason") ?: if (isStopped) "stop" else null
@@ -1457,24 +1471,43 @@ class GGUFModelClient {
             if (inReasoningMode) {
                 emit("</think>")
             }
-            lastTokenCount = tokenCount
+            val measuredTokenCount = serverPredictedTokens ?: tokenCount
+            lastTokenCount = measuredTokenCount
             if (lastFinishReason == null) {
                 lastFinishReason = "STOP"
             }
-            val totalElapsedSec = (System.currentTimeMillis() - firstTokenTime) / 1000f
-            val prefillLatencyMs = if (firstTokenTime > 0L) firstTokenTime - requestStartTime else 0L
-            val genSpeedTps = if (firstTokenTime > 0L && totalElapsedSec > 0.05f && tokenCount > 0) {
-                tokenCount / totalElapsedSec
+            val wallGenerationMs = if (firstTokenTime > 0L) System.currentTimeMillis() - firstTokenTime else 0L
+            val measuredGenerationMs = serverPredictedMs?.takeIf { it > 0.0 } ?: wallGenerationMs.toDouble()
+            val totalElapsedSec = (measuredGenerationMs / 1000.0).toFloat()
+            val prefillLatencyMs = serverPromptMs?.takeIf { it >= 0.0 }?.toLong()
+                ?: if (firstTokenTime > 0L) firstTokenTime - requestStartTime else 0L
+            val genSpeedTps = if (totalElapsedSec > 0.05f && measuredTokenCount > 0) {
+                measuredTokenCount / totalElapsedSec
             } else 0f
-            if (firstTokenTime > 0L && totalElapsedSec > 0.05f && tokenCount > 0) {
+            if (totalElapsedSec > 0.05f && measuredTokenCount > 0) {
                 onSpeedUpdate?.invoke(genSpeedTps)
             }
-            fileLog("⚡ [BENCHMARK] Prompt Eval (Prefill): ${prefillLatencyMs}ms | Generation: ${tokenCount} tokens in ${String.format(java.util.Locale.US, "%.2f", totalElapsedSec)}s (${String.format(java.util.Locale.US, "%.2f", genSpeedTps)} T/s)")
-            Log.i(TAG, "[BENCHMARK] Prompt Eval (Prefill): ${prefillLatencyMs}ms | Generation: ${tokenCount} tokens in ${String.format(java.util.Locale.US, "%.2f", totalElapsedSec)}s (${String.format(java.util.Locale.US, "%.2f", genSpeedTps)} T/s)")
+            val timingSource = if (serverPredictedTokens != null && serverPredictedMs != null) {
+                "llama.cpp timings"
+            } else {
+                "SSE chunk estimate"
+            }
+            val promptTokenText = serverPromptTokens?.let { "$it prompt tokens, " }.orEmpty()
+            fileLog(
+                "⚡ [BENCHMARK] source=$timingSource | Prefill: $promptTokenText${prefillLatencyMs}ms | " +
+                    "Generation: $measuredTokenCount tokens in ${String.format(java.util.Locale.US, "%.2f", totalElapsedSec)}s " +
+                    "(${String.format(java.util.Locale.US, "%.2f", genSpeedTps)} T/s)"
+            )
+            Log.i(
+                TAG,
+                "[BENCHMARK] source=$timingSource | Prefill: $promptTokenText${prefillLatencyMs}ms | " +
+                    "Generation: $measuredTokenCount tokens in ${String.format(java.util.Locale.US, "%.2f", totalElapsedSec)}s " +
+                    "(${String.format(java.util.Locale.US, "%.2f", genSpeedTps)} T/s)"
+            )
         } catch (e: Exception) {
             emit("[ERROR: ${e.message}]")
         } finally {
-            lastTokenCount = tokenCount
+            lastTokenCount = serverPredictedTokens ?: tokenCount
             reader.close()
             conn.disconnect()
         }
@@ -1498,6 +1531,10 @@ class GGUFModelClient {
         globalLoadedPath = null
         globalLoadedDraftPath = null
         globalLoadedGpuRequest = null
+        globalLoadedThreadCount = null
+        globalLoadedContextLength = null
+        globalLoadedUseMmap = null
+        globalLoadedDraftUseMmap = null
         serverThread = null
         isLoaded = false
         try {
