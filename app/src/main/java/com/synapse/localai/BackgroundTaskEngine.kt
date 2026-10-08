@@ -364,7 +364,11 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                         executionCheckpoint = "",
                         progress = "",
                         lastProgressHash = "",
-                        stalledCount = 0
+                        stalledCount = 0,
+                        acceptanceCriteria = emptyList(),
+                        verificationReport = "",
+                        verificationAttempts = 0,
+                        criteriaVerified = false
                     )
                     taskMemory.addTask(nextTask)
                     Log.i(TAG, "Rescheduled recurring task ${task.description} for epoch $nextRun")

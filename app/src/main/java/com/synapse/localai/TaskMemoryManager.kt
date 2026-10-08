@@ -39,7 +39,11 @@ data class AgentTask(
     val executionCheckpoint: String = "",
     val progress: String = "",
     val lastProgressHash: String = "",
-    val stalledCount: Int = 0
+    val stalledCount: Int = 0,
+    val acceptanceCriteria: List<String> = emptyList(),
+    val verificationReport: String = "",
+    val verificationAttempts: Int = 0,
+    val criteriaVerified: Boolean = false
 )
 
 class TaskNeedsUserInputException(val question: String) : Exception(question)
@@ -113,7 +117,10 @@ class TaskMemoryManager(context: Context) {
                 executionCheckpoint = history.toString(),
                 progress = "Resuming with user-provided clarification",
                 stalledCount = 0,
-                lastProgressHash = ""
+                lastProgressHash = "",
+                verificationAttempts = 0,
+                verificationReport = "",
+                criteriaVerified = false
             )
         }
         return resumed
@@ -312,6 +319,15 @@ class TaskMemoryManager(context: Context) {
                 if (task.progress.isNotBlank()) {
                     sb.appendLine("    Progress: ${task.progress.take(180)}")
                 }
+                if (task.acceptanceCriteria.isNotEmpty()) {
+                    sb.appendLine(
+                        "    Acceptance criteria (${if (task.criteriaVerified) "verified" else "pending"}): " +
+                            task.acceptanceCriteria.joinToString("; ").take(300)
+                    )
+                }
+                if (task.verificationReport.isNotBlank()) {
+                    sb.appendLine("    Latest verification: ${task.verificationReport.take(400)}")
+                }
             }
         } else {
             sb.appendLine("No active tasks.")
@@ -323,6 +339,9 @@ class TaskMemoryManager(context: Context) {
             history.forEach { task ->
                 val statusIcon = if (task.status == TaskStatus.COMPLETED) "✓" else "✗"
                 sb.appendLine("  $statusIcon ${task.description} — ${task.result.take(100)}")
+                if (task.acceptanceCriteria.isNotEmpty()) {
+                    sb.appendLine("    Criteria ${if (task.criteriaVerified) "verified" else "not verified"} (${task.acceptanceCriteria.size}); ${task.verificationReport.take(300)}")
+                }
             }
         }
 
@@ -336,6 +355,9 @@ class TaskMemoryManager(context: Context) {
             val index = tasks.indexOfFirst { it.id == id }
             if (index != -1) {
                 val task = tasks[index]
+                if (task.acceptanceCriteria.isNotEmpty() && !task.criteriaVerified) {
+                    throw IllegalStateException("Task cannot be marked complete before all acceptance criteria are verified.")
+                }
                 val completed = task.copy(
                     status = TaskStatus.COMPLETED,
                     completedAt = System.currentTimeMillis(),
@@ -564,6 +586,10 @@ class TaskMemoryManager(context: Context) {
             put("progress", task.progress)
             put("lastProgressHash", task.lastProgressHash)
             put("stalledCount", task.stalledCount)
+            put("acceptanceCriteria", JSONArray(task.acceptanceCriteria))
+            put("verificationReport", task.verificationReport)
+            put("verificationAttempts", task.verificationAttempts)
+            put("criteriaVerified", task.criteriaVerified)
         }
     }
 
@@ -592,7 +618,13 @@ class TaskMemoryManager(context: Context) {
             executionCheckpoint = json.optString("executionCheckpoint", ""),
             progress = json.optString("progress", ""),
             lastProgressHash = json.optString("lastProgressHash", ""),
-            stalledCount = json.optInt("stalledCount", 0)
+            stalledCount = json.optInt("stalledCount", 0),
+            acceptanceCriteria = json.optJSONArray("acceptanceCriteria")?.let { criteria ->
+                List(criteria.length()) { index -> criteria.optString(index) }.filter { it.isNotBlank() }
+            } ?: emptyList(),
+            verificationReport = json.optString("verificationReport", ""),
+            verificationAttempts = json.optInt("verificationAttempts", 0),
+            criteriaVerified = json.optBoolean("criteriaVerified", false)
         )
     }
 }

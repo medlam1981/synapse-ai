@@ -529,6 +529,69 @@ class AgentViewModel : ViewModel() {
         }
     }
 
+    private suspend fun generateBackgroundModelTurn(
+        modelType: ModelType,
+        history: List<Pair<String, String>>,
+        systemPrompt: String
+    ): String {
+        val response = StringBuilder()
+        val stream = when (modelType) {
+            ModelType.GGUF -> ggufClient?.generateStreamWithHistory(history, systemPrompt)
+                ?: throw IllegalStateException("Local model client is unavailable")
+            ModelType.GEMINI -> {
+                val messages = JSONArray()
+                history.forEach { (role, content) ->
+                    val geminiRole = if (role.equals("assistant", true) || role.equals("model", true)) "model" else "user"
+                    messages.put(JSONObject().put("role", geminiRole).put("content", content))
+                }
+                geminiClient?.generateStreamWithOllamaMessages(messages, systemPrompt)
+                    ?: throw IllegalStateException("Gemini model client is unavailable")
+            }
+        }
+        stream.collect(response::append)
+        return response.toString()
+    }
+
+    private fun parseModelJsonObject(text: String): JSONObject {
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) {
+            throw IllegalStateException("Model did not return the required structured JSON.")
+        }
+        return try {
+            JSONObject(text.substring(start, end + 1))
+        } catch (e: Exception) {
+            throw IllegalStateException("Model returned malformed structured JSON.", e)
+        }
+    }
+
+    private data class TaskVerification(
+        val passed: Boolean,
+        val needsUserInput: String?,
+        val report: String
+    )
+
+    private fun parseTaskVerification(text: String, criteria: List<String>): TaskVerification {
+        val result = parseModelJsonObject(text)
+        val question = result.optString("needs_user_input").trim().takeIf {
+            it.isNotBlank() && !it.equals("null", ignoreCase = true)
+        }
+        val results = result.optJSONArray("results")
+            ?: throw IllegalStateException("Task verification response is missing its results.")
+        val checks = List(results.length()) { index -> results.getJSONObject(index) }
+        val report = checks.joinToString("\n") { check ->
+            val criterionIndex = check.optInt("criterion_index", 0)
+            "${check.optString("status", "UNVERIFIED").uppercase()}: criterion $criterionIndex (${check.optString("criterion", "Unspecified criterion")}) — ${check.optString("evidence", "No evidence provided")}"
+        }
+        val coveredCriteria = checks.map { it.optInt("criterion_index", 0) }.toSet()
+        val passed = question == null &&
+            checks.size == criteria.size &&
+            coveredCriteria.size == criteria.size &&
+            coveredCriteria.containsAll(criteria.indices.map { it + 1 }) &&
+            checks.all { it.optString("status").equals("PASS", ignoreCase = true) }
+        return TaskVerification(passed, question, report)
+    }
+
     private val executedCallsThisTurn = Collections.synchronizedSet(mutableSetOf<String>())
     private val inFlightCalls = Collections.synchronizedSet(mutableSetOf<String>())
 
@@ -2209,6 +2272,8 @@ $langFinalInstruction"""
             else if (taskHistory.first().first == "user") taskHistory[0] = "user" to command
             var lastProgressHash = savedTask?.lastProgressHash.orEmpty()
             var stalledCount = savedTask?.stalledCount ?: 0
+            var acceptanceCriteria = savedTask?.acceptanceCriteria.orEmpty()
+            var verificationAttempts = savedTask?.verificationAttempts ?: 0
             if (savedTask?.progress?.startsWith("Tool execution interrupted") == true) {
                 taskHistory.add(
                     "user" to "The app restarted while a tool action may have been executing. Before repeating any action, inspect the current state and verify whether it already succeeded. Do not repeat irreversible actions blindly."
@@ -2219,6 +2284,47 @@ $langFinalInstruction"""
                     "Recovered an interrupted tool action; verifying state before retry"
                 )
             }
+
+            if (acceptanceCriteria.isEmpty()) {
+                taskMemory?.saveExecutionCheckpoint(
+                    taskId,
+                    encodeTaskCheckpoint(taskHistory),
+                    "Defining measurable acceptance criteria"
+                )
+                val planningResponse = generateBackgroundModelTurn(
+                    modelType,
+                    taskHistory + ("user" to "Plan this task using the original request and any user clarifications above. Return only the required acceptance-criteria JSON."),
+                    """Convert the user's task into 1-6 concise, observable acceptance criteria that can be checked against tool results or explicit evidence. Do not perform the task. If a necessary user choice, fact, or authorization is missing, return it as needs_user_input. Reply with ONLY valid JSON:
+{"criteria":["..."],"needs_user_input":null}
+or
+{"criteria":[],"needs_user_input":"one specific question"}"""
+                )
+                val plan = parseModelJsonObject(planningResponse)
+                val question = plan.optString("needs_user_input").trim().takeIf {
+                    it.isNotBlank() && !it.equals("null", ignoreCase = true)
+                }
+                if (question != null) {
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        question
+                    )
+                    throw TaskNeedsUserInputException(question)
+                }
+                val plannedCriteria = plan.optJSONArray("criteria")
+                    ?: throw IllegalStateException("Task planning response is missing acceptance criteria.")
+                acceptanceCriteria = List(plannedCriteria.length()) { index ->
+                    plannedCriteria.optString(index).trim().take(400)
+                }.filter { it.isNotBlank() }.take(6)
+                if (acceptanceCriteria.isEmpty()) {
+                    throw IllegalStateException("Could not define any verifiable acceptance criteria for this task.")
+                }
+                if (taskId != null) {
+                    taskMemory?.updateTask(taskId) { task ->
+                        task.copy(acceptanceCriteria = acceptanceCriteria, verificationAttempts = 0)
+                    }
+                }
+            }
             
             val dynamicPersona = getEffectivePersonaPrompt(ctx)
             val systemPrompt = buildSystemPrompt(ctx, modelType == ModelType.GGUF, dynamicPersona, userPrompt = command) +
@@ -2227,7 +2333,9 @@ $langFinalInstruction"""
 PERSISTENT TASK EXECUTION:
 - Keep the original objective and user context in view across every step. Track a concise plan and update it from verified tool observations.
 - Continue autonomously while safe and useful; do not stop merely because an output chunk ended.
-- Before reporting completion, verify the objective against actual tool results. Never report an unverified action as complete.
+- Acceptance criteria (all must pass verification before completion):
+${acceptanceCriteria.mapIndexed { index, criterion -> "${index + 1}. $criterion" }.joinToString("\n")}
+- Before reporting completion, verify every criterion against actual tool results or evidence. Never report an unverified action as complete.
 - If an essential user decision, fact, or authorization is missing, stop and respond exactly as: NEEDS_USER_INPUT: <one specific question>. Do not guess or claim completion.
 """.trimIndent()
             val resultSb = StringBuilder()
@@ -2248,22 +2356,7 @@ PERSISTENT TASK EXECUTION:
                     encodeTaskCheckpoint(taskHistory),
                     "Generating and analyzing step $iterations"
                 )
-                val responseSb = StringBuilder()
-                
-                val stream = when (modelType) {
-                    ModelType.GGUF -> ggufClient!!.generateStreamWithHistory(taskHistory, systemPrompt)
-                    ModelType.GEMINI -> {
-                        val json = JSONArray()
-                        taskHistory.forEach { (r, c) -> 
-                            val geminiRole = when (r.lowercase()) { "assistant", "model" -> "model"; else -> "user" }
-                            json.put(JSONObject().put("role", geminiRole).put("content", c)) 
-                        }
-                        geminiClient!!.generateStreamWithOllamaMessages(json, systemPrompt) { responseSb.setLength(0) }
-                    }
-                }
-                
-                stream.collect { responseSb.append(it) }
-                val response = responseSb.toString()
+                val response = generateBackgroundModelTurn(modelType, taskHistory, systemPrompt)
                 if (response.isBlank()) {
                     throw IllegalStateException("Background task received an empty model response; it was not marked complete.")
                 }
@@ -2315,7 +2408,91 @@ PERSISTENT TASK EXECUTION:
                 }
 
                 if (!usedTools) {
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        "Verifying task result against ${acceptanceCriteria.size} acceptance criteria"
+                    )
+                    val evidence = taskHistory.takeLast(10).joinToString("\n\n") { (role, content) ->
+                        "${role.uppercase()}: ${content.takeLast(2500)}"
+                    }.takeLast(18_000)
+                    val verificationPrompt = """
+Verify the candidate completion against the original task, every acceptance criterion, and the execution transcript. Use only concrete evidence present in the transcript. A claim in the candidate answer is not evidence that an action succeeded. Mark PASS only when the evidence directly supports that criterion; otherwise mark FAIL. If verification requires a missing user decision, fact, or authorization, set needs_user_input to one specific question. Reply ONLY with JSON:
+{"results":[{"criterion_index":1,"criterion":"exact criterion","status":"PASS or FAIL","evidence":"specific transcript evidence or why absent"}],"needs_user_input":null}
+Every criterion index from 1 to ${acceptanceCriteria.size} must appear exactly once.
+
+Original task:
+$command
+
+Acceptance criteria:
+${acceptanceCriteria.mapIndexed { index, criterion -> "${index + 1}. $criterion" }.joinToString("\n")}
+
+Execution transcript and candidate:
+$evidence
+""".trimIndent()
+                    val verificationResponse = generateBackgroundModelTurn(
+                        modelType,
+                        listOf("user" to verificationPrompt),
+                        "You are a strict task auditor. Treat missing or ambiguous evidence as failure. Never infer success from an unverified claim."
+                    )
+                    val verification = parseTaskVerification(verificationResponse, acceptanceCriteria)
+                    verificationAttempts++
+                    if (taskId != null) {
+                        taskMemory?.updateTask(taskId) { task ->
+                            task.copy(
+                                verificationReport = verification.report,
+                                verificationAttempts = verificationAttempts,
+                                criteriaVerified = verification.passed
+                            )
+                        }
+                    }
+                    if (!verification.passed) {
+                        val question = verification.needsUserInput
+                        if (question != null) {
+                            taskHistory.add(
+                                "user" to "The verifier requires user input before it can assess the acceptance criteria: $question\nCurrent verification report:\n${verification.report}"
+                            )
+                            while (taskHistory.size > 10) taskHistory.removeAt(1)
+                            taskMemory?.saveExecutionCheckpoint(
+                                taskId,
+                                encodeTaskCheckpoint(taskHistory),
+                                question
+                            )
+                            throw TaskNeedsUserInputException(question)
+                        }
+                        if (verificationAttempts >= 3) {
+                            val clarification =
+                                "Task verification remained incomplete after three repair attempts. Review these results and tell me the correction or next action: ${verification.report.take(1200)}"
+                            taskHistory.add("user" to clarification)
+                            while (taskHistory.size > 10) taskHistory.removeAt(1)
+                            taskMemory?.saveExecutionCheckpoint(
+                                taskId,
+                                encodeTaskCheckpoint(taskHistory),
+                                "Task paused because acceptance criteria could not be verified after three repair attempts",
+                                lastProgressHash,
+                                stalledCount
+                            )
+                            throw TaskNeedsUserInputException(clarification)
+                        }
+                        taskHistory.add(
+                            "user" to "Independent verification did not pass all acceptance criteria. Repair the task using this evidence-based report; do not claim completion until every criterion can be verified. If a criterion is impossible or requires a user decision, ask using NEEDS_USER_INPUT: <one specific question>.\n${verification.report}"
+                        )
+                        while (taskHistory.size > 10) taskHistory.removeAt(1)
+                        taskMemory?.saveExecutionCheckpoint(
+                            taskId,
+                            encodeTaskCheckpoint(taskHistory),
+                            "Repairing after verification attempt $verificationAttempts of 3: ${verification.report.take(240)}"
+                        )
+                        continue
+                    }
                     resultSb.append(summary ?: reply)
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        "All ${acceptanceCriteria.size} acceptance criteria verified",
+                        lastProgressHash,
+                        stalledCount
+                    )
                     keepGoing = false
                 } else {
                     if (summary != null && summary.isNotBlank()) {
@@ -2701,7 +2878,13 @@ PERSISTENT TASK EXECUTION:
                             val activeList = taskMemory?.getAllActiveTasks()?.joinToString("\n") { t ->
                                 val dueStr = if (t.executeAt > 0) SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(t.executeAt)) else "immediate"
                                 val progress = t.progress.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
-                                "• [${t.status}] ${t.description} (ID: ${t.id}, Run at: $dueStr)$progress"
+                                val criteria = t.acceptanceCriteria.takeIf { it.isNotEmpty() }
+                                    ?.joinToString(
+                                        "; ",
+                                        prefix = if (t.criteriaVerified) " — verified criteria: " else " — criteria to verify: "
+                                    ) { it.take(100) }
+                                    .orEmpty()
+                                "• [${t.status}] ${t.description} (ID: ${t.id}, Run at: $dueStr)$progress$criteria"
                             } ?: "None"
                             actionToolUsed = true
                             summaries.add("📋 Task List Summary: $summary\n$activeList")
