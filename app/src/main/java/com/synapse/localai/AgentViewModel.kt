@@ -368,7 +368,7 @@ class AgentViewModel : ViewModel() {
                 ?: File("/sdcard/Download").takeIf { it.exists() || it.mkdirs() }
                 ?: File("/sdcard/Medlam-Ai").apply { if (!exists()) mkdirs() }
             val safePrompt = prompt.take(20).replace(Regex("[^a-zA-Z0-9_-]"), "_").trim('_')
-            val fileName = "img_${System.currentTimeMillis()            }{if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.jpg"
+            val fileName = "img_${System.currentTimeMillis()}${if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.jpg"
             val file = File(baseDir, fileName)
             file.writeBytes(bytes)
             file
@@ -506,6 +506,28 @@ class AgentViewModel : ViewModel() {
     private fun compactContinuationContext(text: String): String =
         if (text.length <= 2800) text
         else "${text.take(700)}\n...[middle of previous output omitted]...\n${text.takeLast(1900)}"
+
+    private fun encodeTaskCheckpoint(history: List<Pair<String, String>>): String =
+        JSONArray().apply {
+            history.takeLast(10).forEachIndexed { index, (role, content) ->
+                val savedContent = if (index == 0 && role == "user") content.take(10_000) else content.takeLast(10_000)
+                put(JSONObject().put("role", role).put("content", savedContent))
+            }
+        }.toString()
+
+    private fun decodeTaskCheckpoint(checkpoint: String): MutableList<Pair<String, String>> {
+        if (checkpoint.isBlank()) return mutableListOf()
+        return try {
+            val json = JSONArray(checkpoint)
+            MutableList(json.length()) { index ->
+                val message = json.getJSONObject(index)
+                message.optString("role", "user") to message.optString("content", "")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to restore background task checkpoint", e)
+            throw IllegalStateException("Background task checkpoint is corrupt; refusing to restart from the beginning.", e)
+        }
+    }
 
     private val executedCallsThisTurn = Collections.synchronizedSet(mutableSetOf<String>())
     private val inFlightCalls = Collections.synchronizedSet(mutableSetOf<String>())
@@ -1389,7 +1411,7 @@ $localPersona$greetingDirective$custom
 $localPersona
 Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
 Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
-Tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count).
+Tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), list_tasks(), resume_task(task_id, user_input).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - ZERO HALLUCINATION: Never claim you opened an app or ran a command without invoking the tool!
@@ -1411,7 +1433,7 @@ $languageEnforcement""".trimIndent()
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
@@ -2181,11 +2203,33 @@ $langFinalInstruction"""
         wakeLock?.acquire(10 * 60 * 1000L)
         
         try {
-            val taskHistory = mutableListOf<Pair<String, String>>()
-            taskHistory.add("user" to command)
+            val savedTask = taskId?.let { taskMemory?.getTask(it) }
+            val taskHistory = decodeTaskCheckpoint(savedTask?.executionCheckpoint.orEmpty())
+            if (taskHistory.isEmpty()) taskHistory.add("user" to command)
+            else if (taskHistory.first().first == "user") taskHistory[0] = "user" to command
+            var lastProgressHash = savedTask?.lastProgressHash.orEmpty()
+            var stalledCount = savedTask?.stalledCount ?: 0
+            if (savedTask?.progress?.startsWith("Tool execution interrupted") == true) {
+                taskHistory.add(
+                    "user" to "The app restarted while a tool action may have been executing. Before repeating any action, inspect the current state and verify whether it already succeeded. Do not repeat irreversible actions blindly."
+                )
+                taskMemory?.saveExecutionCheckpoint(
+                    taskId,
+                    encodeTaskCheckpoint(taskHistory),
+                    "Recovered an interrupted tool action; verifying state before retry"
+                )
+            }
             
             val dynamicPersona = getEffectivePersonaPrompt(ctx)
-            val systemPrompt = buildSystemPrompt(ctx, modelType == ModelType.GGUF, dynamicPersona, userPrompt = command)
+            val systemPrompt = buildSystemPrompt(ctx, modelType == ModelType.GGUF, dynamicPersona, userPrompt = command) +
+                """
+
+PERSISTENT TASK EXECUTION:
+- Keep the original objective and user context in view across every step. Track a concise plan and update it from verified tool observations.
+- Continue autonomously while safe and useful; do not stop merely because an output chunk ended.
+- Before reporting completion, verify the objective against actual tool results. Never report an unverified action as complete.
+- If an essential user decision, fact, or authorization is missing, stop and respond exactly as: NEEDS_USER_INPUT: <one specific question>. Do not guess or claim completion.
+""".trimIndent()
             val resultSb = StringBuilder()
             var iterations = 0
             var keepGoing = true
@@ -2193,10 +2237,17 @@ $langFinalInstruction"""
             while (keepGoing && iterations < MAX_TASK_ITERATIONS) {
                 if (taskId != null) {
                     val status = taskMemory?.getTask(taskId)?.status
-                    if (status == TaskStatus.CANCELLED) throw kotlinx.coroutines.CancellationException("Task cancelled manually by user")
+                    if (status == null || status == TaskStatus.CANCELLED) {
+                        throw kotlinx.coroutines.CancellationException("Task was cancelled or removed before completion")
+                    }
                 }
                 
                 iterations++
+                taskMemory?.saveExecutionCheckpoint(
+                    taskId,
+                    encodeTaskCheckpoint(taskHistory),
+                    "Generating and analyzing step $iterations"
+                )
                 val responseSb = StringBuilder()
                 
                 val stream = when (modelType) {
@@ -2213,11 +2264,34 @@ $langFinalInstruction"""
                 
                 stream.collect { responseSb.append(it) }
                 val response = responseSb.toString()
-                if (response.isBlank()) { keepGoing = false; continue }
+                if (response.isBlank()) {
+                    throw IllegalStateException("Background task received an empty model response; it was not marked complete.")
+                }
                 
                 val reply = cleanVisibleText(response).trim()
                 taskHistory.add("model" to stripThinkingForHistory(reply))
-                while (taskHistory.size > 6) taskHistory.removeAt(0)
+                while (taskHistory.size > 10) taskHistory.removeAt(1)
+
+                if (reply.startsWith("NEEDS_USER_INPUT:", ignoreCase = true)) {
+                    val question = reply.substringAfter(':').trim().ifBlank {
+                        "Please provide the missing information needed to continue this task."
+                    }
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        question
+                    )
+                    throw TaskNeedsUserInputException(question)
+                }
+
+                val parsedCalls = StreamDemultiplexer.parseAllToolCalls(response)
+                if (parsedCalls.isNotEmpty()) {
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        "Tool execution interrupted; verifying before any retry"
+                    )
+                }
                 val (usedTools, summary) = executeToolLoop(response, ctx)
 
                 val outputLimitReached = if (modelType == ModelType.GGUF) {
@@ -2231,7 +2305,12 @@ $langFinalInstruction"""
                     taskHistory.add(
                         "user" to "Original task: ${command.take(1200)}\nThis output chunk reached its model token limit. Continue directly from the exact stopping point without repeating prior content, and complete the task. If essential information is missing and cannot be safely inferred, ask the user only for that information."
                     )
-                    while (taskHistory.size > 8) taskHistory.removeAt(0)
+                    while (taskHistory.size > 10) taskHistory.removeAt(1)
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        "Continuing after model output limit"
+                    )
                     continue
                 }
 
@@ -2241,8 +2320,37 @@ $langFinalInstruction"""
                 } else {
                     if (summary != null && summary.isNotBlank()) {
                         taskHistory.add("user" to "[Tool Execution Observation]:\n$summary\n\nPlease proceed to synthesize your findings or complete the task.")
-                        while (taskHistory.size > 8) taskHistory.removeAt(0)
+                        while (taskHistory.size > 10) taskHistory.removeAt(1)
                     }
+                    val progressHash = MessageDigest.getInstance("SHA-256")
+                        .digest("$response\n${summary.orEmpty()}".toByteArray(StandardCharsets.UTF_8))
+                        .joinToString("") { "%02x".format(it) }
+                    stalledCount = if (progressHash == lastProgressHash) stalledCount + 1 else 0
+                    lastProgressHash = progressHash
+                    if (stalledCount >= 2) {
+                        taskMemory?.saveExecutionCheckpoint(
+                            taskId,
+                            encodeTaskCheckpoint(taskHistory),
+                            "Task paused after repeated identical tool results",
+                            progressHash,
+                            stalledCount
+                        )
+                        throw TaskNeedsUserInputException(
+                            "The task repeated the same tool request and result without making progress. Please clarify the desired outcome or provide the missing information before resuming."
+                        )
+                    }
+                    if (stalledCount == 1) {
+                        taskHistory.add(
+                            "user" to "Progress check: the previous tool request and observation repeated without progress. Do not repeat that same action. Reassess the plan, choose a different safe approach, or ask the user for the specific missing information."
+                        )
+                    }
+                    taskMemory?.saveExecutionCheckpoint(
+                        taskId,
+                        encodeTaskCheckpoint(taskHistory),
+                        summary?.take(300).orEmpty().ifBlank { "Tool step $iterations completed; continuing" },
+                        lastProgressHash,
+                        stalledCount
+                    )
                 }
             }
             if (keepGoing) {
@@ -2250,9 +2358,17 @@ $langFinalInstruction"""
                     "Background task paused at the $MAX_TASK_ITERATIONS-step safety limit without being marked complete."
                 )
             }
-            return resultSb.toString().ifBlank {
+            val finalResult = resultSb.toString().ifBlank {
                 throw IllegalStateException("Background task ended without a final response.")
             }
+            taskMemory?.saveExecutionCheckpoint(
+                taskId,
+                encodeTaskCheckpoint(taskHistory),
+                "Final response prepared; verified task completion",
+                lastProgressHash,
+                stalledCount
+            )
+            return finalResult
         } finally {
             ctx?.let { ModelEngineService.updateStatus(it, "ATLAS-AI • Ready") }
             if (wakeLock?.isHeld == true) wakeLock.release()
@@ -2584,10 +2700,27 @@ $langFinalInstruction"""
                             val summary = taskMemory?.getTaskSummary() ?: "No active tasks"
                             val activeList = taskMemory?.getAllActiveTasks()?.joinToString("\n") { t ->
                                 val dueStr = if (t.executeAt > 0) SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(t.executeAt)) else "immediate"
-                                "• [${t.status}] ${t.description} (ID: ${t.id.take(8)}, Run at: $dueStr)"
+                                val progress = t.progress.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                                "• [${t.status}] ${t.description} (ID: ${t.id}, Run at: $dueStr)$progress"
                             } ?: "None"
                             actionToolUsed = true
                             summaries.add("📋 Task List Summary: $summary\n$activeList")
+                        }
+                        "resume_task", "continue_task" -> {
+                            val taskId = params["task_id"] ?: params["id"] ?: ""
+                            val userInput = params["user_input"] ?: params["clarification"] ?: params["answer"] ?: ""
+                            actualContext?.let { initTaskSystem(it) }
+                            actionToolUsed = true
+                            val resumed = if (taskId.isNotBlank() && userInput.isNotBlank()) {
+                                taskEngine?.resumeTask(taskId, userInput) ?: false
+                            } else {
+                                false
+                            }
+                            updateTaskState()
+                            summaries.add(
+                                if (resumed) "✔ Task $taskId resumed with the user's clarification and queued to continue from its saved checkpoint."
+                                else "✖ Could not resume the task. Verify the full task ID, provide a non-empty clarification, and ensure the task is waiting for user input."
+                            )
                         }
                         "cancel_task" -> {
                             val targetId = params["task_id"] ?: params["id"] ?: params.values.firstOrNull() ?: ""

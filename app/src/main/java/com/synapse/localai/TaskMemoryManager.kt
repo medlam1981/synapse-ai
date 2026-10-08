@@ -1,6 +1,7 @@
 package com.synapse.localai
 
 import android.content.Context
+import android.util.AtomicFile
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,6 +13,7 @@ enum class TaskStatus {
     PENDING,
     QUEUED,
     RUNNING,
+    WAITING_FOR_USER,
     COMPLETED,
     FAILED,
     CANCELLED
@@ -33,8 +35,14 @@ data class AgentTask(
     val source: String = "user",
     val cronExpression: String? = null,
     val taskType: String = "COMMAND",
-    val isRecurring: Boolean = false
+    val isRecurring: Boolean = false,
+    val executionCheckpoint: String = "",
+    val progress: String = "",
+    val lastProgressHash: String = "",
+    val stalledCount: Int = 0
 )
+
+class TaskNeedsUserInputException(val question: String) : Exception(question)
 
 class TaskMemoryManager(context: Context) {
 
@@ -73,6 +81,42 @@ class TaskMemoryManager(context: Context) {
                 Log.w(TAG, "Task not found for update: $id")
             }
         }
+    }
+
+    private fun readAtomically(file: File): String? {
+        if (!file.exists() && !File("${file.path}.bak").exists()) return null
+        return AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }
+
+    fun pauseForUser(id: String, question: String) {
+        updateTask(id) { task ->
+            task.copy(status = TaskStatus.WAITING_FOR_USER, progress = question)
+        }
+    }
+
+    fun resumeWaitingTask(id: String, userInput: String): Boolean {
+        if (userInput.isBlank()) return false
+        var resumed = false
+        updateTask(id) { task ->
+            if (task.status != TaskStatus.WAITING_FOR_USER) return@updateTask task
+            val history = try {
+                JSONArray(task.executionCheckpoint)
+            } catch (e: Exception) {
+                Log.e(TAG, "Cannot resume task with a corrupt checkpoint: $id", e)
+                throw IllegalStateException("Task checkpoint is corrupt; it cannot be resumed safely.", e)
+            }
+            history.put(JSONObject().put("role", "user").put("content", "User clarification: ${userInput.take(4000)}"))
+            resumed = true
+            task.copy(
+                status = TaskStatus.QUEUED,
+                executeAt = 0L,
+                executionCheckpoint = history.toString(),
+                progress = "Resuming with user-provided clarification",
+                stalledCount = 0,
+                lastProgressHash = ""
+            )
+        }
+        return resumed
     }
 
     fun removeTask(id: String) {
@@ -135,7 +179,8 @@ class TaskMemoryManager(context: Context) {
                     val interrupted = task.copy(
                         status = TaskStatus.FAILED,
                         completedAt = System.currentTimeMillis(),
-                        result = "Stopped before completion after ${task.retryCount} retries"
+                        result = "Stopped before completion after ${task.retryCount} retries",
+                        executionCheckpoint = ""
                     )
                     iterator.remove()
                     failed.add(interrupted)
@@ -174,7 +219,14 @@ class TaskMemoryManager(context: Context) {
     fun getAllActiveTasks(): List<AgentTask> {
         synchronized(tasks) {
             return tasks
-                .filter { it.status in listOf(TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING) }
+                .filter {
+                    it.status in listOf(
+                        TaskStatus.PENDING,
+                        TaskStatus.QUEUED,
+                        TaskStatus.RUNNING,
+                        TaskStatus.WAITING_FOR_USER
+                    )
+                }
                 .toList()
         }
     }
@@ -193,6 +245,24 @@ class TaskMemoryManager(context: Context) {
         updateTask(task.id) { task }
     }
 
+    fun saveExecutionCheckpoint(
+        id: String?,
+        checkpoint: String,
+        progress: String,
+        progressHash: String? = null,
+        stalledCount: Int? = null
+    ) {
+        if (id == null) return
+        updateTask(id) { task ->
+            task.copy(
+                executionCheckpoint = checkpoint,
+                progress = progress,
+                lastProgressHash = progressHash ?: task.lastProgressHash,
+                stalledCount = stalledCount ?: task.stalledCount
+            )
+        }
+    }
+
     fun getTaskHistory(limit: Int = 20): List<AgentTask> {
         synchronized(taskHistory) {
             return taskHistory
@@ -206,10 +276,12 @@ class TaskMemoryManager(context: Context) {
         val pending: Int
         val queued: Int
         val running: Int
+        val waitingForUser: Int
         synchronized(tasks) {
             pending = tasks.count { it.status == TaskStatus.PENDING }
             queued = tasks.count { it.status == TaskStatus.QUEUED }
             running = tasks.count { it.status == TaskStatus.RUNNING }
+            waitingForUser = tasks.count { it.status == TaskStatus.WAITING_FOR_USER }
         }
         val completed: Int
         val failed: Int
@@ -217,7 +289,7 @@ class TaskMemoryManager(context: Context) {
             completed = taskHistory.count { it.status == TaskStatus.COMPLETED }
             failed = taskHistory.count { it.status == TaskStatus.FAILED }
         }
-        return "$pending pending, $queued queued, $running running, $completed completed, $failed failed"
+        return "$pending pending, $queued queued, $running running, $waitingForUser waiting for user, $completed completed, $failed failed"
     }
 
     fun getContextForAI(): String {
@@ -236,6 +308,9 @@ class TaskMemoryManager(context: Context) {
                 }
                 if (task.retryCount > 0) {
                     sb.appendLine("    Retries: ${task.retryCount}/${task.maxRetries}")
+                }
+                if (task.progress.isNotBlank()) {
+                    sb.appendLine("    Progress: ${task.progress.take(180)}")
                 }
             }
         } else {
@@ -264,7 +339,10 @@ class TaskMemoryManager(context: Context) {
                 val completed = task.copy(
                     status = TaskStatus.COMPLETED,
                     completedAt = System.currentTimeMillis(),
-                    result = result
+                    result = result,
+                    executionCheckpoint = "",
+                    lastProgressHash = "",
+                    stalledCount = 0
                 )
                 tasks.removeAt(index)
                 saveTasks()
@@ -299,7 +377,10 @@ class TaskMemoryManager(context: Context) {
                     val failed = task.copy(
                         status = TaskStatus.FAILED,
                         completedAt = System.currentTimeMillis(),
-                        result = error
+                        result = error,
+                        executionCheckpoint = "",
+                        lastProgressHash = "",
+                        stalledCount = 0
                     )
                     tasks.removeAt(index)
                     saveTasks()
@@ -327,7 +408,10 @@ class TaskMemoryManager(context: Context) {
                 val cancelled = task.copy(
                     status = TaskStatus.CANCELLED,
                     completedAt = System.currentTimeMillis(),
-                    result = "Cancelled"
+                    result = "Cancelled",
+                    executionCheckpoint = "",
+                    lastProgressHash = "",
+                    stalledCount = 0
                 )
                 tasks.removeAt(index)
                 saveTasks()
@@ -365,24 +449,25 @@ class TaskMemoryManager(context: Context) {
                     jsonArray.put(taskToJson(task))
                 }
             }
-            tasksFile.writeText(jsonArray.toString(2))
+            writeAtomically(tasksFile, jsonArray.toString(2))
         } catch (e: Exception) {
-            Log.e(TAG, "Error saving tasks: ${e.message}", e)
+            Log.e(TAG, "Error saving tasks", e)
+            throw e
         }
     }
 
     private fun loadTasks() {
         try {
-            if (!tasksFile.exists()) {
+            val content = readAtomically(tasksFile) ?: run {
                 Log.d(TAG, "No tasks file found, starting fresh")
                 return
             }
-            val content = tasksFile.readText().trim()
-            if (content.isEmpty()) {
+            val trimmedContent = content.trim()
+            if (trimmedContent.isEmpty()) {
                 Log.d(TAG, "Tasks file is empty")
                 return
             }
-            val jsonArray = JSONArray(content)
+            val jsonArray = JSONArray(trimmedContent)
             synchronized(tasks) {
                 tasks.clear()
                 for (i in 0 until jsonArray.length()) {
@@ -408,24 +493,38 @@ class TaskMemoryManager(context: Context) {
                     jsonArray.put(taskToJson(task))
                 }
             }
-            historyFile.writeText(jsonArray.toString(2))
+            writeAtomically(historyFile, jsonArray.toString(2))
         } catch (e: Exception) {
-            Log.e(TAG, "Error saving history: ${e.message}", e)
+            Log.e(TAG, "Error saving history", e)
+            throw e
+        }
+    }
+
+    private fun writeAtomically(file: File, content: String) {
+        val atomicFile = AtomicFile(file)
+        var output: java.io.FileOutputStream? = null
+        try {
+            output = atomicFile.startWrite()
+            output.write(content.toByteArray(Charsets.UTF_8))
+            atomicFile.finishWrite(output)
+        } catch (e: Exception) {
+            output?.let(atomicFile::failWrite)
+            throw e
         }
     }
 
     private fun loadHistory() {
         try {
-            if (!historyFile.exists()) {
+            val content = readAtomically(historyFile) ?: run {
                 Log.d(TAG, "No history file found, starting fresh")
                 return
             }
-            val content = historyFile.readText().trim()
-            if (content.isEmpty()) {
+            val trimmedContent = content.trim()
+            if (trimmedContent.isEmpty()) {
                 Log.d(TAG, "History file is empty")
                 return
             }
-            val jsonArray = JSONArray(content)
+            val jsonArray = JSONArray(trimmedContent)
             synchronized(taskHistory) {
                 taskHistory.clear()
                 for (i in 0 until jsonArray.length()) {
@@ -461,6 +560,10 @@ class TaskMemoryManager(context: Context) {
             put("cronExpression", task.cronExpression ?: JSONObject.NULL)
             put("taskType", task.taskType)
             put("isRecurring", task.isRecurring)
+            put("executionCheckpoint", task.executionCheckpoint)
+            put("progress", task.progress)
+            put("lastProgressHash", task.lastProgressHash)
+            put("stalledCount", task.stalledCount)
         }
     }
 
@@ -485,7 +588,11 @@ class TaskMemoryManager(context: Context) {
             source = json.optString("source", "user"),
             cronExpression = if (json.has("cronExpression") && !json.isNull("cronExpression")) json.getString("cronExpression") else null,
             taskType = json.optString("taskType", "COMMAND"),
-            isRecurring = json.optBoolean("isRecurring", false)
+            isRecurring = json.optBoolean("isRecurring", false),
+            executionCheckpoint = json.optString("executionCheckpoint", ""),
+            progress = json.optString("progress", ""),
+            lastProgressHash = json.optString("lastProgressHash", ""),
+            stalledCount = json.optInt("stalledCount", 0)
         )
     }
 }

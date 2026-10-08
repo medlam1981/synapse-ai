@@ -644,6 +644,21 @@ class GeminiModelClient(
                         requiredParameters = listOf("command")
                     ),
                     defineFunction(
+                        name = "list_tasks",
+                        description = "List active background tasks, including tasks waiting for user input",
+                        parameters = emptyList(),
+                        requiredParameters = emptyList()
+                    ),
+                    defineFunction(
+                        name = "resume_task",
+                        description = "Resume a background task waiting for user input, using the user's clarification",
+                        parameters = listOf(
+                            Schema.str("task_id", "Full ID of the task waiting for user input"),
+                            Schema.str("user_input", "The user's answer or clarification")
+                        ),
+                        requiredParameters = listOf("task_id", "user_input")
+                    ),
+                    defineFunction(
                         name = "complete",
                         description = "Finalize task execution cycles",
                         parameters = listOf(

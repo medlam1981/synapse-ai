@@ -170,7 +170,13 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
      */
     fun cancelTask(taskId: String): Boolean {
         val task = taskMemory.getTask(taskId) ?: return false
-        if (task.status == TaskStatus.RUNNING || task.status == TaskStatus.QUEUED || task.status == TaskStatus.PENDING) {
+        if (task.status in setOf(
+                TaskStatus.RUNNING,
+                TaskStatus.QUEUED,
+                TaskStatus.PENDING,
+                TaskStatus.WAITING_FOR_USER
+            )
+        ) {
             taskMemory.markCancelled(taskId)
             Log.i(TAG, "Cancelled task $taskId")
             updateState()
@@ -179,13 +185,23 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
         return false
     }
 
+    fun resumeTask(taskId: String, userInput: String): Boolean {
+        val resumed = taskMemory.resumeWaitingTask(taskId, userInput)
+        if (resumed) {
+            updateState()
+            Log.i(TAG, "Resumed task $taskId with user input")
+        }
+        return resumed
+    }
+
     /**
      * Cancels all queued and running tasks.
      */
     fun cancelAllTasks() {
         val tasks = taskMemory.getTasksByStatus(TaskStatus.QUEUED) +
                 taskMemory.getTasksByStatus(TaskStatus.RUNNING) +
-                taskMemory.getTasksByStatus(TaskStatus.PENDING)
+                taskMemory.getTasksByStatus(TaskStatus.PENDING) +
+                taskMemory.getTasksByStatus(TaskStatus.WAITING_FOR_USER)
         tasks.forEach { task ->
             taskMemory.markCancelled(task.id)
         }
@@ -344,7 +360,11 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                         executeAt = nextRun,
                         retryCount = 0,
                         result = "",
-                        completedAt = 0L
+                        completedAt = 0L,
+                        executionCheckpoint = "",
+                        progress = "",
+                        lastProgressHash = "",
+                        stalledCount = 0
                     )
                     taskMemory.addTask(nextTask)
                     Log.i(TAG, "Rescheduled recurring task ${task.description} for epoch $nextRun")
@@ -355,6 +375,11 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
         } catch (e: CancellationException) {
             taskMemory.markFailed(task.id, "Cancelled")
             throw e
+        } catch (e: TaskNeedsUserInputException) {
+            taskMemory.pauseForUser(task.id, e.question)
+            Log.i(TAG, "Task ${task.id} is waiting for user input")
+            updateState()
+            return false
         } catch (e: Exception) {
             Log.e(TAG, "Task ${task.id} failed", e)
 
