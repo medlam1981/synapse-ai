@@ -486,7 +486,8 @@ class AgentViewModel : ViewModel() {
     private var schedulerJob: Job? = null
     private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
     private val workflows = Collections.synchronizedMap(mutableMapOf<String, String>())
-    private val pendingCommands = Collections.synchronizedList(mutableListOf<String>())
+    private data class PendingCommand(val command: String, val fileUri: Uri?)
+    private val pendingCommands = Collections.synchronizedList(mutableListOf<PendingCommand>())
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
     private fun trimConversationHistoryToContextLimit(targetTokenCeiling: Int? = null) {
@@ -506,6 +507,69 @@ class AgentViewModel : ViewModel() {
     private fun compactContinuationContext(text: String): String =
         if (text.length <= 2800) text
         else "${text.take(700)}\n...[middle of previous output omitted]...\n${text.takeLast(1900)}"
+
+    private fun workspaceRootFromText(text: String): String? {
+        val paths = buildList {
+            ToolExecutor.detectFilePath(text)?.let(::add)
+            Regex("""(?<![\w/])/(?:[A-Za-z0-9._~+@-]+/)*[A-Za-z0-9._~+@-]+/?""")
+                .findAll(text)
+                .map { it.value.trimEnd('.', ',', ';', ':', ')', ']', '}', '`') }
+                .filterNot { it.startsWith("//") }
+                .forEach(::add)
+        }.distinct()
+
+        for (path in paths) {
+            val candidate = File(path)
+            val start = if (candidate.isDirectory || path.endsWith("/")) candidate else candidate.parentFile ?: continue
+            var current: File? = start
+            var strongRoot: File? = null
+            var projectRoot: File? = null
+            for (depth in 0 until 12) {
+                val directory = current ?: break
+                if (directory.path in setOf("/", "/sdcard", "/storage", "/data", "/data/local")) break
+                if (File(directory, ".git").exists() ||
+                    File(directory, "settings.gradle").isFile ||
+                    File(directory, "settings.gradle.kts").isFile
+                ) {
+                    strongRoot = directory
+                } else if (projectRoot == null && listOf(
+                        "build.gradle", "build.gradle.kts", "package.json", "pyproject.toml",
+                        "Cargo.toml", "pom.xml", "AndroidManifest.xml"
+                    ).any { File(directory, it).isFile }
+                ) {
+                    projectRoot = directory
+                }
+                current = directory.parentFile
+            }
+            (strongRoot ?: projectRoot ?: start).takeIf { it.isDirectory && it.path != "/" }?.let {
+                return it.absolutePath
+            }
+        }
+        return null
+    }
+
+    private fun rememberWorkspaceFromText(text: String) {
+        val root = workspaceRootFromText(text) ?: return
+        _uiState.update { it.copy(activeWorkspacePath = root) }
+    }
+
+    private fun workspaceContextPrompt(): String {
+        val root = _uiState.value.activeWorkspacePath ?: return ""
+        val knownFiles = _uiState.value.logs.asReversed()
+            .mapNotNull { ToolExecutor.detectFilePath(it.text) }
+            .distinct()
+            .filter { it.startsWith("$root/") }
+            .take(12)
+        return buildString {
+            appendLine("## ACTIVE PROJECT WORKSPACE")
+            appendLine("Project root: $root")
+            if (knownFiles.isNotEmpty()) {
+                appendLine("Previously identified project files:")
+                knownFiles.forEach { appendLine("- $it") }
+            }
+            appendLine("When asked to revisit or review this project, start from these remembered paths and search only inside this project root. Never run a filesystem-wide search (such as find /), and do not scan unrelated Android, system, or user directories. Reuse known file/tool locations; inspect only relevant files and bounded project subdirectories.")
+        }.trim()
+    }
 
     private fun encodeTaskCheckpoint(history: List<Pair<String, String>>): String =
         JSONArray().apply {
@@ -605,11 +669,12 @@ class AgentViewModel : ViewModel() {
     }
 
     private fun cleanVisibleText(raw: String): String {
+        val decodedRaw = TextEncodingRepair.repairIfLikely(raw)
         // Fast-path: if text contains no special tags or backticks or screen dumps, return directly without running regexes
-        if (!raw.contains('<') && !raw.contains('`') && !raw.contains("💭") && !raw.contains("SYSTEM MANDATORY") && !raw.contains("Shell output") && !raw.contains("ACTIVE SCREEN") && !raw.contains("SCREEN VISION") && !raw.contains("bounds=\"[")) {
-            return raw.trim()
+        if (!decodedRaw.contains('<') && !decodedRaw.contains('`') && !decodedRaw.contains("💭") && !decodedRaw.contains("SYSTEM MANDATORY") && !decodedRaw.contains("Shell output") && !decodedRaw.contains("ACTIVE SCREEN") && !decodedRaw.contains("SCREEN VISION") && !decodedRaw.contains("bounds=\"[")) {
+            return decodedRaw.trim()
         }
-        var text = raw
+        var text = decodedRaw
         if (text.contains("```")) text = text.replace(RE_THINK_FENCED, "")
         if (text.contains('<')) {
             text = text.replace(RE_THINK_TAGS, "")
@@ -733,6 +798,13 @@ class AgentViewModel : ViewModel() {
                 }
                 is StreamDemultiplexer.DemuxBlock.ToolCall -> null
                 is StreamDemultiplexer.DemuxBlock.Image -> "[Image: ${block.prompt.ifBlank { "Generated visual" }}]"
+                is StreamDemultiplexer.DemuxBlock.FileArtifact -> {
+                    val safePath = StreamDemultiplexer.escapeXml(block.path)
+                    val safeName = StreamDemultiplexer.escapeXml(block.fileName)
+                    val safeFormat = StreamDemultiplexer.escapeXml(block.format)
+                    val safePreview = StreamDemultiplexer.escapeXml(block.preview)
+                    """<file_artifact path="$safePath" name="$safeName" format="$safeFormat">$safePreview</file_artifact>"""
+                }
             }
         }
         val content = if (contentParts.isNotEmpty()) contentParts.joinToString("\n\n").trim() else cleanVisibleText(raw)
@@ -1403,6 +1475,7 @@ class AgentViewModel : ViewModel() {
         } else {
             effectivePersona
         }
+        val workspaceContext = workspaceContextPrompt()
 
         val detectedLang = detectLanguage(userPrompt)
 
@@ -1456,6 +1529,7 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
    - Use `fetch_web_content(url)` to retrieve clean, in-depth text content from URLs found via web search.
    - Use `run_python(script)` to calculate algebra, integrals, calculus, and scientific computations locally with zero hallucination.
    - Use `write_file(path, content)` to create or overwrite local files.
+   - Use `create_word_document(title, content, filename)` for downloadable Word .docx files, and `create_excel_spreadsheet(data_json, filename, sheet_name)` for Excel .xlsx files. Spreadsheet data_json must contain populated JSON rows and headers, never an empty table.
    - Use `read_file_range(path, start_line, line_count)` to inspect large files efficiently without exhausting memory.
    - Use `schedule_task(description, command, delay_minutes)` to register delayed hardware alarms.
 3. MANDATORY SYNTHESIS TURN (CRITICAL):
@@ -1468,16 +1542,17 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
             if (isGreeting) {
                 return """$languageEnforcement
 
-$localPersona$greetingDirective$custom
+$localPersona$workspaceContext$greetingDirective$custom
 """.trimIndent()
             }
             return """$languageEnforcement
 
 $localPersona
+$workspaceContext
 Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
 Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 File safety: write_file creates a reversible before-image. Use rollback_file_changes(transaction_id) to restore a transaction when a change must be undone. Background writes are grouped under the task ID and automatically rolled back if the task permanently fails or is cancelled. Shell commands are not covered by this file rollback.
-Tools: open_app(package_name), run_shell(command), write_file(path, content), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), list_tasks(), resume_task(task_id, user_input).
+Tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), list_tasks(), resume_task(task_id, user_input).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - ZERO HALLUCINATION: Never claim you opened an app or ran a command without invoking the tool!
@@ -1493,13 +1568,14 @@ $languageEnforcement""".trimIndent()
         } else ""
         val vectorMemoriesSection = if (recalledVectorMemories.isNotBlank()) "\n\n$recalledVectorMemories" else ""
 
-        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}"
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}|$workspaceContext"
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) return cachedStaticPrefix!!
 
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
+- For requests to create Word or Excel files, invoke the matching document tool with complete content. For Excel, include non-empty rows and headers in data_json (array of arrays or objects); never pass an empty placeholder table. Then report the generated file and its preview. Files are saved under /sdcard/atlas-ai/documents and can be previewed or downloaded from the conversation.
 - Tool invocation format:
 <function_calls>
 <invoke name="tool_name"><parameter name="param_name">value</parameter></invoke>
@@ -1511,7 +1587,7 @@ $languageEnforcement""".trimIndent()
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$workspaceContext$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1522,7 +1598,7 @@ $languageEnforcement""".trimIndent()
         val actualContext = context ?: MainActivity.instance
         val trimmed = command.trim()
 
-        if (trimmed.startsWith("$")) {
+        if (trimmed.startsWith("$") && fileUri == null) {
             val shellCmd = trimmed.removePrefix("$").trim()
             autoTitleSessionIfNew(command)
             val userLog = LogEntry(sender = "USER", text = command)
@@ -1542,7 +1618,7 @@ $languageEnforcement""".trimIndent()
             return
         }
 
-        if (trimmed.startsWith("/") && !trimmed.startsWith("/image", ignoreCase = true) && MediaIntentClassifier.classify(trimmed) is MediaIntent.TextDialogue) {
+        if (fileUri == null && trimmed.startsWith("/") && !trimmed.startsWith("/image", ignoreCase = true) && MediaIntentClassifier.classify(trimmed) is MediaIntent.TextDialogue) {
             val slashCmd = trimmed.substringBefore(" ").lowercase()
             autoTitleSessionIfNew(command)
             val userLog = LogEntry(sender = "USER", text = command)
@@ -1561,13 +1637,20 @@ $languageEnforcement""".trimIndent()
         }
 
         if (_uiState.value.isProcessing) {
-            synchronized(pendingCommands) { pendingCommands.add(command) }
+            synchronized(pendingCommands) { pendingCommands.add(PendingCommand(command, fileUri)) }
             addLog(LogEntry(sender = "SYSTEM", text = "Command queued (${pendingCommands.size} in queue)"))
             return
         }
 
         autoTitleSessionIfNew(command)
-        val userLog = LogEntry(sender = "USER", text = command.takeIf { it.isNotBlank() } ?: "[Attached File]")
+        rememberWorkspaceFromText(command)
+        val userLog = LogEntry(
+            sender = "USER",
+            text = buildString {
+                append(command.takeIf { it.isNotBlank() } ?: "[Attached File]")
+                if (fileUri != null && command.isNotBlank()) append("\n📎 File attached")
+            }
+        )
         addLog(userLog)
         val sid = currentSessionId.value
 
@@ -1583,7 +1666,6 @@ $languageEnforcement""".trimIndent()
                 it.copy(
                     isProcessing = true,
                     tokensPerSecond = 0f,
-                    activeWorkspacePath = null,
                     lastExecutionResult = "",
                     streamInterruptMsg = null
                 ) 
@@ -1598,6 +1680,49 @@ $languageEnforcement""".trimIndent()
                 if (modelType == null || !isModelLoaded()) {
                     addLog(LogEntry(sender = "AGENT", text = "No model active. Please configure Gemini API keys or load a local GGUF model.", isError = false))
                     return@launch
+                }
+
+                if (fileUri != null) {
+                    val attachmentContext = actualContext
+                        ?: error("Application storage is unavailable for reading the attached file.")
+                    val attachment = UploadedFileReader.read(
+                        context = attachmentContext,
+                        uri = fileUri,
+                        isGemini = modelType == ModelType.GEMINI
+                    )
+                    val userPrompt = command.ifBlank {
+                        if (attachment.imageBase64 != null) "Describe the attached image."
+                        else "Analyze the attached file."
+                    }
+                    finalCommand = buildString {
+                        append("\n\n[Attached file: ${attachment.displayName}]")
+                        if (attachment.text.isNotBlank()) {
+                            append("\n\n")
+                            append(attachment.text)
+                        }
+                        append("\n\n")
+                        append(userPrompt)
+                        if (attachment.imageBase64 != null) append("\nUse the attached image as visual input.")
+                    }
+                    attachment.imageBase64?.let(imageBase64List::add)
+                    _uiState.update { state ->
+                        state.copy(
+                            logs = state.logs.map { log ->
+                                if (log.id == userLog.id) {
+                                    log.copy(
+                                        text = buildString {
+                                            if (command.isNotBlank()) {
+                                                append(command)
+                                                append('\n')
+                                            }
+                                            append("📎 ")
+                                            append(attachment.displayName)
+                                        }
+                                    )
+                                } else log
+                            }
+                        )
+                    }
                 }
 
                 synchronized(conversationHistory) { conversationHistory.add("user" to finalCommand) }
@@ -1764,6 +1889,9 @@ $languageEnforcement""".trimIndent()
                                         if (geminiRole == lastRole && json.length() > 0) {
                                             val prev = json.getJSONObject(json.length() - 1)
                                             prev.put("content", prev.getString("content") + "\n\n" + finalTurnContent)
+                                            if (idx == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
+                                                prev.put("images", JSONArray(imageBase64List))
+                                            }
                                         } else {
                                             val m = JSONObject().put("role", geminiRole).put("content", finalTurnContent)
                                             if (idx == historyCopy.size - 1 && imageBase64List.isNotEmpty() && continuationCycle == 1) {
@@ -1856,8 +1984,10 @@ $languageEnforcement""".trimIndent()
                     }
 
                     val fullResponse = responseSb.toString()
+                    rememberWorkspaceFromText(fullResponse)
                     val demuxedFull = StreamDemultiplexer.demux(fullResponse)
                     val writtenFilesFromStream = liveDiskStreamer.closeAll(fullResponse)
+                    writtenFilesFromStream.forEach(::rememberWorkspaceFromText)
 
                     val parsedToolCalls = StreamDemultiplexer.parseAllToolCalls(fullResponse)
                     val validToolCalls = parsedToolCalls.filter { call ->
@@ -1984,6 +2114,7 @@ $languageEnforcement""".trimIndent()
                                         val (code, out) = executeSafeProcess(rawCmd)
                                         Triple(rawCmd, code, out)
                                     }
+                                    rememberWorkspaceFromText("$rawCmd\n$output")
                                     val safeCmd = StreamDemultiplexer.escapeXml(finalCmd)
                                     val safeOut = StreamDemultiplexer.escapeXml(output.trim())
                                     val terminalFrame = """<terminal_frame command="$safeCmd" exit_code="$exitCode">$safeOut</terminal_frame>"""
@@ -2251,14 +2382,14 @@ $langFinalInstruction"""
     }
     
     private fun processNextQueuedCommand(context: Context?) {
-        val nextCommand: String?
+        val nextCommand: PendingCommand?
         synchronized(pendingCommands) {
             nextCommand = if (pendingCommands.isNotEmpty()) pendingCommands.removeAt(0) else null
         }
         if (nextCommand != null) {
             viewModelScope.launch(Dispatchers.IO) {
                 delay(500)
-                sendCommand(nextCommand, context = context)
+                sendCommand(nextCommand.command, nextCommand.fileUri, context)
             }
         }
     }
@@ -2820,6 +2951,7 @@ $evidence
                             if (cmd.isNotBlank()) {
                                 actionToolUsed = true
                                 val (exitCode, output) = runShellWithExitCode(cmd)
+                                rememberWorkspaceFromText("$cmd\n$output")
                                 val commandStatus = if (exitCode == 0) {
                                     "✔ Tool(run_shell: $cmd) [SUCCEEDED, exit: 0]"
                                 } else {
@@ -2841,8 +2973,42 @@ $evidence
                                 } else {
                                     ToolHandler.ToolExecutionResult(false, "✖ Tool(write_file) ─── [FAILED]\n✖ Status: App storage is unavailable for a reversible write.")
                                 }
+                                rememberWorkspaceFromText(res.summary)
                                 summaries.add(res.summary)
                             }
+                        }
+                        "create_word_document", "create_docx" -> {
+                            actionToolUsed = true
+                            val title = params["title"]?.trim().orEmpty()
+                            val content = params["content"] ?: params["text"].orEmpty()
+                            val name = params["filename"] ?: params["file_name"] ?: title
+                            summaries.add(
+                                createOfficeArtifact(
+                                    context = actualContext,
+                                    journal = fileChangeJournal,
+                                    transactionId = transactionId,
+                                    requestedName = name,
+                                    extension = "docx",
+                                    title = title,
+                                    content = content
+                                )
+                            )
+                        }
+                        "create_excel_spreadsheet", "create_xlsx" -> {
+                            actionToolUsed = true
+                            val data = params["data_json"] ?: params["data"] ?: params["rows"].orEmpty()
+                            val sheetName = params["sheet_name"]?.trim().orEmpty().ifBlank { "Sheet1" }
+                            val fileName = params["filename"] ?: params["file_name"] ?: "spreadsheet"
+                            summaries.add(
+                                createSpreadsheetArtifact(
+                                    context = actualContext,
+                                    journal = fileChangeJournal,
+                                    transactionId = transactionId,
+                                    requestedName = fileName,
+                                    sheetName = sheetName,
+                                    dataJson = data
+                                )
+                            )
                         }
                         "rollback_file_changes", "undo_file_changes" -> {
                             val id = params["transaction_id"] ?: params["task_id"] ?: params["id"] ?: ""
@@ -3032,6 +3198,70 @@ $evidence
         }
     }
 
+    private fun createOfficeArtifact(
+        context: Context?,
+        journal: FileChangeJournal?,
+        transactionId: String?,
+        requestedName: String,
+        extension: String,
+        title: String = "",
+        content: String = "",
+        preview: String = "",
+        bytes: ByteArray? = null
+    ): String {
+        if (context == null) return "✖ Document creation failed: application storage is unavailable."
+        return try {
+            val generatedBytes = bytes ?: run {
+                require(content.isNotBlank()) { "Document content must not be empty." }
+                require(content.length <= 1_000_000) { "Document content exceeds the 1 MB limit." }
+                OfficeDocumentGenerator.createWordDocument(title, content)
+            }
+            val fileBaseName = requestedName
+                .substringAfterLast('/')
+                .substringAfterLast('\\')
+                .replace(Regex("""[^\p{L}\p{N}._-]"""), "_")
+                .trim('.', '_')
+                .take(80)
+                .ifBlank { if (extension == "docx") "document" else "spreadsheet" }
+                .removeSuffix(".$extension")
+            val target = File(File(ToolExecutor.BASE_DIR, "documents"), "$fileBaseName.$extension")
+            val activeJournal = journal
+                ?: FileChangeJournal(File(context.applicationContext.filesDir, "file-change-journal"))
+            val writeResult = activeJournal.writeBytes(transactionId, target, generatedBytes)
+            val file = writeResult.file
+            val previewText = (if (extension == "docx") content else preview).take(6000)
+            val artifact = """<file_artifact path="${StreamDemultiplexer.escapeXml(file.absolutePath)}" name="${StreamDemultiplexer.escapeXml(file.name)}" format="$extension">${StreamDemultiplexer.escapeXml(previewText)}</file_artifact>"""
+            "✔ Created ${file.name} (${generatedBytes.size} bytes) at ${file.absolutePath}\n↩ Rollback transaction: ${writeResult.transactionId}\n$artifact"
+        } catch (e: Exception) {
+            Log.e(TAG, "Office document creation failed", e)
+            "✖ Failed to create .$extension document: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    private fun createSpreadsheetArtifact(
+        context: Context?,
+        journal: FileChangeJournal?,
+        transactionId: String?,
+        requestedName: String,
+        sheetName: String,
+        dataJson: String
+    ): String = try {
+        val rows = OfficeDocumentGenerator.parseSpreadsheetRows(dataJson)
+        val preview = OfficeDocumentGenerator.spreadsheetPreview(rows)
+        createOfficeArtifact(
+            context = context,
+            journal = journal,
+            transactionId = transactionId,
+            requestedName = requestedName,
+            extension = "xlsx",
+            preview = preview,
+            bytes = OfficeDocumentGenerator.createSpreadsheet(sheetName, rows)
+        )
+    } catch (e: Exception) {
+        Log.e(TAG, "Spreadsheet creation failed", e)
+        "✖ Failed to create .xlsx spreadsheet: ${e.message ?: e.javaClass.simpleName}"
+    }
+
     fun initTaskSystem(context: Context) {
         if (fileChangeJournal == null) {
             fileChangeJournal = FileChangeJournal(File(context.applicationContext.filesDir, "file-change-journal"))
@@ -3125,7 +3355,7 @@ $evidence
             }
             currentSessionId.value = session.id
             currentSessionTitle.value = session.title
-            val sessionPath = messages.reversed().firstNotNullOfOrNull { ToolExecutor.detectFilePath(it.text) }
+            val sessionPath = messages.reversed().firstNotNullOfOrNull { workspaceRootFromText(it.text) }
             _uiState.update { it.copy(logs = restoredLogs, resumptionNotice = null, activeWorkspacePath = sessionPath) }
             synchronized(conversationHistory) {
                 conversationHistory.clear()

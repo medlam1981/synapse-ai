@@ -48,6 +48,19 @@ class GeminiModelClient(
 
     companion object {
         private const val TAG = "GeminiClient"
+        private const val MIN_REQUEST_INTERVAL_MS = 6_000L
+        private val requestPacingLock = Any()
+        private var nextRequestAtMs = 0L
+
+        private suspend fun awaitRequestSlot() {
+            val waitMs = synchronized(requestPacingLock) {
+                val now = System.currentTimeMillis()
+                val wait = (nextRequestAtMs - now).coerceAtLeast(0L)
+                nextRequestAtMs = maxOf(now, nextRequestAtMs) + MIN_REQUEST_INTERVAL_MS
+                wait
+            }
+            if (waitMs > 0) delay(waitMs)
+        }
     }
 
     private var currentKeyIndex = initialKeyIndex.coerceIn(0, (apiKeys.size - 1).coerceAtLeast(0))
@@ -86,20 +99,21 @@ class GeminiModelClient(
         } catch (_: Exception) {}
     }
 
-    private fun markKeyDegraded(keyIdx: Int, isQuota: Boolean, errorMsg: String) {
+    private fun markKeyDegraded(keyIdx: Int, cooldownDuration: Long, errorMsg: String) {
         val failures = (keyFailureCounts[keyIdx] ?: 0) + 1
         keyFailureCounts[keyIdx] = failures
 
-        // زيادة مدة الـ Cooldown تصاعدياً حسب عدد الفشلات المتكررة
-        val baseCooldown = if (isQuota) 60_000L else 20_000L
-        val multiplier = 1.5.pow(failures.coerceAtMost(4).toDouble())
-        val cooldownDuration = (baseCooldown * multiplier).toLong()
-        val cooldownUntil = System.currentTimeMillis() + cooldownDuration
+        val cooldownUntil = if (cooldownDuration == Long.MAX_VALUE) {
+            Long.MAX_VALUE
+        } else {
+            System.currentTimeMillis() + cooldownDuration
+        }
         keyCooldowns[keyIdx] = cooldownUntil
 
         val apiKey = apiKeys.getOrNull(keyIdx) ?: ""
-        KeyUsageManager.markCooldown(apiKey, cooldownDuration)
-        fileLog("Key #${keyIdx + 1}/${apiKeys.size} marked ${if (isQuota) "RATE-LIMITED (429)" else "DEGRADED/COOLDOWN"}. Cooldown ${cooldownDuration / 1000}s (Failures: $failures). Error: $errorMsg")
+        if (cooldownDuration != Long.MAX_VALUE) KeyUsageManager.markCooldown(apiKey, cooldownDuration)
+        val cooldownLabel = if (cooldownDuration == Long.MAX_VALUE) "until credentials are corrected" else "${cooldownDuration / 1000}s"
+        fileLog("Key #${keyIdx + 1}/${apiKeys.size} cooling down for $cooldownLabel (Failures: $failures). Error: $errorMsg")
     }
 
     private fun markKeySuccess(keyIdx: Int, tokensUsed: Long) {
@@ -109,7 +123,7 @@ class GeminiModelClient(
     }
 
     @Synchronized
-    private fun getNextValidKey(): Pair<String, Int>? {
+    private fun getNextValidKey(excludedKeys: Set<Int> = emptySet()): Pair<String, Int>? {
         if (apiKeys.isEmpty()) return null
         val totalKeys = apiKeys.size
         val now = System.currentTimeMillis()
@@ -118,7 +132,7 @@ class GeminiModelClient(
 
         val availableKeys = (0 until totalKeys)
             .map { offset -> (nextKeyIndex + offset) % totalKeys }
-            .filter { (keyCooldowns[it] ?: 0L) <= now }
+            .filter { it !in excludedKeys && (keyCooldowns[it] ?: 0L) <= now }
         val idleKeys = availableKeys.filter { (inFlightByKey[it] ?: 0) == 0 }
         val candidates = idleKeys.ifEmpty { availableKeys }
         val selectedKey = candidates.minByOrNull { idx ->
@@ -139,9 +153,34 @@ class GeminiModelClient(
         if (remaining > 0) inFlightByKey[keyIdx] = remaining else inFlightByKey.remove(keyIdx)
     }
 
-    private fun getCooldownWaitMs(): Long {
-        val earliestCooldown = keyCooldowns.values.minOrNull() ?: return 1_000L
-        return (earliestCooldown - System.currentTimeMillis()).coerceAtLeast(250L)
+    private fun getCooldownWaitMs(excludedKeys: Set<Int>): Long? {
+        val now = System.currentTimeMillis()
+        val earliestCooldown = keyCooldowns.entries
+            .filter { it.key !in excludedKeys && it.value > now && it.value != Long.MAX_VALUE }
+            .minOfOrNull { it.value }
+            ?: return null
+        return (earliestCooldown - now).coerceAtLeast(250L)
+    }
+
+    private fun cooldownForError(error: String): Long {
+        val lower = error.lowercase()
+        val retryAfterSeconds = Regex("""(?:retry(?:\s+in)?|retrydelay)["':\s=]+([0-9]+(?:\.[0-9]+)?)\s*s""")
+            .find(lower)?.groupValues?.get(1)?.toDoubleOrNull()
+            ?.let { (it * 1_000).toLong() }
+        return when {
+            lower.contains("401") || lower.contains("unauthorized") ||
+                    lower.contains("403") || lower.contains("permission_denied") ||
+                    lower.contains("permission denied") -> Long.MAX_VALUE
+            lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") -> {
+                val quotaWindow = if (lower.contains("per day") || lower.contains("daily") ||
+                    lower.contains("per_day") || lower.contains("requests per day")
+                ) 24L * 60 * 60 * 1_000 else 90_000L
+                retryAfterSeconds?.coerceIn(30_000L, 24L * 60 * 60 * 1_000) ?: quotaWindow
+            }
+            lower.contains("503") || lower.contains("high demand") ||
+                    lower.contains("overloaded") || lower.contains("unavailable") -> 30_000L
+            else -> 15_000L
+        }
     }
 
     init {
@@ -261,15 +300,35 @@ class GeminiModelClient(
         var retryPrompt = promptText
         var retryImages = promptImages
         var hasEmittedAnyOutput = false
-        var currentPair = getNextValidKey()
+        val attemptedKeys = mutableSetOf<Int>()
+        var currentPair = getNextValidKey(attemptedKeys)?.also { attemptedKeys.add(it.second) }
 
         while (!success) {
             if (currentPair == null) {
-                delay(getCooldownWaitMs())
-                currentPair = getNextValidKey()
+                if (attemptedKeys.size >= totalKeys) attemptedKeys.clear()
+                currentPair = getNextValidKey(attemptedKeys)?.also { attemptedKeys.add(it.second) }
+                if (currentPair == null) {
+                    val allPermanentlyRejected = (0 until totalKeys).all { keyCooldowns[it] == Long.MAX_VALUE }
+                    if (allPermanentlyRejected) {
+                        throw IllegalStateException("All configured Gemini keys were rejected for this model. Check API key permissions and model access.")
+                    }
+                    val cooldownWait = getCooldownWaitMs(attemptedKeys)
+                    if (cooldownWait == null) {
+                        attemptedKeys.clear()
+                    } else {
+                        delay(cooldownWait)
+                    }
+                    currentPair = getNextValidKey(attemptedKeys)?.also { attemptedKeys.add(it.second) }
+                }
                 continue
             }
             val (apiKey, keyIdx) = currentPair
+            try {
+                awaitRequestSlot()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                releaseKey(keyIdx)
+                throw cancelled
+            }
             val attemptOutput = StringBuilder()
             val attemptTokenUsage = AtomicLong(0L)
 
@@ -328,11 +387,11 @@ class GeminiModelClient(
                             lastFunctionCall = call
                             val paramsXml = if (call.args.isNotEmpty()) {
                                 call.args.entries.joinToString("\n") { (k, v) ->
-                                    "<parameter name=\"$k\">$v</parameter>"
+                                    "<parameter name=\"${StreamDemultiplexer.escapeXml(k)}\">${StreamDemultiplexer.escapeXml(v.toString())}</parameter>"
                                 }
                             } else ""
                             fileLog("Gemini native FunctionCall intercepted: ${call.name}")
-                            val toolXml = "<invoke name=\"${call.name}\">\n$paramsXml\n</invoke>"
+                            val toolXml = "<invoke name=\"${StreamDemultiplexer.escapeXml(call.name)}\">\n$paramsXml\n</invoke>"
                             channel.send(toolXml)
                             channel.close()
                             functionCallDetected = true
@@ -440,17 +499,21 @@ class GeminiModelClient(
                 val isHighDemand503 = lowerError.contains("503") || lowerError.contains("high demand") ||
                         lowerError.contains("overloaded") || lowerError.contains("unavailable")
                 val isQuotaExhausted = lowerError.contains("429") || lowerError.contains("quota") || lowerError.contains("resource_exhausted")
+                val isKeyRejected = lowerError.contains("401") || lowerError.contains("unauthorized") ||
+                        lowerError.contains("403") || lowerError.contains("permission_denied") ||
+                        lowerError.contains("permission denied")
                 val isTimeoutOrServer = t is java.net.SocketTimeoutException || lowerError.contains("timeout") ||
                         lowerError.contains("500") || lowerError.contains("502") || lowerError.contains("504")
 
                 lastErrorDetail = errorMsg
-                markKeyDegraded(keyIdx, isQuota = isQuotaExhausted, errorMsg = errorMsg)
+                markKeyDegraded(keyIdx, cooldownForError(errorMsg), errorMsg)
 
-                val shouldRetry = isQuotaExhausted || isHighDemand503 || isTimeoutOrServer ||
+                val shouldRetry = isQuotaExhausted || isHighDemand503 || isTimeoutOrServer || isKeyRejected ||
                         lowerError.contains("limit") || lowerError.contains("empty stream") ||
                         t is java.io.IOException
 
                 if (shouldRetry) {
+                    attemptedKeys.add(keyIdx)
                     if (attempt < Int.MAX_VALUE) attempt++
                     // حساب مدة الانتظار التصاعدية (Exponential Backoff + Jitter) عند الضغط
                     val backoffDelay = (250L * 2.0.pow(attempt.coerceAtMost(8).toDouble())).toLong()
@@ -468,7 +531,8 @@ class GeminiModelClient(
                         retryImages = emptyList()
                     }
                     delay(backoffDelay)
-                    currentPair = getNextValidKey()
+                    if (attemptedKeys.size >= totalKeys) attemptedKeys.clear()
+                    currentPair = getNextValidKey(attemptedKeys)?.also { attemptedKeys.add(it.second) }
                 } else {
                     throw RuntimeException("Gemini Error: $errorMsg")
                 }
@@ -598,6 +662,26 @@ class GeminiModelClient(
                             Schema.str("content", "Text content to write")
                         ),
                         requiredParameters = listOf("path", "content")
+                    ),
+                    defineFunction(
+                        name = "create_word_document",
+                        description = "Create a downloadable Word .docx document in /sdcard/atlas-ai/documents. Provide the document content as plain text; the result includes a preview and rollback transaction.",
+                        parameters = listOf(
+                            Schema.str("title", "Document title"),
+                            Schema.str("content", "Complete document text"),
+                            Schema.str("filename", "Optional output filename without extension")
+                        ),
+                        requiredParameters = listOf("title", "content")
+                    ),
+                    defineFunction(
+                        name = "create_excel_spreadsheet",
+                        description = "Create a downloadable Excel .xlsx spreadsheet in /sdcard/atlas-ai/documents. data_json must contain non-empty table data: a JSON array of arrays, an array of objects with consistent fields, or an object with headers/columns and rows/data. Never call this tool with empty placeholder rows.",
+                        parameters = listOf(
+                            Schema.str("data_json", "Non-empty JSON table with column headers and populated data rows"),
+                            Schema.str("filename", "Optional output filename without extension"),
+                            Schema.str("sheet_name", "Optional worksheet tab name")
+                        ),
+                        requiredParameters = listOf("data_json")
                     ),
                     defineFunction(
                         name = "rollback_file_changes",

@@ -216,11 +216,13 @@ Place your GGUF models on device storage:
 │   └── sd_turbo-f16.gguf               ← Stable Diffusion model
 ├── personas/
 │   └── (custom system prompts)
-└── webapp/
-    └── (agent-generated deliverables)
+├── webapp/
+│   └── (agent-generated web deliverables)
+└── documents/
+    └── (agent-generated Word .docx and Excel .xlsx files)
 ```
 
-New files are created under `/sdcard/atlas-ai/`. Existing models, plugins, memories, and web apps under `/sdcard/Medlam-Ai/` remain discoverable/readable; the app does not move or delete that existing data.
+New files are created under `/sdcard/atlas-ai/`. Generated Word and Excel files appear as previewable conversation artifacts and can be downloaded through Android's document picker. Existing models, plugins, memories, and web apps under `/sdcard/Medlam-Ai/` remain discoverable/readable; the app does not move or delete that existing data.
 
 ---
 

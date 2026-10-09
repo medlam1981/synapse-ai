@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.view.WindowManager
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
@@ -57,6 +59,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -86,6 +89,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -575,79 +579,71 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 uiState = uiState,
                 stats = systemStats,
                 isDark = isDark,
-                onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
-                onOpenSettings = { showSettings = true }
+                onOpenDrawer = { coroutineScope.launch { drawerState.open() } }
             )
 
-            val chassisBg = MaterialTheme.colorScheme.surface
-            val chassisBorder = MaterialTheme.colorScheme.outline
+            Divider(
+                modifier = Modifier.padding(horizontal = 8.dp),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            )
 
-            Surface(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(start = 5.dp, end = 5.dp, top = 5.dp, bottom = 5.dp)
-                    .clip(RoundedCornerShape(14.dp)),
-                shape = RoundedCornerShape(14.dp),
-                color = chassisBg,
-                border = BorderStroke(1.dp, chassisBorder)
+                    .clipToBounds()
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clipToBounds()
-                ) {
-                    if (uiState.logs.isEmpty() && !uiState.isProcessing) {
-                        CliWelcomeScreen(
-                            uiState = uiState
-                        )
-                    } else {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clipToBounds(),
-                            contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            items(uiState.logs, key = { it.id }) { log ->
-                                CliLogMessageView(
-                                    log = log,
-                                    isDark = isDark,
-                                    onImageClick = { viewingImageBytes = it }
-                                )
-                            }
+                if (uiState.logs.isEmpty() && !uiState.isProcessing) {
+                    CliWelcomeScreen(
+                        uiState = uiState
+                    )
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clipToBounds(),
+                        contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(uiState.logs, key = { it.id }) { log ->
+                            CliLogMessageView(
+                                log = log,
+                                isDark = isDark,
+                                onImageClick = { viewingImageBytes = it }
+                            )
                         }
+                    }
 
-                        if (userScrolledAway && uiState.logs.isNotEmpty()) {
-                            Surface(
-                                onClick = {
-                                    userScrolledAway = false
-                                    coroutineScope.launch {
-                                        listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
-                                    }
-                                },
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = 12.dp),
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isDark) Color(0xFF161B22).copy(alpha = 0.95f) else Color(0xFFF1F5F9).copy(alpha = 0.95f),
-                                border = BorderStroke(1.dp, if (isDark) Color(0xFF30363D) else Color(0xFFCBD5E1))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(11.dp))
-                                    Text(
-                                        text = if (uiState.isProcessing) "● Live Stream Tail ↓" else "Jump to Latest ↓",
-                                        color = primaryAccent,
-                                        fontSize = 9.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
+                    if (userScrolledAway && uiState.logs.isNotEmpty()) {
+                        Surface(
+                            onClick = {
+                                userScrolledAway = false
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem(uiState.logs.size - 1, scrollOffset = 100_000)
                                 }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 12.dp),
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isDark) Color(0xFF161B22).copy(alpha = 0.95f) else Color(0xFFF1F5F9).copy(alpha = 0.95f),
+                            border = BorderStroke(1.dp, if (isDark) Color(0xFF30363D) else Color(0xFFCBD5E1))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(11.dp))
+                                Text(
+                                    text = if (uiState.isProcessing) "● Live Stream Tail ↓" else "Jump to Latest ↓",
+                                    color = primaryAccent,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
                             }
                         }
                     }
@@ -1134,19 +1130,30 @@ fun AtlasAiBranding(
 
     Text(
         text = androidx.compose.ui.text.buildAnnotatedString {
-            pushStyle(androidx.compose.ui.text.SpanStyle(color = primaryColor, fontWeight = FontWeight.Black))
+            pushStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    color = primaryColor,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 0.035.em
+                )
+            )
             append("ATLAS-AI")
             pop()
             
             if (showAgent) {
-                pushStyle(androidx.compose.ui.text.SpanStyle(color = secondaryColor, fontWeight = FontWeight.Bold))
+                pushStyle(
+                    androidx.compose.ui.text.SpanStyle(
+                        color = secondaryColor,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.07.em
+                    )
+                )
                 append(" AGENT")
                 pop()
             }
         },
         fontSize = fontSize,
-        fontFamily = FontFamily.Monospace,
-        letterSpacing = 0.1.em,
+        fontFamily = FontFamily.SansSerif,
         modifier = modifier
     )
 }
@@ -1157,8 +1164,7 @@ fun ConsolidatedMasterHeader(
     uiState: AgentUiState,
     stats: SystemStats,
     isDark: Boolean,
-    onOpenDrawer: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenDrawer: () -> Unit
 ) {
     val headerBg = MaterialTheme.colorScheme.surfaceContainer
     val subCardBg = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -1168,25 +1174,17 @@ fun ConsolidatedMasterHeader(
     val secondaryAccent = MaterialTheme.colorScheme.secondary
 
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
+    val cyanAccent = Color(0xFF00D2FF)
+    val cyanBorder = Color(0xFF00B4D8)
 
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 5.dp, end = 5.dp, top = 4.dp, bottom = 2.dp)
-            .tactileCardElevation(isDark, cornerRadius = 14.dp),
-        color = headerBg,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            .padding(top = 4.dp, bottom = 4.dp)
+            .background(headerBg)
+            .padding(horizontal = 15.dp, vertical = 8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            val cyanAccent = Color(0xFF00D2FF)
-            val cyanBorder = Color(0xFF00B4D8)
-
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1200,12 +1198,12 @@ fun ConsolidatedMasterHeader(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(28.dp)
-                            .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(7.dp))
+                            .size(36.dp)
+                            .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
                     ) {
                         Surface(
                             onClick = onOpenDrawer,
-                            shape = RoundedCornerShape(6.dp),
+                            shape = RoundedCornerShape(9.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerHigh,
                             border = BorderStroke(
                                 1.dp,
@@ -1221,14 +1219,14 @@ fun ConsolidatedMasterHeader(
                                     imageVector = Icons.Outlined.Widgets,
                                     contentDescription = "Menu",
                                     tint = cyanAccent,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                     }
 
                     AtlasAiBranding(
-                        fontSize = 12.sp,
+                        fontSize = 16.sp,
                         lineHeight = 2.dp
                     )
 
@@ -1258,34 +1256,6 @@ fun ConsolidatedMasterHeader(
                     }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(7.dp))
-                ) {
-                    Surface(
-                        onClick = onOpenSettings,
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = BorderStroke(
-                            1.dp,
-                            Brush.verticalGradient(
-                                listOf(cyanAccent.copy(alpha = 0.6f), cyanBorder.copy(alpha = 0.25f))
-                            )
-                        ),
-                        shadowElevation = 2.dp,
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            Icon(
-                                imageVector = Icons.Outlined.Settings,
-                                contentDescription = "Settings",
-                                tint = cyanAccent,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
             }
 
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
@@ -1699,7 +1669,7 @@ fun CliCodeBlockContainer(
     isStreaming: Boolean = false
 ) {
     var userExpanded by remember { mutableStateOf<Boolean?>(null) }
-    val isExpanded = userExpanded ?: true
+    val isExpanded = userExpanded ?: false
     var copied by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
@@ -1731,7 +1701,7 @@ fun CliCodeBlockContainer(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp),
-        shape = RoundedCornerShape(4.dp),
+        shape = RoundedCornerShape(12.dp),
         color = blockBg,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -1739,7 +1709,8 @@ fun CliCodeBlockContainer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(30.dp)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                     .background(headerBg)
                     .clipToBounds()
                     .padding(horizontal = 8.dp),
@@ -1833,9 +1804,9 @@ fun CliCodeBlockContainer(
                     )
 
                     Text(
-                        text = if (isExpanded) "[-]" else "[+]",
+                        text = if (isExpanded) "[HIDE CODE]" else "[SHOW CODE]",
                         color = textDim,
-                        fontSize = 9.sp,
+                        fontSize = 9.5.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -2069,10 +2040,14 @@ fun CliLogMessageView(
 
     when {
         isUser -> {
+            val userBubbleBorder = if (isDark) Color(0xFF38BDF8).copy(alpha = 0.42f) else Color(0xFF0284C7).copy(alpha = 0.38f)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 3.dp)
+                    .background(MaterialTheme.colorScheme.background)
+                    .border(1.dp, userBubbleBorder, RectangleShape)
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
                 CompositionLocalProvider(
                     LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -2179,6 +2154,7 @@ fun CliLogMessageView(
                             is StreamDemultiplexer.DemuxBlock.Code -> "${block.filePath}_${block.language}_${block.code.hashCode()}"
                             is StreamDemultiplexer.DemuxBlock.Prose -> "prose_${block.text.hashCode()}"
                             is StreamDemultiplexer.DemuxBlock.Image -> "image_${block.prompt.hashCode()}_${block.imageBytes.size}"
+                            is StreamDemultiplexer.DemuxBlock.FileArtifact -> block.executionId
                         }) {
                             when (block) {
                                 is StreamDemultiplexer.DemuxBlock.Prose -> {
@@ -2206,6 +2182,9 @@ fun CliLogMessageView(
                                         isDark = isDark,
                                         onClick = { onImageClick?.invoke(block.imageBytes) }
                                     )
+                                }
+                                is StreamDemultiplexer.DemuxBlock.FileArtifact -> {
+                                    CliFileArtifactCard(block, isDark)
                                 }
                             }
                         }
@@ -2354,6 +2333,156 @@ fun CliInlineImage(
 }
 
 @Composable
+private fun CliFileArtifactCard(
+    artifact: StreamDemultiplexer.DemuxBlock.FileArtifact,
+    isDark: Boolean
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showPreview by remember(artifact.executionId) { mutableStateOf(false) }
+    val mimeType = when (artifact.format.lowercase()) {
+        "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else -> "application/octet-stream"
+    }
+    val saveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument(mimeType)
+    ) { destination ->
+        if (destination != null) {
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val source = officeArtifactFile(artifact.path, artifact.format)
+                            ?: error("This is not an available Atlas Office document.")
+                        context.contentResolver.openOutputStream(destination)?.use { output ->
+                            source.inputStream().use { input -> input.copyTo(output) }
+                        } ?: error("Could not open the selected download destination.")
+                    }
+                }
+                result.onSuccess {
+                    Toast.makeText(context, "Saved ${artifact.fileName}", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    Toast.makeText(context, "Download failed: ${it.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RectangleShape,
+        color = MaterialTheme.colorScheme.background,
+        border = BorderStroke(1.dp, if (isDark) Color(0xFF38BDF8).copy(alpha = 0.32f) else Color(0xFF0284C7).copy(alpha = 0.28f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.InsertDriveFile,
+                    contentDescription = null,
+                    tint = if (artifact.format.equals("xlsx", true)) Color(0xFF22C55E) else Color(0xFF3B82F6)
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        artifact.fileName,
+                        color = if (isDark) Color.White else Color(0xFF0F172A),
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "${artifact.format.uppercase()} · ${artifact.path}",
+                        color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { showPreview = true }) {
+                    Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Preview")
+                }
+                TextButton(onClick = { saveLauncher.launch(artifact.fileName) }) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Download")
+                }
+                TextButton(onClick = {
+                    runCatching {
+                        val file = officeArtifactFile(artifact.path, artifact.format)
+                            ?: error("This is not an available Atlas Office document.")
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, mimeType)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Open ${artifact.fileName}"))
+                    }.onFailure {
+                        Toast.makeText(context, "Could not open file: ${it.message}", Toast.LENGTH_LONG).show()
+                    }
+                }) {
+                    Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Open")
+                }
+            }
+        }
+    }
+
+    if (showPreview) {
+        AlertDialog(
+            onDismissRequest = { showPreview = false },
+            title = {
+                Text(
+                    artifact.fileName,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            text = {
+                    val previewIsArabic = isArabic(artifact.preview)
+                    CompositionLocalProvider(
+                        LocalLayoutDirection provides if (previewIsArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+                    ) {
+                        Text(
+                            text = artifact.preview.ifBlank { "No text preview is available for this file." },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 420.dp)
+                                .verticalScroll(rememberScrollState()),
+                            fontFamily = if (artifact.format.equals("xlsx", true)) FontFamily.Monospace else FontFamily.Default,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Start
+                        )
+                    }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPreview = false }) { Text("Close") }
+            }
+        )
+    }
+}
+
+private fun officeArtifactFile(path: String, format: String): File? = runCatching {
+    require(format.equals("docx", true) || format.equals("xlsx", true))
+    val documentsDir = File(ToolExecutor.BASE_DIR, "documents").canonicalFile
+    val candidate = File(path).canonicalFile
+    require(candidate.parentFile == documentsDir)
+    require(candidate.extension.equals(format, ignoreCase = true))
+    require(candidate.isFile && candidate.length() <= 50L * 1024L * 1024L)
+    candidate
+}.getOrNull()
+
+@Composable
 fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark: Boolean) {
     val clipboard = LocalClipboardManager.current
 
@@ -2367,7 +2496,8 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
     val totalLines = cmdLines.size + outLines.size
     val isLongOutput = totalLines > 8
 
-    var isExpanded by remember(block.executionId, block.command) { mutableStateOf(true) }
+    var userExpanded by remember(block.executionId, block.command) { mutableStateOf<Boolean?>(null) }
+    val isExpanded = userExpanded ?: false
     var copiedRecently by remember { mutableStateOf(false) }
 
     LaunchedEffect(copiedRecently) {
@@ -2377,36 +2507,22 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
         }
     }
 
-    val accentColor = when {
-        block.isRunning -> Color(0xFF38BDF8) 
-        block.exitCode == 0 -> Color(0xFF10B981) 
-        else -> Color(0xFFEF4444) 
-    }
-
     val obsidianBg = Color(0xFF0B0F17)
     val subtleBorder = Color.White.copy(alpha = 0.08f)
+    val terminalText = Color(0xFFCBD5E1)
+    val terminalAccent = Color(0xFF38BDF8)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        shape = RoundedCornerShape(6.dp),
-        color = obsidianBg,
-        border = BorderStroke(1.dp, subtleBorder)
+            .padding(vertical = 2.dp),
+        color = obsidianBg
     ) {
-        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            Box(
-                modifier = Modifier
-                    .width(3.5.dp)
-                    .fillMaxHeight()
-                    .background(accentColor)
-            )
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 9.dp, vertical = 7.dp)
+        ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2416,23 +2532,13 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        if (block.isRunning) {
-                            NeonDottedSpinner(modifier = Modifier.size(14.dp))
-                        } else {
-                            Text(
-                                text = if (block.exitCode == 0) "✔" else "✖",
-                                color = accentColor,
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        if (block.isRunning) NeonDottedSpinner(modifier = Modifier.size(12.dp))
                         Text(
-                            text = if (block.isRunning) "TERMINAL • bash [running...]" else "TERMINAL • bash [exit: ${block.exitCode}]",
-                            color = accentColor,
-                            fontSize = 12.sp,
+                            text = "bash",
+                            color = terminalAccent,
+                            fontSize = 10.5.sp,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Bold
                         )
                     }
 
@@ -2443,7 +2549,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         Text(
                             text = if (copiedRecently) "[COPIED]" else "[COPY]",
                             color = if (copiedRecently) Color(0xFF10B981) else Color(0xFF94A3B8),
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier
@@ -2453,9 +2559,6 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                                         if (cleanOutput.isNotBlank()) {
                                             append(cleanOutput).append("\n")
                                         }
-                                        if (!block.isRunning) {
-                                            append("[Process completed with exit code ").append(block.exitCode).append("]")
-                                        }
                                     }
                                     clipboard.setText(AnnotatedString(copyText))
                                     copiedRecently = true
@@ -2464,13 +2567,13 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         )
 
                         Text(
-                            text = if (isExpanded) "[-]" else "[+]",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 12.sp,
+                            text = if (isExpanded) "[HIDE]" else "[SHOW]",
+                            color = if (isExpanded) Color(0xFF38BDF8) else Color(0xFFCBD5E1),
+                            fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier
-                                .clickable { isExpanded = !isExpanded }
+                                .clickable { userExpanded = !isExpanded }
                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
@@ -2488,15 +2591,15 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         Row(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = "$ ",
-                                color = accentColor,
-                                fontSize = 12.sp,
+                                color = terminalAccent,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = block.command,
                                 color = Color(0xFFF1F5F9),
-                                fontSize = 12.sp,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = 16.sp
                             )
@@ -2506,8 +2609,8 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
                                 text = cleanOutput,
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 12.sp,
+                                color = terminalText,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = 16.sp
                             )
@@ -2516,36 +2619,23 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             Text(
                                 text = if (rawOutput.isNotBlank()) rawOutput else "[No output returned]",
                                 color = Color(0xFF94A3B8),
-                                fontSize = 12.sp,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                                 lineHeight = 16.sp
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (block.isRunning) {
-                                "[Process running...]"
-                            } else {
-                                "[Process completed with exit code ${block.exitCode}]"
-                            },
-                            color = accentColor.copy(alpha = 0.85f),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium
-                        )
-
                         if (isLongOutput) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "[-] Collapse console output",
+                                text = "[-] Hide",
                                 color = Color(0xFF64748B),
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Medium,
                                 modifier = Modifier
-                                    .clickable { isExpanded = false }
+                                    .clickable { userExpanded = false }
                                     .padding(vertical = 2.dp)
                             )
                         }
@@ -2558,15 +2648,15 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         Row(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = "$ ",
-                                color = accentColor,
-                                fontSize = 12.sp,
+                                color = terminalAccent,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = cmdLines.firstOrNull() ?: block.command,
                                 color = Color(0xFFF1F5F9),
-                                fontSize = 12.sp,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -2574,13 +2664,13 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                         }
 
                         Text(
-                            text = "[+] Show full console output ($totalLines lines)",
+                            text = if (block.isRunning) "[SHOW • $totalLines]" else "[SHOW • $totalLines]",
                             color = Color(0xFF38BDF8),
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier
-                                .clickable { isExpanded = true }
+                                .clickable { userExpanded = true }
                                 .padding(vertical = 2.dp)
                         )
                     }
@@ -2588,7 +2678,6 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
             }
         }
     }
-}
 
 @Composable
 fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boolean) {

@@ -18,8 +18,11 @@ class FileChangeJournal(private val rootDir: File) {
 
     data class RollbackResult(val success: Boolean, val message: String)
 
+    fun write(transactionId: String?, target: File, content: String): WriteResult =
+        writeBytes(transactionId, target, content.toByteArray(StandardCharsets.UTF_8))
+
     @Synchronized
-    fun write(transactionId: String?, target: File, content: String): WriteResult {
+    fun writeBytes(transactionId: String?, target: File, content: ByteArray): WriteResult {
         val id = transactionId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
         val transactionDir = ensureTransactionDirectory(id)
         val parent = target.absoluteFile.parentFile
@@ -27,22 +30,56 @@ class FileChangeJournal(private val rootDir: File) {
         if (target.exists() && !target.isFile) {
             throw IllegalArgumentException("Target path is not a regular file: ${target.absolutePath}")
         }
+        var rootBacked = target.exists() && !target.canRead()
         if (!parent.exists() && !parent.mkdirs()) {
-            throw IllegalStateException("Could not create target directory: ${parent.absolutePath}")
+            if (!RootShellManager.isRootAvailable()) {
+                throw IllegalStateException(
+                    "Could not create target directory: ${parent.absolutePath}. " +
+                        "Choose a writable path under /sdcard/atlas-ai or grant root access."
+                )
+            }
+            runRootChecked("mkdir -p ${shellQuote(parent.absolutePath)}", "Could not create target directory")
+            rootBacked = true
+        } else if (parent.exists() && !parent.canWrite()) {
+            if (!RootShellManager.isRootAvailable()) {
+                throw IllegalStateException(
+                    "No write permission for target directory: ${parent.absolutePath}. " +
+                        "Choose a writable path under /sdcard/atlas-ai or grant root access."
+                )
+            }
+            rootBacked = true
         }
 
-        recordBeforeImage(id, target)
+        recordBeforeImage(id, target, rootBacked)
 
         val index = nextEntryIndex(transactionDir) - 1
-        val temp = File(parent, ".${target.name}.atlas-$index.tmp")
-        try {
-            FileOutputStream(temp).use { output ->
-                output.write(content.toByteArray(StandardCharsets.UTF_8))
+        if (rootBacked) {
+            val payload = File(transactionDir, "payload_$index")
+            FileOutputStream(payload).use { output ->
+                output.write(content)
                 output.fd.sync()
             }
-            replaceAtomically(temp, target)
-        } finally {
-            if (temp.exists()) temp.delete()
+            val temp = File(parent, ".${target.name}.atlas-$index.tmp")
+            try {
+                runRootChecked(
+                    "cp ${shellQuote(payload.absolutePath)} ${shellQuote(temp.absolutePath)} && " +
+                        "mv -f ${shellQuote(temp.absolutePath)} ${shellQuote(target.absolutePath)}",
+                    "Could not write target file"
+                )
+            } finally {
+                payload.delete()
+            }
+        } else {
+            val temp = File(parent, ".${target.name}.atlas-$index.tmp")
+            try {
+                FileOutputStream(temp).use { output ->
+                    output.write(content)
+                    output.fd.sync()
+                }
+                replaceAtomically(temp, target)
+            } finally {
+                if (temp.exists()) temp.delete()
+            }
         }
         transactionDir.setLastModified(System.currentTimeMillis())
         return WriteResult(id, target)
@@ -80,6 +117,24 @@ class FileChangeJournal(private val rootDir: File) {
                 }
                 val target = File(metadata.getProperty("path")
                     ?: throw IllegalStateException("Missing target path in ${entryFile.name}"))
+                if (metadata.getProperty("rootBacked").toBoolean()) {
+                    if (metadata.getProperty("existed").toBoolean()) {
+                        val backup = File(transactionDir, metadata.getProperty("backup")
+                            ?: throw IllegalStateException("Missing backup reference in ${entryFile.name}"))
+                        if (!backup.isFile) throw IllegalStateException("Backup is missing for ${target.absolutePath}")
+                        val parent = target.absoluteFile.parentFile
+                            ?: throw IllegalStateException("Target has no parent directory.")
+                        val temp = File(parent, ".${target.name}.atlas-restore.tmp")
+                        runRootChecked(
+                            "cp ${shellQuote(backup.absolutePath)} ${shellQuote(temp.absolutePath)} && " +
+                                "mv -f ${shellQuote(temp.absolutePath)} ${shellQuote(target.absolutePath)}",
+                            "Could not restore ${target.absolutePath}"
+                        )
+                    } else {
+                        runRootChecked("rm -f ${shellQuote(target.absolutePath)}", "Could not remove ${target.absolutePath}")
+                    }
+                    continue
+                }
                 if (metadata.getProperty("existed").toBoolean()) {
                     val backup = File(transactionDir, metadata.getProperty("backup")
                         ?: throw IllegalStateException("Missing backup reference in ${entryFile.name}"))
@@ -118,20 +173,48 @@ class FileChangeJournal(private val rootDir: File) {
             Regex("""entry_(\d+)\.properties""").matchEntire(it.name)?.groupValues?.get(1)?.toIntOrNull()
         }?.maxOrNull() ?: -1) + 1
 
-    private fun recordBeforeImage(transactionId: String, target: File) {
+    private fun recordBeforeImage(transactionId: String, target: File, rootBacked: Boolean = false) {
         val transactionDir = ensureTransactionDirectory(transactionId)
-        if (target.exists() && !target.isFile) {
+        val exists = if (rootBacked) {
+            val result = runRootChecked(
+                "if [ -e ${shellQuote(target.absolutePath)} ]; then " +
+                    "if [ -f ${shellQuote(target.absolutePath)} ]; then echo FILE; else echo NOT_FILE; fi; " +
+                    "else echo MISSING; fi",
+                "Could not inspect target path"
+            )
+            when (result.trim().lineSequence().lastOrNull()) {
+                "FILE" -> true
+                "MISSING" -> false
+                "NOT_FILE" -> throw IllegalArgumentException("Target path is not a regular file: ${target.absolutePath}")
+                else -> throw IllegalStateException("Could not determine target file state: ${target.absolutePath}")
+            }
+        } else {
+            if (target.exists() && !target.isFile) {
+                throw IllegalArgumentException("Target path is not a regular file: ${target.absolutePath}")
+            }
+            target.exists()
+        }
+        if (exists && !rootBacked && !target.isFile) {
             throw IllegalArgumentException("Target path is not a regular file: ${target.absolutePath}")
         }
         val index = nextEntryIndex(transactionDir)
         val backupName = "before_$index"
         val backup = File(transactionDir, backupName)
-        val existed = target.exists()
-        if (existed) target.copyTo(backup, overwrite = false)
+        if (exists) {
+            if (rootBacked) {
+                runRootChecked(
+                    "cp ${shellQuote(target.absolutePath)} ${shellQuote(backup.absolutePath)}",
+                    "Could not back up existing target file"
+                )
+            } else {
+                target.copyTo(backup, overwrite = false)
+            }
+        }
         val metadata = Properties().apply {
             setProperty("path", target.absolutePath)
-            setProperty("existed", existed.toString())
+            setProperty("existed", exists.toString())
             setProperty("backup", backupName)
+            setProperty("rootBacked", rootBacked.toString())
         }
         writePropertiesAtomically(File(transactionDir, "entry_$index.properties"), metadata)
         transactionDir.setLastModified(System.currentTimeMillis())
@@ -179,4 +262,20 @@ class FileChangeJournal(private val rootDir: File) {
             Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
+
+    private fun runRootChecked(command: String, action: String): String {
+        if (!RootShellManager.isRootAvailable()) {
+            throw IllegalStateException("$action: root access is unavailable.")
+        }
+        val (exitCode, lines) = RootShellManager.execWithExitCode(command)
+        if (exitCode != 0) {
+            val detail = lines.joinToString("\n").trim()
+            throw IllegalStateException(
+                if (detail.isBlank()) "$action (exit code $exitCode)." else "$action (exit code $exitCode): $detail"
+            )
+        }
+        return lines.joinToString("\n")
+    }
+
+    private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 }
