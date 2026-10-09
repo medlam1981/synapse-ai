@@ -89,10 +89,16 @@ fun LiveCanvasContent(onClose: () -> Unit) {
     var isLoading by remember { mutableStateOf(false) }
 
     // Resolve target webapp index file
-    val primaryFile = File("/sdcard/Medlam-Ai/webapp/index.html")
-    val fallbackFile = File("/sdcard/Medlam-Ai/index.html")
-    val activeFile = if (primaryFile.exists()) primaryFile else fallbackFile
-    val displayPath = if (primaryFile.exists()) "webapp/index.html" else if (fallbackFile.exists()) "index.html" else "webapp/index.html"
+    val primaryFile = File("/sdcard/atlas-ai/webapp/index.html")
+    val fallbackFile = File("/sdcard/atlas-ai/index.html")
+    val legacyPrimaryFile = File("/sdcard/Medlam-Ai/webapp/index.html")
+    val legacyFallbackFile = File("/sdcard/Medlam-Ai/index.html")
+    val activeFile = listOf(primaryFile, fallbackFile, legacyPrimaryFile, legacyFallbackFile)
+        .firstOrNull { it.exists() } ?: primaryFile
+    val displayPath = when (activeFile) {
+        primaryFile, legacyPrimaryFile -> "webapp/index.html"
+        else -> "index.html"
+    }
 
     // Zero-Leak Lifecycle Guardrail on disposal
     DisposableEffect(Unit) {
@@ -302,7 +308,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Generate web applications using /code or asking MEDLAM AI to build in /sdcard/Medlam-Ai/webapp/.",
+                        text = "Generate web applications using /code or asking MEDLAM AI to build in /sdcard/atlas-ai/webapp/.",
                         color = Color(0xFF64748B),
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,

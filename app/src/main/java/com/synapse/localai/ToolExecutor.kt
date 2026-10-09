@@ -27,13 +27,13 @@ data class ExtractedCodeBlock(
 object ToolExecutor {
 
     private const val TAG = "ToolExecutor"
-    const val BASE_DIR = "/sdcard/Medlam-Ai"
+    const val BASE_DIR = "/sdcard/atlas-ai"
 
     private val FILE_PATH_PATTERNS = listOf(
         Regex("""(?:file|path|save to|write to|create file|filename)[:\s]+[`"']?([^\s`"'\n]+\.[a-zA-Z0-9]{1,10})[`"']?""", RegexOption.IGNORE_CASE),
         Regex("""(?://|/\*|#|<!--)\s*(?:file|path)[:\s]+([^\s*`"'\n]+\.[a-zA-Z0-9]{1,10})""", RegexOption.IGNORE_CASE),
         Regex("""(?:Synthesizing|Scaffolding)\s+([^\s`"'\n:\]]+\.[a-zA-Z0-9]{1,10})""", RegexOption.IGNORE_CASE),
-        Regex("""(/sdcard/Medlam-Ai/[^\s\n"'`\]:]+\.[a-zA-Z0-9]{1,10})""")
+        Regex("""(/sdcard/atlas-ai/[^\s\n"'`\]:]+\.[a-zA-Z0-9]{1,10})""")
     )
 
     private val WEB_EXTENSIONS = setOf("html", "htm", "css", "js", "ts", "jsx", "tsx", "vue", "svelte")

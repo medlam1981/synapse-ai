@@ -47,7 +47,7 @@ object StreamDemultiplexer {
             val executionId: String = UUID.randomUUID().toString(),
             val command: String,
             val output: String,
-            val exitCode: Int = 0,
+            val exitCode: Int = -1,
             val isRunning: Boolean = false
         ) : DemuxBlock()
         data class Image(
@@ -802,7 +802,7 @@ object StreamDemultiplexer {
             val attrMap = RE_ATTR_PAIR.findAll(attrs).associate { it.groupValues[1].lowercase() to it.groupValues[3] }
 
             val cmd = unescapeXml(attrMap["command"] ?: "")
-            val exitCode = attrMap["exit_code"]?.toIntOrNull() ?: 0
+            val exitCode = attrMap["exit_code"]?.toIntOrNull() ?: -1
             val explicitId = attrMap["id"] ?: attrMap["execution_id"]
             val output = unescapeXml(innerContent.trim())
             val isClosed = m.value.contains("</terminal_frame>")
@@ -836,7 +836,7 @@ object StreamDemultiplexer {
                     executionId = execId,
                     command = cmd,
                     output = output,
-                    exitCode = 0,
+                    exitCode = -1,
                     isRunning = !isClosed
                 )
             }
@@ -862,7 +862,7 @@ object StreamDemultiplexer {
                         executionId = id,
                         command = cmd,
                         output = if (isClosed) "" else "[Executing command...]",
-                        exitCode = 0,
+                        exitCode = -1,
                         isRunning = !isClosed
                     )
                 }

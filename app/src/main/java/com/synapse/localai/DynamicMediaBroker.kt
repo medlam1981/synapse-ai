@@ -256,8 +256,8 @@ object DynamicMediaBroker {
         if (modelFile == null || !modelFile.exists()) {
             Log.w(TAG, "No compatible Image Diffusion GGUF found on device.")
             return@withContext MediaResult.FallbackMessage(
-                messageEn = "Local Image Diffusion model not found in storage. Please place your .gguf model in /sdcard/Download or /sdcard/Medlam-Ai/models.",
-                messageAr = "لم يتم العثور على نموذج توليد الصور في وحدة التخزين. يرجى وضع نموذج الـ GGUF في مجلد التنزيلات أو Medlam-Ai/models.",
+                messageEn = "Local Image Diffusion model not found in storage. Please place your .gguf model in /sdcard/Download or /sdcard/atlas-ai/models.",
+                messageAr = "لم يتم العثور على نموذج توليد الصور في وحدة التخزين. يرجى وضع نموذج الـ GGUF في مجلد التنزيلات أو atlas-ai/models.",
                 isArabicPrompt = isArabic
             )
         }
@@ -574,8 +574,8 @@ object DynamicMediaBroker {
 
     private fun findAnyDiffusionModel(context: Context): File? {
         val searchDirs = listOf(
-            File("/sdcard/Medlam-Ai/models"),
-            File("/sdcard/Medlam-Ai"),
+            File("/sdcard/atlas-ai/models"),
+            File("/sdcard/atlas-ai"),
             File("/sdcard/Download"),
             File("/storage/emulated/0/Download"),
             File(context.filesDir, "models")

@@ -46,6 +46,13 @@ data class AgentTask(
     val criteriaVerified: Boolean = false
 )
 
+internal fun canMarkTaskCompleted(task: AgentTask): Boolean =
+    if (task.taskType == "AGENT_TASK") {
+        task.acceptanceCriteria.isNotEmpty() && task.criteriaVerified
+    } else {
+        task.acceptanceCriteria.isEmpty() || task.criteriaVerified
+    }
+
 class TaskNeedsUserInputException(val question: String) : Exception(question)
 
 class TaskMemoryManager(context: Context) {
@@ -355,7 +362,7 @@ class TaskMemoryManager(context: Context) {
             val index = tasks.indexOfFirst { it.id == id }
             if (index != -1) {
                 val task = tasks[index]
-                if (task.acceptanceCriteria.isNotEmpty() && !task.criteriaVerified) {
+                if (!canMarkTaskCompleted(task)) {
                     throw IllegalStateException("Task cannot be marked complete before all acceptance criteria are verified.")
                 }
                 val completed = task.copy(

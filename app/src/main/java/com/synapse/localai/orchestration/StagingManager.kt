@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets
 /**
  * Staging Buffer Quarantine Engine:
  * Strictly isolates all interim files, generated code, and worker artifacts
- * inside a transient sandbox (/sdcard/Medlam-Ai/.staging/run_<session_id>_<timestamp>/)
+ * inside a transient sandbox (/sdcard/atlas-ai/.staging/run_<session_id>_<timestamp>/)
  * prior to audit and atomic production promotion.
  */
 class StagingManager(
@@ -22,7 +22,7 @@ class StagingManager(
 ) {
     companion object {
         private const val TAG = "StagingManager"
-        const val STAGING_BASE_DIR = "/sdcard/Medlam-Ai/.staging"
+        const val STAGING_BASE_DIR = "/sdcard/atlas-ai/.staging"
     }
 
     val runId: String = "run_${sessionId.take(8)}_${System.currentTimeMillis()}"

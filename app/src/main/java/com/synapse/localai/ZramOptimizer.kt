@@ -130,12 +130,12 @@ object ZramOptimizer {
         try {
             val dirs = listOf(
                 File("/sdcard/Download"),
-                File("/sdcard/Medlam-Ai"),
-                File("/sdcard/Medlam-Ai/models"),
-                File("/sdcard/Medlam-Ai/Models"),
-                File("/sdcard/Medlam-Ai/mtp"),
-                File("/sdcard/Medlam-Ai/Mtp"),
-                File("/sdcard/Medlam-Ai/slots")
+                File("/sdcard/atlas-ai"),
+                File("/sdcard/atlas-ai/models"),
+                File("/sdcard/atlas-ai/Models"),
+                File("/sdcard/atlas-ai/mtp"),
+                File("/sdcard/atlas-ai/Mtp"),
+                File("/sdcard/atlas-ai/slots")
             )
             for (d in dirs) {
                 if (!d.exists()) d.mkdirs()

@@ -17,7 +17,7 @@ import java.nio.charset.StandardCharsets
 object PythonExecutionEngine {
 
     private const val TAG = "PythonExecutionEngine"
-    private const val SCRATCH_DIR = "/sdcard/Medlam-Ai/scratch"
+    private const val SCRATCH_DIR = "/sdcard/atlas-ai/scratch"
 
     data class PythonResult(
         val success: Boolean,

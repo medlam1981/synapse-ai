@@ -13,12 +13,13 @@ import java.util.Collections
  * Persistent Vector Memory Engine (Long-Term Context & Semantic Recall).
  *
  * Persists user preferences, recurring scripts, project context, and knowledge
- * across working sessions in `/sdcard/Medlam-Ai/memory/vector_store.json`.
+ * across working sessions in `/sdcard/atlas-ai/memory/vector_store.json`.
  */
 object VectorMemoryManager {
 
     private const val TAG = "VectorMemory"
-    private const val PRIMARY_DIR = "/sdcard/Medlam-Ai/memory"
+    private const val PRIMARY_DIR = "/sdcard/atlas-ai/memory"
+    private const val LEGACY_VECTOR_FILE = "/sdcard/Medlam-Ai/memory/vector_store.json"
     private const val VECTOR_FILE = "vector_store.json"
 
     private val records = Collections.synchronizedList(mutableListOf<VectorRecord>())
@@ -171,7 +172,13 @@ object VectorMemoryManager {
 
     private fun loadRecords() {
         try {
-            val file = getStorageFile()
+            val primaryFile = File(PRIMARY_DIR, VECTOR_FILE)
+            val legacyFile = File(LEGACY_VECTOR_FILE)
+            val file = when {
+                primaryFile.exists() -> primaryFile
+                legacyFile.exists() -> legacyFile
+                else -> getStorageFile()
+            }
             if (!file.exists()) {
                 seedInitialPreferences()
                 return

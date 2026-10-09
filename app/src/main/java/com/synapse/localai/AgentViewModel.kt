@@ -231,7 +231,7 @@ class AgentViewModel : ViewModel() {
         private const val MAX_HISTORY_MESSAGES = 48
         private const val MAX_TASK_ITERATIONS = 128
         private const val MAX_TOOL_CALLS_PER_TURN = 32
-        private const val AGENTS_DIR = "/sdcard/Medlam-Ai/Agents"
+        private const val AGENTS_DIR = "/sdcard/atlas-ai/Agents"
         
         var instance: AgentViewModel? = null
             private set
@@ -366,7 +366,7 @@ class AgentViewModel : ViewModel() {
         return try {
             val baseDir = File("/sdcard/Pictures/SynapseAI").takeIf { it.exists() || it.mkdirs() }
                 ?: File("/sdcard/Download").takeIf { it.exists() || it.mkdirs() }
-                ?: File("/sdcard/Medlam-Ai").apply { if (!exists()) mkdirs() }
+                ?: File("/sdcard/atlas-ai").apply { if (!exists()) mkdirs() }
             val safePrompt = prompt.take(20).replace(Regex("[^a-zA-Z0-9_-]"), "_").trim('_')
             val fileName = "img_${System.currentTimeMillis()}${if (safePrompt.isNotBlank()) "_$safePrompt" else ""}.jpg"
             val file = File(baseDir, fileName)
@@ -780,7 +780,7 @@ class AgentViewModel : ViewModel() {
     fun toggleLiveCanvas() { _uiState.update { it.copy(isLiveCanvasOpen = !it.isLiveCanvasOpen) } }
 
     fun executeRollback(context: Context? = null): String {
-        val targetDir = File("/sdcard/Medlam-Ai/webapp")
+        val targetDir = File("/sdcard/atlas-ai/webapp")
         val (success, message) = SnapshotManager.rollbackLatest(targetDir)
         val exitCode = if (success) 0 else 1
         val safeCmd = "rollback"

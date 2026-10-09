@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit
 object ScreenVisionTool {
 
     private const val TAG = "ScreenVisionTool"
-    const val DEFAULT_SCREENSHOT_PATH = "/sdcard/Medlam-Ai/scratch/screenshot.png"
+    const val DEFAULT_SCREENSHOT_PATH = "/sdcard/atlas-ai/scratch/screenshot.png"
 
     data class VisualElement(
         val text: String,

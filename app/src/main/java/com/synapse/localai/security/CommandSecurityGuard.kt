@@ -14,12 +14,12 @@ import java.util.Locale
  * 1. Risk Tier Classification: Distinguishes safe read-only queries from sensitive modifications.
  * 2. Destructive Command Interception: Blocks bricking commands such as rm -rf / or dd to block devices.
  * 3. Execution Sanitization: Strips hazardous environment variable injections (LD_PRELOAD, LD_LIBRARY_PATH).
- * 4. Audit Trail: Persists structured security event logs to /sdcard/Medlam-Ai/logs/security_audit.log.
+ * 4. Audit Trail: Persists structured security event logs to /sdcard/atlas-ai/logs/security_audit.log.
  */
 object CommandSecurityGuard {
 
     private const val TAG = "CommandSecurityGuard"
-    private const val AUDIT_LOG_FILE = "/sdcard/Medlam-Ai/logs/security_audit.log"
+    private const val AUDIT_LOG_FILE = "/sdcard/atlas-ai/logs/security_audit.log"
 
     enum class RiskTier {
         SAFE,

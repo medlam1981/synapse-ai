@@ -80,7 +80,7 @@ class GeminiModelClient(
     private fun fileLog(msg: String) {
         Log.d(TAG, msg)
         try {
-            val dir = File("/sdcard/Medlam-Ai")
+            val dir = File("/sdcard/atlas-ai")
             if (!dir.exists()) dir.mkdirs()
             File(dir, "gguf_log.txt").appendText("[${Date()}] [GEMINI] $msg\n")
         } catch (_: Exception) {}

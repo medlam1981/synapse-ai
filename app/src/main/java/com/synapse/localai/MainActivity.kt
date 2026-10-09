@@ -351,7 +351,7 @@ class MainActivity : ComponentActivity() {
 
     private fun logToCrashFile(message: String) {
         try {
-            val dir = File("/sdcard/Medlam-Ai")
+            val dir = File("/sdcard/atlas-ai")
             if (!dir.exists()) dir.mkdirs()
             val file = File(dir, "crash_report.txt")
             val fos = FileOutputStream(file, true)

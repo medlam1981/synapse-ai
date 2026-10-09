@@ -8,9 +8,9 @@ import java.util.UUID
  * Local Checkpoints & Instant Rollback Engine
  *
  * 1. Pre-Promotion Snapshot Buffer:
- *    Before promoting verified files from .staging/ to /sdcard/Medlam-Ai/webapp/:
+ *    Before promoting verified files from .staging/ to /sdcard/atlas-ai/webapp/:
  *    - Archive current production files into local snapshot directory:
- *      /sdcard/Medlam-Ai/.snapshots/snap_<timestamp>_<short_hash>/
+ *      /sdcard/atlas-ai/.snapshots/snap_<timestamp>_<short_hash>/
  *    - Maintain a ring buffer of strictly the last 5 snapshots; automatically prune older folders to prevent storage bloat.
  *
  * 2. Rollback Execution (/rollback):
@@ -19,7 +19,7 @@ import java.util.UUID
  */
 object SnapshotManager {
     private const val TAG = "SnapshotManager"
-    const val SNAPSHOTS_BASE_DIR = "/sdcard/Medlam-Ai/.snapshots"
+    const val SNAPSHOTS_BASE_DIR = "/sdcard/atlas-ai/.snapshots"
     const val MAX_SNAPSHOTS = 5
 
     /**
@@ -88,7 +88,7 @@ object SnapshotManager {
      * Restores production files from the latest snapshot.
      */
     @Synchronized
-    fun rollbackLatest(targetDir: File = File("/sdcard/Medlam-Ai/webapp")): Pair<Boolean, String> {
+    fun rollbackLatest(targetDir: File = File("/sdcard/atlas-ai/webapp")): Pair<Boolean, String> {
         try {
             val latest = getLatestSnapshot()
                 ?: return Pair(false, "Rollback Aborted: No snapshot checkpoints found in $SNAPSHOTS_BASE_DIR")

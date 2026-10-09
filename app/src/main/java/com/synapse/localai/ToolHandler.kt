@@ -11,7 +11,7 @@ import java.io.File
  * Dispatches and chains:
  * 1. open_app: Delegates to AppLauncherManager (deterministic alias map, PM resolution, direct shell launch fallback).
  * 2. web_search: Delegates to WebSearchClient (query distillation, multi-tier search, curl shell scraping, zero-surrender policy).
- * 3. write_file: Delegates to atomic disk writer in /sdcard/Medlam-Ai/.
+ * 3. write_file: Delegates to atomic disk writer in /sdcard/atlas-ai/.
  * 4. run_shell: Intercepts am start and heredoc writes; passes through clean commands.
  */
 object ToolHandler {

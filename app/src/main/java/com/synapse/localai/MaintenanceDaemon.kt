@@ -22,7 +22,7 @@ import java.util.Locale
  *    defers expensive disk operations and adjusts scheduler intervals during low battery (<20%).
  * 2. Automated System Checks: Diagnoses storage, RAM, swap, CPU thermal status, and background processes.
  * 3. Autonomous State Backup: Periodically snapshots agent mind, task history, and vector memory
- *    to /sdcard/Medlam-Ai/backups/.
+ *    to /sdcard/atlas-ai/backups/.
  * 4. Scratch & Cache Hygiene: Purges ephemeral execution artifacts older than 48 hours to preserve flash storage.
  */
 class MaintenanceDaemon(
@@ -32,9 +32,9 @@ class MaintenanceDaemon(
 
     companion object {
         private const val TAG = "MaintenanceDaemon"
-        private const val BACKUP_DIR = "/sdcard/Medlam-Ai/backups"
-        private const val SCRATCH_DIR = "/sdcard/Medlam-Ai/scratch"
-        private const val LOGS_DIR = "/sdcard/Medlam-Ai/logs"
+        private const val BACKUP_DIR = "/sdcard/atlas-ai/backups"
+        private const val SCRATCH_DIR = "/sdcard/atlas-ai/scratch"
+        private const val LOGS_DIR = "/sdcard/atlas-ai/logs"
         private const val LOW_BATTERY_THRESHOLD = 20
     }
 
@@ -127,10 +127,11 @@ class MaintenanceDaemon(
             backupRoot.put("activeTasks", tasksArray)
 
             // Backup mind file if exists
-            val mindFile = File("/sdcard/Medlam-Ai/memory/agent_mind.json")
-            if (mindFile.exists()) {
-                backupRoot.put("agentMind", JSONObject(mindFile.readText(StandardCharsets.UTF_8)))
-            }
+            val mindFile = listOf(
+                File("/sdcard/atlas-ai/memory/agent_mind.json"),
+                File("/sdcard/Medlam-Ai/memory/agent_mind.json")
+            ).firstOrNull { it.exists() }
+            mindFile?.let { backupRoot.put("agentMind", JSONObject(it.readText(StandardCharsets.UTF_8))) }
 
             backupFile.writeText(backupRoot.toString(2), StandardCharsets.UTF_8)
             val msg = "✔ Autonomous backup saved to ${backupFile.absolutePath} (${backupFile.length()} bytes)"

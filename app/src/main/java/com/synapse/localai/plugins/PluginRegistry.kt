@@ -16,12 +16,13 @@ import java.util.concurrent.ConcurrentHashMap
  * Dynamic Modular Plugin Engine & Tool Registry.
  *
  * Enables dynamic discovery, hot-loading, parameter validation, and execution of custom developer tools
- * from `/sdcard/Medlam-Ai/plugins/` without recompiling the application.
+ * from `/sdcard/atlas-ai/plugins/` without recompiling the application.
  */
 object PluginRegistry {
 
     private const val TAG = "PluginRegistry"
-    private const val EXTERNAL_PLUGIN_DIR = "/sdcard/Medlam-Ai/plugins"
+    private const val EXTERNAL_PLUGIN_DIR = "/sdcard/atlas-ai/plugins"
+    private const val LEGACY_PLUGIN_DIR = "/sdcard/Medlam-Ai/plugins"
     private const val FALLBACK_PLUGIN_DIR = "/data/local/tmp/plugins"
 
     private val plugins = ConcurrentHashMap<String, PluginManifest>()
@@ -43,6 +44,7 @@ object PluginRegistry {
     fun reloadPlugins(context: Context? = null) {
         val loaded = mutableListOf<PluginManifest>()
         val primaryDir = File(EXTERNAL_PLUGIN_DIR)
+        val legacyDir = File(LEGACY_PLUGIN_DIR)
         val appInternalDir = context?.let { File(it.filesDir, "plugins") }
         val fallbackDir = File(FALLBACK_PLUGIN_DIR)
 
@@ -50,7 +52,7 @@ object PluginRegistry {
         if (!primaryDir.exists()) primaryDir.mkdirs()
         seedDefaultPlugins(primaryDir)
 
-        listOfNotNull(primaryDir, appInternalDir, fallbackDir).forEach { dir ->
+        listOfNotNull(legacyDir, primaryDir, appInternalDir, fallbackDir).forEach { dir ->
             if (dir.exists() && dir.isDirectory) {
                 dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }?.forEach { file ->
                     try {

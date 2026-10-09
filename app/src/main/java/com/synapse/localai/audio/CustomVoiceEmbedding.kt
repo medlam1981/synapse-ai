@@ -54,9 +54,9 @@ class CustomVoiceEmbedding(
          * Standard paths checked on device storage for pre-computed CustomVoice weights.
          */
         val SEARCH_PATHS = listOf(
-            "/sdcard/Medlam-Ai/voice/speaker_embedding.bin",
-            "/sdcard/Medlam-Ai/voice/speaker_embedding.npy",
-            "/sdcard/Medlam-Ai/tts/speaker_embedding.bin",
+            "/sdcard/atlas-ai/voice/speaker_embedding.bin",
+            "/sdcard/atlas-ai/voice/speaker_embedding.npy",
+            "/sdcard/atlas-ai/tts/speaker_embedding.bin",
             "/sdcard/Download/speaker_embedding.bin",
             "/sdcard/Download/speaker_embedding.npy"
         )

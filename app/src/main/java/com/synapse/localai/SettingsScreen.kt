@@ -762,7 +762,7 @@ fun SettingsScreenContent(
                     }
 
                     if (models.isEmpty() && !isScanning) {
-                        Text("No .gguf models found in /sdcard/Medlam-Ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                        Text("No .gguf models found in /sdcard/atlas-ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                     }
 
                     // Base Model Picker
@@ -771,7 +771,7 @@ fun SettingsScreenContent(
                         val distinctBaseModels = models.filter { ModelScanner.isBaseModelFile(it) && !it.name.startsWith(".") }.distinctBy { it.name.lowercase() }
 
                         if (distinctBaseModels.isEmpty() && !isScanning) {
-                            Text("No base .gguf models detected in /sdcard/Medlam-Ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                            Text("No base .gguf models detected in /sdcard/atlas-ai/models.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
                         }
 
                         distinctBaseModels.forEach { file ->

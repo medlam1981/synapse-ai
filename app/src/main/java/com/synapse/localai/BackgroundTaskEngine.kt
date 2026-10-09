@@ -326,18 +326,6 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                     "__INTERNAL_MAINTENANCE_CACHE_CLEANUP__" -> maintenanceDaemon?.runCacheCleanup() ?: "Cleanup finished"
                     else -> "Internal routine finished"
                 }
-            } else if (task.taskType == "AGENT_TASK") {
-                // Route complex agent tasks through the autonomous ReAct loop
-                val activeViewModel = requireNotNull(viewModel)
-                val orchestrator = com.synapse.localai.orchestration.MultiWorkerOrchestrator(
-                    sessionId = task.id,
-                    isCloudMode = activeViewModel.isCloudMode(),
-                    modelInvoker = { sys, usr, onChunk -> activeViewModel.runSingleLlmPass(sys, usr, onChunk) },
-                    fileChangeJournal = activeViewModel.getFileChangeJournal(),
-                    onTelemetryUpdate = { _ -> },
-                    onTerminalLogUpdate = { log -> Log.d(TAG, "Orchestrator: $log") }
-                )
-                orchestrator.executeAutonomousAgent(task.command)
             } else {
                 requireNotNull(viewModel).executeBackgroundTask(task.command, task.id)
             }

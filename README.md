@@ -205,7 +205,7 @@ All libraries compiled natively for `arm64-v8a` without LTO for stability:
 Place your GGUF models on device storage:
 
 ```
-/sdcard/Medlam-Ai/
+/sdcard/atlas-ai/
 ├── models/
 │   ├── gemma-4-E2B-it-qat-UD-Q2_K_XL.gguf
 │   ├── Qwen3.8-2B-BF16.gguf
@@ -219,6 +219,8 @@ Place your GGUF models on device storage:
 └── webapp/
     └── (agent-generated deliverables)
 ```
+
+New files are created under `/sdcard/atlas-ai/`. Existing models, plugins, memories, and web apps under `/sdcard/Medlam-Ai/` remain discoverable/readable; the app does not move or delete that existing data.
 
 ---
 

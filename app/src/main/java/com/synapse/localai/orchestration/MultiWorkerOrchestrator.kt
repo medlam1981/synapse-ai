@@ -34,7 +34,7 @@ class MultiWorkerOrchestrator(
 
     companion object {
         private const val TAG = "MultiWorkerOrch"
-        private const val DEFAULT_PRODUCTION_DIR = "/sdcard/Medlam-Ai/webapp"
+        private const val DEFAULT_PRODUCTION_DIR = "/sdcard/atlas-ai/webapp"
         private val ggufExecutionMutex = Mutex()
 
         /**

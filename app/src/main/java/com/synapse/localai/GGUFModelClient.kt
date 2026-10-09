@@ -81,7 +81,7 @@ class GGUFModelClient {
         private fun fileLog(msg: String) {
             Log.d(TAG, msg)
             try {
-                val dir = File("/sdcard/Medlam-Ai")
+                val dir = File("/sdcard/atlas-ai")
                 if (!dir.exists()) dir.mkdirs()
                 File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] $msg\n")
             } catch (_: Exception) {}
@@ -134,7 +134,7 @@ class GGUFModelClient {
                 val mediaFile = File("/data/media/0", rawSub)
                 try {
                     val parentPath = mediaFile.parentFile?.absolutePath ?: "/data/media/0"
-                    RootShellManager.exec("chmod 755 /data/media /data/media/0 2>/dev/null; chmod -R 755 /data/media/0/Medlam-Ai /data/media/0/Download '$parentPath' 2>/dev/null; chmod 666 '${mediaFile.absolutePath}' 2>/dev/null")
+                    RootShellManager.exec("chmod 755 /data/media /data/media/0 2>/dev/null; chmod -R 755 /data/media/0/atlas-ai /data/media/0/Download '$parentPath' 2>/dev/null; chmod 666 '${mediaFile.absolutePath}' 2>/dev/null")
                 } catch (_: Throwable) {}
                 if (mediaFile.exists() && mediaFile.canRead()) {
                     fileLog("⚡ Direct Zero-FUSE path active: ${mediaFile.absolutePath}")
@@ -558,7 +558,7 @@ class GGUFModelClient {
                 RootShellManager.exec("echo 1024 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null || echo 1024 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null")
             } catch (_: Exception) {}
 
-            val internalLogDir = File("/sdcard/Medlam-Ai")
+            val internalLogDir = File("/sdcard/atlas-ai")
             if (!internalLogDir.exists()) internalLogDir.mkdirs()
             val logFile = File(internalLogDir, "native_log.txt")
             try { logFile.delete() } catch (_: Exception) {}
@@ -1105,9 +1105,9 @@ class GGUFModelClient {
         }
     }
 
-    suspend fun saveSlotState(slotId: Int = 0, filePath: String = "/sdcard/Medlam-Ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
+    suspend fun saveSlotState(slotId: Int = 0, filePath: String = "/sdcard/atlas-ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
         try {
-            val slotsDir = File("/sdcard/Medlam-Ai/slots")
+            val slotsDir = File("/sdcard/atlas-ai/slots")
             if (!slotsDir.exists()) slotsDir.mkdirs()
             val url = URL("$serverUrl/slots/$slotId?action=save&filepath=$filePath")
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -1124,7 +1124,7 @@ class GGUFModelClient {
         }
     }
 
-    suspend fun restoreSlotState(slotId: Int = 0, filePath: String = "/sdcard/Medlam-Ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
+    suspend fun restoreSlotState(slotId: Int = 0, filePath: String = "/sdcard/atlas-ai/slots/persona_slot.bin"): Boolean = withContext(Dispatchers.IO) {
         try {
             val slotFile = File(filePath)
             if (!slotFile.exists() || slotFile.length() == 0L) return@withContext false

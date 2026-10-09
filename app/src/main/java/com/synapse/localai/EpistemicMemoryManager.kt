@@ -22,7 +22,8 @@ import java.io.File
 object EpistemicMemoryManager {
 
     private const val TAG = "EpistemicMemory"
-    private const val PRIMARY_DIR = "/sdcard/Medlam-Ai/memory"
+    private const val PRIMARY_DIR = "/sdcard/atlas-ai/memory"
+    private const val LEGACY_MIND_FILE = "/sdcard/Medlam-Ai/memory/agent_mind.json"
     private const val CHECKPOINT_FILE = "agent_checkpoint.json"
     private const val MIND_FILE = "agent_mind.json"
 
@@ -49,7 +50,7 @@ object EpistemicMemoryManager {
         val name: String = "ATLAS-AI AGENT",
         val role: String = "Autonomous On-Device Neural Core & System Controller",
         val runtime: String = "Android ARM64 native JNI / llama.cpp + Gemini Cloud",
-        val workspaceRoot: String = "/sdcard/Medlam-Ai/",
+        val workspaceRoot: String = "/sdcard/atlas-ai/",
         val preferredLanguages: List<String> = listOf("Dynamic Mirroring (Matches User Prompt)", "English", "Arabic"),
         val tone: String = "Direct, capable, authentic, unconstrained",
         val userPreferences: MutableList<String> = mutableListOf(),
@@ -117,15 +118,21 @@ object EpistemicMemoryManager {
     @Synchronized
     fun loadMind(context: Context?): AgentMind {
         if (cachedMind != null) return cachedMind!!
-        val file = getFile(context, MIND_FILE)
+        val primaryFile = File(PRIMARY_DIR, MIND_FILE)
+        val legacyFile = File(LEGACY_MIND_FILE)
+        val file = when {
+            primaryFile.exists() -> primaryFile
+            legacyFile.exists() -> legacyFile
+            else -> getFile(context, MIND_FILE)
+        }
         if (!file.exists() || file.length() == 0L) {
             val defaultMind = AgentMind().apply {
                 userPreferences.add("Prefers modern idiomatic code (Kotlin, Python, Web)")
                 userPreferences.add("Prefers direct, complete code solutions without placeholders")
                 learnedFacts.add("Device architecture: ARM64-v8a running local GGUF and Gemini Cloud")
-                learnedFacts.add("Base workspace root: /sdcard/Medlam-Ai/")
-                learnedFacts.add("Local neural models: /sdcard/Medlam-Ai/models/")
-                learnedFacts.add("Speculative MTP drafts: /sdcard/Medlam-Ai/mtp/")
+                learnedFacts.add("Base workspace root: /sdcard/atlas-ai/")
+                learnedFacts.add("Local neural models: /sdcard/atlas-ai/models/")
+                learnedFacts.add("Speculative MTP drafts: /sdcard/atlas-ai/mtp/")
             }
             saveMind(context, defaultMind)
             cachedMind = defaultMind
@@ -152,14 +159,21 @@ object EpistemicMemoryManager {
                 name = idObj.optString("name", "ATLAS-AI AGENT"),
                 role = idObj.optString("role", "Autonomous On-Device Neural Core & System Controller"),
                 runtime = idObj.optString("runtime", "Android ARM64 native JNI / llama.cpp + Gemini Cloud"),
-                workspaceRoot = idObj.optString("workspace_root", "/sdcard/Medlam-Ai/"),
+                workspaceRoot = idObj.optString("workspace_root", "/sdcard/atlas-ai/")
+                    .replace("/sdcard/Medlam-Ai", "/sdcard/atlas-ai"),
                 preferredLanguages = if (languages.isNotEmpty()) languages else listOf("Arabic", "Moroccan Darija", "English"),
                 tone = userObj.optString("tone", "Direct, capable, authentic, unconstrained"),
                 userPreferences = prefs,
-                learnedFacts = facts
+                learnedFacts = facts.map {
+                    it.replace("/sdcard/Medlam-Ai", "/sdcard/atlas-ai")
+                }.toMutableList()
             )
             cachedMind = mind
-            if (json.has("active_projects") || json.has("recent_paths") || !userObj.has("user_preferences")) {
+            if (file.absolutePath == legacyFile.absolutePath ||
+                json.has("active_projects") ||
+                json.has("recent_paths") ||
+                !userObj.has("user_preferences")
+            ) {
                 saveMind(context, mind)
             }
             mind

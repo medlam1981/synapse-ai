@@ -30,8 +30,8 @@ class OnnxTtsEngine(private val context: Context? = null) {
         const val PIPER_SAMPLE_RATE = 22050 // 22.05 kHz audio for Piper VITS
 
         val TTS_DIRS = listOf(
-            "/sdcard/Medlam-Ai/tts",
-            "/sdcard/Medlam-Ai/voice",
+            "/sdcard/atlas-ai/tts",
+            "/sdcard/atlas-ai/voice",
             "/sdcard/Download"
         )
     }

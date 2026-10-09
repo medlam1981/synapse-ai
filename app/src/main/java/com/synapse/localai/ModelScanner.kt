@@ -20,12 +20,13 @@ object ModelScanner {
     private const val TAG = "ModelScanner"
 
     // Primary dirs (canonical)
-    const val MODELS_DIR   = "/sdcard/Medlam-Ai/models"
-    const val MTP_DIR      = "/sdcard/Medlam-Ai/mtp"
-    const val PERSONAS_DIR = "/sdcard/Medlam-Ai/personas"
-    const val TTS_DIR      = "/sdcard/Medlam-Ai/tts"
-    const val VOICE_DIR    = "/sdcard/Medlam-Ai/voice"
-    const val ROOT_DIR     = "/sdcard/Medlam-Ai"
+    const val MODELS_DIR   = "/sdcard/atlas-ai/models"
+    const val MTP_DIR      = "/sdcard/atlas-ai/mtp"
+    const val PERSONAS_DIR = "/sdcard/atlas-ai/personas"
+    const val TTS_DIR      = "/sdcard/atlas-ai/tts"
+    const val VOICE_DIR    = "/sdcard/atlas-ai/voice"
+    const val ROOT_DIR     = "/sdcard/atlas-ai"
+    private const val LEGACY_ROOT_DIR = "/sdcard/Medlam-Ai"
 
     const val PREF_CACHED_BASE     = "cached_base_models_manifest"
     const val PREF_CACHED_MTP      = "cached_mtp_models_manifest"
@@ -35,37 +36,56 @@ object ModelScanner {
 
     // All case variants to search (case-insensitive FS support)
     private val MODELS_DIRS = listOf(
-        "/sdcard/Medlam-Ai/models",
-        "/sdcard/Medlam-Ai/Models",
+        "/sdcard/atlas-ai/models",
+        "/sdcard/atlas-ai/Models",
+        "/storage/emulated/0/atlas-ai/models",
+        "/storage/emulated/0/atlas-ai/Models",
+        "$LEGACY_ROOT_DIR/models",
+        "$LEGACY_ROOT_DIR/Models",
         "/storage/emulated/0/Medlam-Ai/models",
         "/storage/emulated/0/Medlam-Ai/Models"
     )
 
     private val MTP_DIRS = listOf(
-        "/sdcard/Medlam-Ai/mtp",
-        "/sdcard/Medlam-Ai/Mtp",
-        "/sdcard/Medlam-Ai/MTP",
+        "/sdcard/atlas-ai/mtp",
+        "/sdcard/atlas-ai/Mtp",
+        "/sdcard/atlas-ai/MTP",
+        "/storage/emulated/0/atlas-ai/mtp",
+        "/storage/emulated/0/atlas-ai/Mtp",
+        "$LEGACY_ROOT_DIR/mtp",
+        "$LEGACY_ROOT_DIR/Mtp",
+        "$LEGACY_ROOT_DIR/MTP",
         "/storage/emulated/0/Medlam-Ai/mtp",
         "/storage/emulated/0/Medlam-Ai/Mtp"
     )
 
     private val TTS_DIRS = listOf(
-        "/sdcard/Medlam-Ai/tts",
-        "/sdcard/Medlam-Ai/Tts",
-        "/sdcard/Medlam-Ai/TTS",
+        "/sdcard/atlas-ai/tts",
+        "/sdcard/atlas-ai/Tts",
+        "/sdcard/atlas-ai/TTS",
+        "/storage/emulated/0/atlas-ai/tts",
+        "/storage/emulated/0/atlas-ai/Tts",
+        "$LEGACY_ROOT_DIR/tts",
+        "$LEGACY_ROOT_DIR/Tts",
+        "$LEGACY_ROOT_DIR/TTS",
         "/storage/emulated/0/Medlam-Ai/tts",
         "/storage/emulated/0/Medlam-Ai/Tts"
     )
 
     private val VOICE_DIRS = listOf(
-        "/sdcard/Medlam-Ai/voice",
-        "/sdcard/Medlam-Ai/Voice",
+        "/sdcard/atlas-ai/voice",
+        "/sdcard/atlas-ai/Voice",
+        "/storage/emulated/0/atlas-ai/voice",
+        "/storage/emulated/0/atlas-ai/Voice",
+        "$LEGACY_ROOT_DIR/voice",
+        "$LEGACY_ROOT_DIR/Voice",
         "/storage/emulated/0/Medlam-Ai/voice",
         "/storage/emulated/0/Medlam-Ai/Voice"
     )
 
     private val LEGACY_DIRS = listOf(
-        "/sdcard/Medlam-Ai",
+        "/sdcard/atlas-ai",
+        LEGACY_ROOT_DIR,
         "/sdcard/Models",
         "/sdcard/Download",
         "/storage/emulated/0/Download"
@@ -419,10 +439,14 @@ object ModelScanner {
 
         val candidateModelDirs = listOf(
             File(MODELS_DIR),
+            File("/storage/emulated/0/atlas-ai/models"),
+            File("$LEGACY_ROOT_DIR/models"),
             File("/storage/emulated/0/Medlam-Ai/models"),
             File("/sdcard/Download"),
             File("/storage/emulated/0/Download"),
-            File("/sdcard/Medlam-Ai"),
+            File("/sdcard/atlas-ai"),
+            File("/storage/emulated/0/atlas-ai"),
+            File(LEGACY_ROOT_DIR),
             File("/storage/emulated/0/Medlam-Ai")
         )
             .filter { it.exists() && it.isDirectory }
@@ -446,6 +470,8 @@ object ModelScanner {
         // 1. Scan dedicated MTP directories (all .gguf files inside /mtp/)
         val candidateMtpDirs = listOf(
             File(MTP_DIR),
+            File("/storage/emulated/0/atlas-ai/mtp"),
+            File("$LEGACY_ROOT_DIR/mtp"),
             File("/storage/emulated/0/Medlam-Ai/mtp"),
             File("/sdcard/mtp"),
             File("/storage/emulated/0/mtp")
@@ -462,10 +488,14 @@ object ModelScanner {
         // 2. Scan model and download directories for files identified as MTP / companion drafts (all quants: q1..q8, f16, bf16...)
         val candidateModelDirs = listOf(
             File(MODELS_DIR),
+            File("/storage/emulated/0/atlas-ai/models"),
+            File("$LEGACY_ROOT_DIR/models"),
             File("/storage/emulated/0/Medlam-Ai/models"),
             File("/sdcard/Download"),
             File("/storage/emulated/0/Download"),
-            File("/sdcard/Medlam-Ai"),
+            File("/sdcard/atlas-ai"),
+            File("/storage/emulated/0/atlas-ai"),
+            File(LEGACY_ROOT_DIR),
             File("/storage/emulated/0/Medlam-Ai")
         )
             .filter { it.exists() && it.isDirectory }
