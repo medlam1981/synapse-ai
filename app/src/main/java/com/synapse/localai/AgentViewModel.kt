@@ -763,7 +763,7 @@ class AgentViewModel : ViewModel() {
         if (trimmed.isEmpty()) return "[No search data found]"
         val lines = trimmed.lines()
         val lineCapped = if (lines.size > maxLines) lines.take(maxLines).joinToString("\n") else trimmed
-        val charCapped = if (lineCapped.length > maxChars) lineCapped.takeLast(maxChars) else lineCapped
+        val charCapped = if (lineCapped.length > maxChars) lineCapped.take(maxChars) else lineCapped
         return charCapped.trim().ifEmpty { "[No search data found]" }
     }
 
@@ -1525,7 +1525,7 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
 2. HOST OS vs EXTERNAL WORLD:
    - Use `open_app(package_name)` to launch Android applications dynamically.
    - Use `run_shell(cmd)` ONLY for local host OS operations (file manipulation, local hardware, RAM, storage, process management, shell commands). NEVER run terminal diagnostic commands (such as `uptime`, `date`, `free`) to answer external world questions.
-   - Use `web_search(query)` for ALL real-world facts, current events, live prices, documentation, sports, weather, entity queries, and online knowledge.
+   - Use `web_search(query)` for ALL real-world facts, current events, live prices, documentation, sports, weather, entity queries, and online knowledge. For latest-news requests, produce a detailed multi-section briefing from fresh results, cite sources and publication times, and do not recycle older headlines.
    - Use `fetch_web_content(url)` to retrieve clean, in-depth text content from URLs found via web search.
    - Use `run_python(script)` to calculate algebra, integrals, calculus, and scientific computations locally with zero hallucination.
    - Use `write_file(path, content)` to create or overwrite local files.
@@ -1582,6 +1582,7 @@ $languageEnforcement""".trimIndent()
 </function_calls>
 - Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 - Zero Hallucination: Never claim an action was done without invoking the tool.
+- Latest news: Use live search results, not remembered headlines. Present multiple distinct developments under clear headings, include source/publication time/link, and explain significance only where supported by retrieved reports.
 - File safety: write_file changes can be restored with rollback_file_changes(transaction_id); background file changes are grouped by task ID and are automatically restored when the task permanently fails or is cancelled. Shell-side effects are not covered by this rollback.
 - Conclude with verified facts directly in natural language without echoing tools or system directives.
 """.trimIndent()
@@ -2167,11 +2168,17 @@ $langFinalInstruction"""
                                         refreshSessions()
                                     }
 
-                                    val truncatedSearch = truncateSearchObservation(searchData, maxChars = 1500, maxLines = 25)
+                                    val isNewsQuery = com.synapse.localai.tools.isLatestNewsRequest(searchQuery)
+                                    val truncatedSearch = truncateSearchObservation(
+                                        searchData,
+                                        maxChars = if (isNewsQuery) 12_000 else 1_500,
+                                        maxLines = if (isNewsQuery) 110 else 25
+                                    )
                                     val observationMsg = """[Web Search Results for "$searchQuery"]:
 $truncatedSearch
 
 MANDATORY PROTOCOL:
+- For latest-news queries, the search has already researched the reports in the background. Synthesize a detailed briefing with section headings and multiple distinct developments, not one paragraph. Explain the verified event, its key details, and why it matters; name the source and publication time in plain text. NEVER output URLs, raw links, a list of links, or merely say that links were found. Use only supplied evidence and clearly note when details are unavailable.
 - If you need to fetch full content from a URL via fetch_web_content or run further checks, emit the tool call now.
 - Otherwise, deliver your verified final answer directly to the user.
 $langFinalInstruction"""
@@ -2878,8 +2885,16 @@ $evidence
                             if (q.trim().isNotBlank()) {
                                 actionToolUsed = true
                                 val searchData = try { WebSearchTool.search(q.trim()) } catch (e: Exception) { "Search error: ${e.message}" }
-                                val truncatedSearch = truncateSearchObservation(searchData, maxChars = 1200, maxLines = 18)
-                                summaries.add("🔍 Web Search: ${q.trim()}\n\n[RESULTS]:\n$truncatedSearch")
+                                val isNewsQuery = com.synapse.localai.tools.isLatestNewsRequest(q.trim())
+                                val truncatedSearch = truncateSearchObservation(
+                                    searchData,
+                                    maxChars = if (isNewsQuery) 12_000 else 1_200,
+                                    maxLines = if (isNewsQuery) 110 else 18
+                                )
+                                val newsBriefingDirective = if (isNewsQuery) {
+                                    "\n\nThe news reports have been researched in the background. Now provide the user only the detailed analysis in their language: multiple topical sections, what happened, key verified details, and why it matters, naming each publisher and publication time in plain text. Do not output any URLs or raw links, do not return a link list, and do not answer in one paragraph. If the retrieved evidence lacks detail for a story, say so rather than guessing."
+                                } else ""
+                                summaries.add("🔍 Web Search: ${q.trim()}\n\n[RESULTS]:\n$truncatedSearch$newsBriefingDirective")
                             }
                         }
                         "run_python", "python", "py_eval" -> {

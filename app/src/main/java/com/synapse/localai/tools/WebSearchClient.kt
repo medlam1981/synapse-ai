@@ -27,7 +27,6 @@ object WebSearchClient {
 
     private const val TAG = "WebSearchClient"
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-
     data class DistilledQuery(
         val rawQuery: String,
         val distilledKeywords: String,
@@ -152,6 +151,12 @@ object WebSearchClient {
     suspend fun search(rawQuery: String): String = withContext(Dispatchers.IO) {
         val query = rawQuery.trim()
         if (query.isBlank()) return@withContext "Empty search query."
+
+        if (isLatestNewsRequest(query)) {
+            val latestNews = LatestNewsSearch.search(query)
+            if (latestNews.isNotBlank()) return@withContext latestNews
+            return@withContext "No verifiable news articles published in the last 72 hours were retrieved. Do not present older headlines as today's news; retry with a specific topic or region."
+        }
 
         // Fast-path: Live weather inquiries via wttr.in
         val lower = query.lowercase(Locale.ROOT)

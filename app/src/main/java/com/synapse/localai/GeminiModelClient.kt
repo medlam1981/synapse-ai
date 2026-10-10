@@ -701,7 +701,7 @@ class GeminiModelClient(
                     ),
                     defineFunction(
                         name = "web_search",
-                        description = "Query live search engines for real-time facts",
+                        description = "Search the live web. For latest-news requests, retrieve current distinct reports published within the last 72 hours and provide a detailed sourced briefing.",
                         parameters = listOf(Schema.str("query", "Search terms")),
                         requiredParameters = listOf("query")
                     ),
