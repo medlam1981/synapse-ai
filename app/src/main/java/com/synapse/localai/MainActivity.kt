@@ -1255,8 +1255,8 @@ fun AtlasAiBranding(
     showAgent: Boolean = true,
     strokeWidth: Float = 2.5f
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.secondary
+    val primaryColor = MaterialTheme.colorScheme.onSurface
+    val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     Text(
         text = androidx.compose.ui.text.buildAnnotatedString {
@@ -1983,9 +1983,6 @@ fun CliTerminalToolLine(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    val isManageTask = rawLine.contains("ManageTask", ignoreCase = true)
-    val isBash = rawLine.contains("Bash", ignoreCase = true) || rawLine.startsWith("$ ") || rawLine.contains("run_shell", ignoreCase = true)
-    val isFileWrite = rawLine.contains("File written", ignoreCase = true) || rawLine.contains("Writing to", ignoreCase = true) || rawLine.contains("FileWrite", ignoreCase = true)
     val isSuccess = rawLine.contains("done", ignoreCase = true) || rawLine.contains("success", ignoreCase = true) ||
                     rawLine.contains("exit 0", ignoreCase = true) || rawLine.contains("Ready / Operational", ignoreCase = true) ||
                     rawLine.contains("Atomically promoted", ignoreCase = true) || rawLine.contains("Storage Synced", ignoreCase = true) ||
@@ -2008,17 +2005,9 @@ fun CliTerminalToolLine(
                       rawLine.contains("Orchestrator:", ignoreCase = true) || rawLine.contains("Verifier:", ignoreCase = true) ||
                       rawLine.contains("Production Sync:", ignoreCase = true) || rawLine.contains("Status:", ignoreCase = true)
 
-    val bulletColor = when {
-        rawLine.contains("Storage Sentinel", ignoreCase = true) || isFailed -> MaterialTheme.colorScheme.error
-        isRunningOrchestrator || isTelemetry -> MaterialTheme.colorScheme.primary
-        isManageTask -> MaterialTheme.colorScheme.secondary
-        isBash -> MaterialTheme.colorScheme.primary
-        isSuccess || isFileWrite -> if (isDark) SuccessGreen else DaySuccess
-        else -> if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
-    }
-
     val cmdColor = if (isDark) NightOnBackground else DayOnBackground
     val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val bulletColor = textDim
     val gutterColor = if (isDark) NightOutlineVariant else DayOutlineVariant
 
     val displayText = rawLine.trim().replace(Regex("^[●*•⚡\\s]+"), "")
@@ -2035,18 +2024,21 @@ fun CliTerminalToolLine(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             if (isRunningOrchestrator) {
-                NeonDottedSpinner(modifier = Modifier.size(14.dp))
+                NeonDottedSpinner(
+                    modifier = Modifier.size(14.dp),
+                    activeColor = textDim
+                )
             } else if (isSuccess) {
                 Text(
                     text = "✔",
-                    color = if (isDark) SuccessGreen else DaySuccess,
+                    color = textDim,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
             } else if (isFailed) {
                 Text(
                     text = "✖",
-                    color = MaterialTheme.colorScheme.error,
+                    color = textDim,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -2163,7 +2155,7 @@ fun CliLogMessageView(
 
         isSystem -> {
             val isError = log.isError
-            val bulletColor = if (isError) MaterialTheme.colorScheme.error else textDim
+            val bulletColor = textDim
             val marker = if (isError) "✖ Error:" else "● System:"
 
             Row(
@@ -2753,8 +2745,8 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
     val paramStr = block.params.entries.joinToString(", ") { "${it.key}: \"${it.value}\"" }
     val isRunning = !block.isClosed
     val statusSuffix = if (isRunning) " -> Dispatched" else " -> Completed"
-    val toolAccent = MaterialTheme.colorScheme.secondary
-    val completedColor = if (isDark) SuccessGreen else DaySuccess
+    val toolAccent = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val completedColor = toolAccent
     val displayText = buildString {
         append("Tool(")
         append(block.toolName)
@@ -2809,7 +2801,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
 
     val textBright = if (isDark) NightOnBackground else DayOnBackground
     val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
-    val headingColor = MaterialTheme.colorScheme.secondary
+    val headingColor = textBright
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -2983,10 +2975,10 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
     val boldRegex = "(\\*\\*[^*]+\\*\\*)"
     val combinedRegex = Regex("$pathRegex|$inlineCodeRegex|$boldRegex")
 
-    val amberAccent = if (isDark) NightTertiary else DayTertiary
+    val pathColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
     val pathBg = if (isDark) NightSurfaceContainer else DaySurfaceContainer
     val codeBg = if (isDark) NightSurface else DaySurfaceContainer
-    val codeColor = if (isDark) NightPrimary else DayPrimary
+    val codeColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
 
     val builder = AnnotatedString.Builder()
     var lastIndex = 0
@@ -3000,7 +2992,7 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
         val v = match.value
         when {
             v.startsWith("/sdcard/") || v.startsWith("/data/") || v.startsWith("/storage/") -> {
-                builder.pushStyle(SpanStyle(color = amberAccent, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
+                builder.pushStyle(SpanStyle(color = pathColor, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
                 builder.append("\u2068$v\u2069")
                 builder.pop()
             }
@@ -3031,7 +3023,7 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
 
 fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = false): AnnotatedString {
     val pathRegex = Regex("(/sdcard/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*|/(?:data|storage|system|etc|proc|sys)/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)")
-    val amberAccent = if (isDark) NightTertiary else DayTertiary
+    val pathColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
     val pathBg = if (isDark) Color(0xFF1B2332) else NightOnBackground
     val builder = AnnotatedString.Builder()
     var lastIndex = 0
@@ -3041,7 +3033,7 @@ fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = f
             val part = text.substring(lastIndex, match.range.first)
             builder.append(if (isRtl) applyBidiIsolation(part) else part)
         }
-        builder.pushStyle(SpanStyle(color = amberAccent, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
+        builder.pushStyle(SpanStyle(color = pathColor, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
         builder.append("\u2068${match.value}\u2069")
         builder.pop()
         lastIndex = match.range.last + 1
