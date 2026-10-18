@@ -69,6 +69,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -1034,16 +1035,27 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
 @Composable
 private fun TelemetryGauge(
-    icon: ImageVector,
+    label: String,
     percentage: Int?,
     value: String,
     contentDescription: String,
     accentColor: Color,
     modifier: Modifier = Modifier,
-    progressDots: Int? = null
+    progressDots: Int? = null,
+    onClick: (() -> Unit)? = null
 ) {
     Box(
-        modifier = modifier,
+        modifier = modifier.then(
+            if (onClick != null) {
+                Modifier.clickable(
+                    role = Role.Button,
+                    onClickLabel = contentDescription,
+                    onClick = onClick
+                )
+            } else {
+                Modifier
+            }
+        ),
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.fillMaxSize()) {
@@ -1072,6 +1084,17 @@ private fun TelemetryGauge(
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
             Text(
+                text = label,
+                color = accentColor,
+                fontSize = 6.sp,
+                lineHeight = 7.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
                 text = value,
                 color = accentColor,
                 fontSize = 8.sp,
@@ -1081,12 +1104,6 @@ private fun TelemetryGauge(
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis
-            )
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = accentColor,
-                modifier = Modifier.size(10.dp)
             )
         }
     }
@@ -1099,7 +1116,9 @@ private fun DashboardGaugeRow(
     isDark: Boolean,
     totalTasks: Int,
     gaugeSize: Dp,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    taskStripExpanded: Boolean = false,
+    onTaskGaugeClick: () -> Unit = {}
 ) {
     val isCloudMode = uiState.activeModelType == ModelType.GEMINI ||
         (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
@@ -1139,14 +1158,23 @@ private fun DashboardGaugeRow(
         horizontalArrangement = Arrangement.spacedBy(1.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        TelemetryGauge(Icons.Filled.DeveloperBoard, stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--", "CPU load", MaterialTheme.colorScheme.primary, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.Memory, stats.ramUsedPercent, stats.ramUsedPercent?.let { "$it%" } ?: "--", "RAM used", MaterialTheme.colorScheme.secondary, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.SwapHoriz, stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--", "Swap used", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.SdStorage, stats.storageUsedPercent, stats.storageUsedPercent?.let { "$it%" } ?: "--", "/sdcard used", storageColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.Thermostat, temperatureProgress, if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°", "CPU temperature", thermalColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.VpnKey, selectedKeyProgress, authText, "Active API key pool", authColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.Bolt, if (hasMtp) 100 else 0, if (hasMtp) "ON" else "OFF", "Hardware accelerator", mtpColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(Icons.Filled.Assignment, null, totalTasks.toString(), "Task queue", MaterialTheme.colorScheme.secondary, Modifier.weight(1f).height(gaugeSize), progressDots = totalTasks)
+        TelemetryGauge("CPU", stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--", "CPU load", MaterialTheme.colorScheme.primary, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge("RAM", stats.ramUsedPercent, stats.ramUsedPercent?.let { "$it%" } ?: "--", "RAM used", MaterialTheme.colorScheme.secondary, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge("SWAP", stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--", "Swap used", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge("SDCARD", stats.storageUsedPercent, stats.storageUsedPercent?.let { "$it%" } ?: "--", "/sdcard used", storageColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge("TEMP", temperatureProgress, if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°", "CPU temperature", thermalColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge("KEY", selectedKeyProgress, authText, "Active API key pool", authColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge("MTP", if (hasMtp) 100 else 0, if (hasMtp) "ON" else "OFF", "Hardware accelerator", mtpColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(
+            label = "TASK",
+            percentage = null,
+            value = totalTasks.toString(),
+            contentDescription = if (taskStripExpanded) "Hide active task details" else "Show active task details",
+            accentColor = if (taskStripExpanded) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.weight(1f).height(gaugeSize),
+            progressDots = totalTasks,
+            onClick = onTaskGaugeClick
+        )
     }
 }
 
@@ -1269,6 +1297,7 @@ fun ConsolidatedMasterHeader(
     onOpenDrawer: () -> Unit
 ) {
     val configuration = LocalConfiguration.current
+    var taskStripExpanded by remember { mutableStateOf(false) }
     val compactHeader = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
         configuration.screenWidthDp >= 600
     val gaugeSize = when {
@@ -1375,7 +1404,9 @@ fun ConsolidatedMasterHeader(
                         isDark = isDark,
                         totalTasks = totalTasks,
                         gaugeSize = gaugeSize,
-                        modifier = Modifier.weight(0.66f)
+                        modifier = Modifier.weight(0.66f),
+                        taskStripExpanded = taskStripExpanded,
+                        onTaskGaugeClick = { taskStripExpanded = !taskStripExpanded }
                     )
                 }
             }
@@ -1462,66 +1493,85 @@ fun ConsolidatedMasterHeader(
             }
 
             if (!compactHeader) {
-                DashboardGaugeRow(stats, uiState, isDark, totalTasks, gaugeSize, Modifier.fillMaxWidth())
+                DashboardGaugeRow(
+                    stats = stats,
+                    uiState = uiState,
+                    isDark = isDark,
+                    totalTasks = totalTasks,
+                    gaugeSize = gaugeSize,
+                    modifier = Modifier.fillMaxWidth(),
+                    taskStripExpanded = taskStripExpanded,
+                    onTaskGaugeClick = { taskStripExpanded = !taskStripExpanded }
+                )
             }
 
-            if (uiState.activeTasks.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 1.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    uiState.activeTasks.forEach { task ->
-                        val (statusLabel, statusColor) = when (task.status) {
-                            TaskStatus.RUNNING -> "RUNNING" to MaterialTheme.colorScheme.primary
-                            TaskStatus.WAITING_FOR_USER -> "NEEDS INPUT" to MaterialTheme.colorScheme.secondary
-                            TaskStatus.QUEUED -> "QUEUED" to MaterialTheme.colorScheme.secondary
-                            TaskStatus.PENDING -> "PENDING" to textDim
-                            TaskStatus.PAUSED -> "PAUSED" to textDim
-                            else -> task.status.name to textDim
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(5.dp),
-                            color = statusColor.copy(alpha = 0.08f),
-                            border = BorderStroke(0.6.dp, statusColor.copy(alpha = 0.3f)),
-                            modifier = Modifier.widthIn(max = 240.dp)
+            if (taskStripExpanded) {
+                if (uiState.activeTasks.isEmpty()) {
+                    Text(
+                        text = "No active tasks",
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        color = textDim,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 1.dp),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Box(
-                                    Modifier
-                                        .size(5.dp)
-                                        .clip(CircleShape)
-                                        .background(statusColor)
-                                )
-                                Column {
-                                    Text(
-                                        text = "$statusLabel · ${task.description}",
-                                        color = statusColor,
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    val progressText = task.progress.takeIf { it.isNotBlank() }
-                                    if (progressText != null) {
-                                        Text(
-                                            text = progressText,
-                                            color = textDim,
-                                            fontSize = 7.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                            uiState.activeTasks.forEach { task ->
+                                val (statusLabel, statusColor) = when (task.status) {
+                                    TaskStatus.RUNNING -> "RUNNING" to MaterialTheme.colorScheme.primary
+                                    TaskStatus.WAITING_FOR_USER -> "NEEDS INPUT" to MaterialTheme.colorScheme.secondary
+                                    TaskStatus.QUEUED -> "QUEUED" to MaterialTheme.colorScheme.secondary
+                                    TaskStatus.PENDING -> "PENDING" to textDim
+                                    TaskStatus.PAUSED -> "PAUSED" to textDim
+                                    else -> task.status.name to textDim
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(5.dp),
+                                    color = statusColor.copy(alpha = 0.08f),
+                                    border = BorderStroke(0.6.dp, statusColor.copy(alpha = 0.3f)),
+                                    modifier = Modifier.widthIn(max = 240.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Box(
+                                            Modifier
+                                                .size(5.dp)
+                                                .clip(CircleShape)
+                                                .background(statusColor)
                                         )
+                                        Column {
+                                            Text(
+                                                text = "$statusLabel · ${task.description}",
+                                                color = statusColor,
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            val progressText = task.progress.takeIf { it.isNotBlank() }
+                                            if (progressText != null) {
+                                                Text(
+                                                    text = progressText,
+                                                    color = textDim,
+                                                    fontSize = 7.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
                 }
             }
         }
