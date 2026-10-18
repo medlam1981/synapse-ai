@@ -613,6 +613,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 .background(MaterialTheme.colorScheme.background)
         ) {
             Spacer(modifier = Modifier.statusBarsPadding())
+            Spacer(modifier = Modifier.height(8.dp))
 
             ConsolidatedMasterHeader(
                 context = context,
@@ -620,12 +621,6 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 stats = systemStats,
                 isDark = isDark,
                 onOpenDrawer = { coroutineScope.launch { drawerState.open() } }
-            )
-
-            Divider(
-                modifier = Modifier.padding(horizontal = 8.dp),
-                thickness = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
             )
 
             Box(
@@ -1357,9 +1352,9 @@ fun ConsolidatedMasterHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 1.dp)
+            .padding(top = 4.dp, bottom = 4.dp)
             .background(headerBg)
-            .padding(horizontal = 10.dp, vertical = 1.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
             Row(
