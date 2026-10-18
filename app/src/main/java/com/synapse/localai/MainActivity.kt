@@ -117,7 +117,8 @@ data class SystemStats(
     val cpuUsagePercent: Int? = null,
     val ramUsedPercent: Int? = null,
     val swapUsedPercent: Int? = null,
-    val storageUsedPercent: Int? = null
+    val storageUsedPercent: Int? = null,
+    val networkConnected: Boolean = false
 )
 
 private var lastCpuTotal: Long = 0
@@ -155,6 +156,14 @@ fun getSystemStats(context: Context): SystemStats {
     val battery = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
     val status = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_STATUS)
     val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+    val networkConnected = runCatching {
+        val connectivityManager =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        connectivityManager.activeNetwork
+            ?.let(connectivityManager::getNetworkCapabilities)
+            ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            ?: false
+    }.getOrDefault(false)
 
     val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
     val memoryInfo = android.app.ActivityManager.MemoryInfo()
@@ -253,7 +262,8 @@ fun getSystemStats(context: Context): SystemStats {
         cpuUsagePercent = cpuUsagePercent,
         ramUsedPercent = ramUsedPercent,
         swapUsedPercent = swapUsedPercent,
-        storageUsedPercent = storageStats.second
+        storageUsedPercent = storageStats.second,
+        networkConnected = networkConnected
     )
 }
 
@@ -1034,18 +1044,26 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 }
 
 @Composable
-private fun TelemetryGauge(
+private fun DashboardMetric(
     label: String,
     percentage: Int?,
     value: String,
     contentDescription: String,
-    accentColor: Color,
+    isDark: Boolean,
     modifier: Modifier = Modifier,
-    progressDots: Int? = null,
     onClick: (() -> Unit)? = null
 ) {
-    Box(
-        modifier = modifier.then(
+    val metricValue = percentage?.coerceIn(0, 100)
+    val activeDots = metricValue?.let { (it / 5f).roundToInt().coerceIn(0, 20) } ?: 0
+    val activeColor = when {
+        metricValue == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        metricValue < 60 -> Color(0xFF00E5FF)
+        metricValue <= 85 -> Color(0xFFFF9100)
+        else -> Color(0xFFFF1744)
+    }
+    val inactiveColor = if (isDark) Color(0x25FFFFFF) else Color(0x30000000)
+    val rowModifier = modifier
+        .then(
             if (onClick != null) {
                 Modifier.clickable(
                     role = Role.Button,
@@ -1055,55 +1073,55 @@ private fun TelemetryGauge(
             } else {
                 Modifier
             }
-        ),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val dotCount = 32
-            val radius = size.minDimension / 2f - 2.dp.toPx()
-            val dotRadius = 1.dp.toPx()
-            val filledDots = progressDots?.coerceIn(0, dotCount)
-                ?: percentage?.coerceIn(0, 100)?.let { (dotCount * it / 100f).roundToInt() }
-                ?: 0
+        )
 
-            repeat(dotCount) { index ->
-                val angle = (index.toDouble() / dotCount * 2.0 * Math.PI) - Math.PI / 2.0
-                val center = androidx.compose.ui.geometry.Offset(
-                    x = size.width / 2f + kotlin.math.cos(angle).toFloat() * radius,
-                    y = size.height / 2f + kotlin.math.sin(angle).toFloat() * radius
-                )
-                drawCircle(
-                    color = if (index < filledDots) accentColor else accentColor.copy(alpha = 0.16f),
-                    radius = dotRadius,
-                    center = center
-                )
-            }
-        }
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(0.dp)
+    Surface(
+        modifier = rowModifier,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             Text(
-                text = label,
-                color = accentColor,
-                fontSize = 6.sp,
-                lineHeight = 7.sp,
+                text = "$label:",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 8.sp,
+                lineHeight = 10.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis
+                modifier = Modifier.width(34.dp)
             )
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(1.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                repeat(20) { index ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(if (index < activeDots) 8.dp else 4.dp)
+                            .clip(RoundedCornerShape(topStart = 1.dp, topEnd = 1.dp))
+                            .background(if (index < activeDots) activeColor else inactiveColor)
+                    )
+                }
+            }
             Text(
                 text = value,
-                color = accentColor,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 8.sp,
-                lineHeight = 9.sp,
-                fontWeight = FontWeight.ExtraBold,
+                lineHeight = 10.sp,
+                fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(34.dp)
             )
         }
     }
@@ -1112,69 +1130,53 @@ private fun TelemetryGauge(
 @Composable
 private fun DashboardGaugeRow(
     stats: SystemStats,
-    uiState: AgentUiState,
     isDark: Boolean,
     totalTasks: Int,
-    gaugeSize: Dp,
     modifier: Modifier = Modifier,
     taskStripExpanded: Boolean = false,
     onTaskGaugeClick: () -> Unit = {}
 ) {
-    val isCloudMode = uiState.activeModelType == ModelType.GEMINI ||
-        (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
-    val effectiveDraftPath = uiState.activeDraftModelPath
-        ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
-    val hasMtp = !isCloudMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
-    val registeredKeys = uiState.config.geminiApiKeys.split(",").count { it.isNotBlank() }
-    val keyPoolSize = maxOf(uiState.totalKeys, registeredKeys)
-    val authText = if (isCloudMode) {
-        if (keyPoolSize > 0) "${(uiState.currentKeyIndex % keyPoolSize) + 1}/$keyPoolSize" else "NO KEY"
-    } else if (uiState.localModelLoaded) {
-        "LOCAL"
-    } else {
-        "N/A"
-    }
-    val thermalColor = when {
-        stats.cpuTempInt < 50 -> MaterialTheme.colorScheme.primary
-        stats.cpuTempInt <= 90 -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.error
-    }
-    val authColor = when {
-        isCloudMode && keyPoolSize == 0 -> MaterialTheme.colorScheme.error
-        isCloudMode || uiState.localModelLoaded -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-    }
-    val mtpColor = if (hasMtp) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-    val storageColor = if (isDark) SuccessGreen else DaySuccess
-    val temperatureProgress = stats.cpuTempInt.takeIf { it > 0 }?.coerceIn(0, 100)
-    val selectedKeyProgress = if (isCloudMode && keyPoolSize > 0) {
-        ((Math.floorMod(uiState.currentKeyIndex, keyPoolSize) + 1) * 100) / keyPoolSize
-    } else {
-        null
-    }
-    Row(
-        modifier = modifier.padding(vertical = 1.dp),
-        horizontalArrangement = Arrangement.spacedBy(1.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        TelemetryGauge("CPU", stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--", "CPU load", MaterialTheme.colorScheme.primary, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge("RAM", stats.ramUsedPercent, stats.ramUsedPercent?.let { "$it%" } ?: "--", "RAM used", MaterialTheme.colorScheme.secondary, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge("SWAP", stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--", "Swap used", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge("SDCARD", stats.storageUsedPercent, stats.storageUsedPercent?.let { "$it%" } ?: "--", "/sdcard used", storageColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge("TEMP", temperatureProgress, if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°", "CPU temperature", thermalColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge("KEY", selectedKeyProgress, authText, "Active API key pool", authColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge("MTP", if (hasMtp) 100 else 0, if (hasMtp) "ON" else "OFF", "Hardware accelerator", mtpColor, Modifier.weight(1f).height(gaugeSize))
-        TelemetryGauge(
-            label = "TASK",
-            percentage = null,
-            value = totalTasks.toString(),
-            contentDescription = if (taskStripExpanded) "Hide active task details" else "Show active task details",
-            accentColor = if (taskStripExpanded) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.weight(1f).height(gaugeSize),
-            progressDots = totalTasks,
-            onClick = onTaskGaugeClick
+    val metrics = listOf(
+        listOf(
+            Triple("RAM", stats.ramUsedPercent, stats.ramUsedPercent?.let { "$it%" } ?: "--"),
+            Triple("CPU", stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--"),
+            Triple("MEM", stats.ramUsedPercent?.let { 100 - it }, stats.ramFree),
+            Triple("DISK", stats.storageUsedPercent, stats.storageUsedPercent?.let { "$it%" } ?: "--")
+        ),
+        listOf(
+            Triple("TEMP", stats.cpuTempInt.takeIf { it > 0 }?.coerceAtMost(100), if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°"),
+            Triple("BATT", stats.battery.takeIf { it in 0..100 }, if (stats.battery in 0..100) "${stats.battery}%" else "--"),
+            Triple("SWAP", stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--"),
+            Triple("TASK", (totalTasks.coerceIn(0, 10) * 10), totalTasks.toString())
         )
+    )
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        metrics.forEach { columnMetrics ->
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                columnMetrics.forEach { (label, percentage, value) ->
+                    DashboardMetric(
+                        label = label,
+                        percentage = percentage,
+                        value = value,
+                        contentDescription = if (label == "TASK") {
+                            if (taskStripExpanded) "Hide active task details" else "Show active task details"
+                        } else {
+                            label
+                        },
+                        isDark = isDark,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = if (label == "TASK") onTaskGaugeClick else null
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1300,11 +1302,6 @@ fun ConsolidatedMasterHeader(
     var taskStripExpanded by remember { mutableStateOf(false) }
     val compactHeader = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
         configuration.screenWidthDp >= 600
-    val gaugeSize = when {
-        configuration.screenWidthDp >= 900 -> 42.dp
-        compactHeader -> 34.dp
-        else -> 38.dp
-    }
     val headerBg = MaterialTheme.colorScheme.surfaceContainer
     val subCardBg = MaterialTheme.colorScheme.surfaceContainerHigh
     val textBright = MaterialTheme.colorScheme.onSurface
@@ -1315,60 +1312,116 @@ fun ConsolidatedMasterHeader(
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
     val cyanAccent = MaterialTheme.colorScheme.primary
     val cyanBorder = MaterialTheme.colorScheme.primary
+    val isCloudMode = uiState.activeModelType == ModelType.GEMINI ||
+        (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
+    val effectiveDraftPath = uiState.activeDraftModelPath
+        ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
+    val hasMtp = !isCloudMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
+    val draftName = if (hasMtp && effectiveDraftPath != null) File(effectiveDraftPath).nameWithoutExtension else null
+    val draftTag = draftName?.let { name ->
+        val quantRegex = Regex("""(?i)(Q\d+_[A-Z0-9_]+|BF16|FP16|F16|F32)""")
+        quantRegex.find(name)?.value?.uppercase()
+            ?: name.removePrefix("mtp-").removePrefix("gemma-4-").removePrefix("it-").uppercase()
+    }
+    val rawBaseName = uiState.activeModelName.ifBlank {
+        if (uiState.config.localModelPath.isNotBlank()) {
+            File(uiState.config.localModelPath).nameWithoutExtension
+        } else {
+            "GEMMA-4-E2B Q4"
+        }
+    }
+    val cleanBaseName = remember(rawBaseName) {
+        var name = rawBaseName
+            .replace("(?i)-it".toRegex(), "")
+            .replace("(?i)-qat".toRegex(), "")
+            .replace("(?i)-ud".toRegex(), "")
+            .replace("(?i)-Q2_K_XL".toRegex(), " Q2")
+            .replace("(?i)-Q4_K_XL".toRegex(), " Q4")
+            .replace("(?i)-Q4_K_M".toRegex(), " Q4")
+            .replace("(?i)-Q4_0".toRegex(), " Q4_0")
+            .replace("(?i)-Q8_0".toRegex(), " Q8")
+            .replace("(?i)-BF16".toRegex(), " BF16")
+            .replace("(?i)-F16".toRegex(), " F16")
+            .replace("(?i)_".toRegex(), "-")
+            .trim()
+            .uppercase()
+        if (name.isBlank()) "GEMMA-4-E2B Q4" else name
+    }
+    val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond.coerceAtLeast(0f))
+    val specChipText = when {
+        isCloudMode -> "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()} • $formattedTps T/s"
+        hasMtp && draftTag != null -> "$cleanBaseName • MTP: $draftTag • $formattedTps T/s"
+        else -> "$cleanBaseName • STANDALONE • $formattedTps T/s"
+    }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = if (compactHeader) 2.dp else 4.dp, bottom = if (compactHeader) 2.dp else 4.dp)
+            .padding(vertical = 1.dp)
             .background(headerBg)
-            .padding(horizontal = if (compactHeader) 8.dp else 15.dp, vertical = if (compactHeader) 3.dp else 8.dp)
+            .padding(horizontal = 10.dp, vertical = 1.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(if (compactHeader) 3.dp else 6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 2.dp, vertical = if (compactHeader) 0.dp else 2.dp),
+                    .padding(horizontal = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (compactHeader) Arrangement.spacedBy(4.dp) else Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
-                    modifier = if (compactHeader) Modifier.weight(0.34f) else Modifier,
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(if (compactHeader) 4.dp else 8.dp)
                 ) {
-                    Box(
+                    Row(
                         modifier = Modifier
-                            .size(if (compactHeader) 30.dp else 36.dp)
-                            .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(if (compactHeader) 8.dp else 10.dp))
-                    ) {
-                        Surface(
-                            onClick = onOpenDrawer,
-                            shape = RoundedCornerShape(if (compactHeader) 7.dp else 9.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            border = BorderStroke(
-                                1.dp,
-                                Brush.verticalGradient(
-                                    listOf(cyanAccent.copy(alpha = 0.6f), cyanBorder.copy(alpha = 0.25f))
-                                )
+                            .width(24.dp)
+                            .height(if (compactHeader) 30.dp else 36.dp)
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = "Open navigation menu",
+                                onClick = onOpenDrawer
                             ),
-                            shadowElevation = 2.dp,
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Widgets,
-                                    contentDescription = "Menu",
-                                    tint = cyanAccent,
-                                    modifier = Modifier.size(if (compactHeader) 17.dp else 20.dp)
-                                )
-                            }
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        repeat(4) { index ->
+                            Box(
+                                modifier = Modifier
+                                    .size(4.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        cyanAccent.copy(
+                                            alpha = when (index) {
+                                                0 -> if (uiState.isProcessing) 1f else 0.72f
+                                                1 -> 0.58f
+                                                2 -> 0.4f
+                                                else -> 0.25f
+                                            }
+                                        )
+                                    )
+                            )
                         }
                     }
 
-                    AtlasAiBranding(
-                        fontSize = if (compactHeader) 11.sp else 16.sp,
-                        lineHeight = 2.dp
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                        AtlasAiBranding(
+                            fontSize = if (compactHeader) 11.sp else 16.sp,
+                            lineHeight = 2.dp
+                        )
+                        Text(
+                            text = specChipText,
+                            color = textDim,
+                            fontSize = if (compactHeader) 6.sp else 7.sp,
+                            lineHeight = if (compactHeader) 8.sp else 9.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = if (compactHeader) 180.dp else 220.dp)
+                        )
+                    }
 
                     if (!compactHeader) {
                         Surface(
@@ -1397,113 +1450,16 @@ fun ConsolidatedMasterHeader(
                         }
                     }
                 }
-                if (compactHeader) {
-                    DashboardGaugeRow(
-                        stats = stats,
-                        uiState = uiState,
-                        isDark = isDark,
-                        totalTasks = totalTasks,
-                        gaugeSize = gaugeSize,
-                        modifier = Modifier.weight(0.66f),
-                        taskStripExpanded = taskStripExpanded,
-                        onTaskGaugeClick = { taskStripExpanded = !taskStripExpanded }
-                    )
-                }
             }
 
-            val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
-            val isLocalMode = !isCloudMode
-            val effectiveDraftPath = uiState.activeDraftModelPath ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
-            val hasMtp = isLocalMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
-            val draftFile = if (hasMtp && effectiveDraftPath != null) File(effectiveDraftPath) else null
-            val draftName = draftFile?.nameWithoutExtension
-            val draftTag = if (hasMtp && draftName != null) {
-                val quantRegex = Regex("""(?i)(Q\d+_[A-Z0-9_]+|BF16|FP16|F16|F32)""")
-                val match = quantRegex.find(draftName)
-                match?.value?.uppercase() ?: draftName.removePrefix("mtp-").removePrefix("gemma-4-").removePrefix("it-").uppercase()
-            } else null
-            val rawBaseName = uiState.activeModelName.ifBlank {
-                if (uiState.config.localModelPath.isNotBlank()) {
-                    File(uiState.config.localModelPath).nameWithoutExtension
-                } else {
-                    "GEMMA-4-E2B Q4"
-                }
-            }
-            val cleanBaseName = remember(rawBaseName) {
-                var name = rawBaseName
-                    .replace("(?i)-it".toRegex(), "")
-                    .replace("(?i)-qat".toRegex(), "")
-                    .replace("(?i)-ud".toRegex(), "")
-                    .replace("(?i)-Q2_K_XL".toRegex(), " Q2")
-                    .replace("(?i)-Q4_K_XL".toRegex(), " Q4")
-                    .replace("(?i)-Q4_K_M".toRegex(), " Q4")
-                    .replace("(?i)-Q4_0".toRegex(), " Q4_0")
-                    .replace("(?i)-Q8_0".toRegex(), " Q8")
-                    .replace("(?i)-BF16".toRegex(), " BF16")
-                    .replace("(?i)-F16".toRegex(), " F16")
-                    .replace("(?i)_".toRegex(), "-")
-                    .trim()
-                    .uppercase()
-                if (name.isBlank()) "GEMMA-4-E2B Q4" else name
-            }
-
-            val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond.coerceAtLeast(0f))
-            val tpsSuffix = " • $formattedTps T/s"
-
-            val specChipText = if (isCloudMode) {
-                "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()}$tpsSuffix"
-            } else if (hasMtp && draftTag != null) {
-                "$cleanBaseName • MTP: $draftTag$tpsSuffix"
-            } else {
-                "$cleanBaseName • STANDALONE$tpsSuffix"
-            }
-
-            val isModelLoading = uiState.localModelLoading || (!uiState.localModelLoaded && uiState.loadingProgress != null)
-            val isModelReady = (uiState.localModelLoaded && !isModelLoading) || (isCloudMode && uiState.config.geminiApiKeys.isNotBlank())
-            val isModelError = uiState.modelLoadFailed || (isCloudMode && uiState.config.geminiApiKeys.isBlank()) || (isLocalMode && !uiState.localModelLoaded && !isModelLoading && uiState.config.localModelPath.isNotBlank() && uiState.streamInterruptMsg != null)
-
-            Surface(
-                shape = RoundedCornerShape(5.dp),
-                color = subCardBg,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    ModelLifecycleBeacon(
-                        isLoading = isModelLoading,
-                        isReady = isModelReady,
-                        isError = isModelError
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = specChipText,
-                        color = textDim,
-                        fontSize = if (compactHeader) 8.sp else 9.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            if (!compactHeader) {
-                DashboardGaugeRow(
-                    stats = stats,
-                    uiState = uiState,
-                    isDark = isDark,
-                    totalTasks = totalTasks,
-                    gaugeSize = gaugeSize,
-                    modifier = Modifier.fillMaxWidth(),
-                    taskStripExpanded = taskStripExpanded,
-                    onTaskGaugeClick = { taskStripExpanded = !taskStripExpanded }
-                )
-            }
+            DashboardGaugeRow(
+                stats = stats,
+                isDark = isDark,
+                totalTasks = totalTasks,
+                modifier = Modifier.fillMaxWidth(),
+                taskStripExpanded = taskStripExpanded,
+                onTaskGaugeClick = { taskStripExpanded = !taskStripExpanded }
+            )
 
             if (taskStripExpanded) {
                 if (uiState.activeTasks.isEmpty()) {
