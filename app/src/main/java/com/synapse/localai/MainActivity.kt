@@ -1073,10 +1073,10 @@ private fun TelemetryGauge(
         ) {
             Text(
                 text = value,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = accentColor,
                 fontSize = 8.sp,
                 lineHeight = 9.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.ExtraBold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 softWrap = false,
@@ -1228,7 +1228,7 @@ fun AtlasAiBranding(
     strokeWidth: Float = 2.5f
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+    val secondaryColor = MaterialTheme.colorScheme.secondary
 
     Text(
         text = androidx.compose.ui.text.buildAnnotatedString {
@@ -2759,7 +2759,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
 
     val textBright = if (isDark) NightOnBackground else DayOnBackground
     val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
-    val headingColor = MaterialTheme.colorScheme.primary
+    val headingColor = MaterialTheme.colorScheme.secondary
 
     Column(
         modifier = Modifier.fillMaxWidth(),

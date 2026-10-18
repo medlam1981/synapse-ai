@@ -54,7 +54,7 @@ val DayPrimaryContainer = Color(0xFFD8EED7)
 val DayOnPrimaryContainer = Color(0xFF183A21)
 val DaySecondary = Color(0xFF7E22CE)
 val DayOnSecondary = Color(0xFFFFFFFF)
-val DayTertiary = Color(0xFFB45309)
+val DayTertiary = Color(0xFF9A5B00)
 val DayOnTertiary = Color(0xFFFFFFFF)
 val DayOutline = Color(0xFF8C959F)
 val DayOutlineVariant = Color(0xFFD0D7DE)
@@ -124,7 +124,7 @@ val DeepIndigo = NeonPurple
 val ElectricBlue = CyberCyan
 
 val CodeKeyword = ErrorCrimson
-val CodeVariable = SuccessGreen
+val CodeVariable = NeonPurple
 val CodeFunction = AgentGreen
 val CodeString = WarningAmber
 val CodeComment = MutedSlate

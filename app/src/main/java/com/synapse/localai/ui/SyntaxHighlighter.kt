@@ -1,6 +1,5 @@
 package com.synapse.localai.ui
 
-import com.synapse.localai.ui.theme.SuccessGreen
 import com.synapse.localai.ui.theme.WarningAmber
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -19,7 +18,7 @@ object SyntaxHighlighter {
     private val DarkKeyword = Color(0xFFFF7B72)
     private val DarkString = WarningAmber
     private val DarkComment = Color(0xFF8B949E)
-    private val DarkNumber = SuccessGreen
+    private val DarkNumber = WarningAmber
     private val DarkFunction = Color(0xFFD2A8FF)
     private val DarkType = Color(0xFFFFA657)
     private val DarkBase = Color(0xFFE6EDF3)
@@ -28,8 +27,8 @@ object SyntaxHighlighter {
     private val LightKeyword = Color(0xFFCF222E)
     private val LightString = Color(0xFF065F46)
     private val LightComment = Color(0xFF6E7781)
-    private val LightNumber = Color(0xFF047857)
-    private val LightFunction = Color(0xFFB45309)
+    private val LightNumber = Color(0xFF9A5B00)
+    private val LightFunction = Color(0xFF7E22CE)
     private val LightType = Color(0xFF953800)
     private val LightBase = Color(0xFF1F2328)
 

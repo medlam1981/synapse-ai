@@ -72,6 +72,7 @@ fun ScheduledTaskManagerScreen(viewModel: AgentViewModel, onBack: () -> Unit) {
                             fontSize = 18.sp,
                             lineHeight = 22.sp,
                             fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.secondary,
                             maxLines = 1
                         )
                         Text(
