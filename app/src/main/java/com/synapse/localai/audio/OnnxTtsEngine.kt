@@ -2,7 +2,7 @@ package com.synapse.localai.audio
 
 import android.content.Context
 import android.os.Process
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.RootShellManager
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment

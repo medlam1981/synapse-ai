@@ -3,7 +3,7 @@ package com.synapse.localai
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader

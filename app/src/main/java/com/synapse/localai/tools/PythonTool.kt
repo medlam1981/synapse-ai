@@ -20,7 +20,11 @@ object PythonTool {
         if (result.success) {
             "$metaHeader${result.output}"
         } else {
-            "✖ Python Execution Error:\n${result.output}"
+            buildString {
+                append("✖ Python Execution Error")
+                result.error?.let { append(": ").append(it) }
+                if (result.output.isNotBlank()) append("\n").append(result.output)
+            }
         }
     }
 

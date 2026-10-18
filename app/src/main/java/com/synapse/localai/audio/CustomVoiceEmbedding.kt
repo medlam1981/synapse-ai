@@ -1,6 +1,6 @@
 package com.synapse.localai.audio
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer

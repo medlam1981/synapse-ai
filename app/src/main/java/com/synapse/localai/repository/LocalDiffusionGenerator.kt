@@ -5,7 +5,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.DeviceProfile
 import com.synapse.localai.PageCacheAdvisor
 import com.synapse.localai.GgufCapabilityRegistry

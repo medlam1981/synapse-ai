@@ -2,7 +2,7 @@ package com.synapse.localai
 
 import android.content.Context
 import android.util.AtomicFile
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -13,6 +13,7 @@ enum class TaskStatus {
     PENDING,
     QUEUED,
     RUNNING,
+    PAUSED,
     WAITING_FOR_USER,
     COMPLETED,
     FAILED,
@@ -43,7 +44,8 @@ data class AgentTask(
     val acceptanceCriteria: List<String> = emptyList(),
     val verificationReport: String = "",
     val verificationAttempts: Int = 0,
-    val criteriaVerified: Boolean = false
+    val criteriaVerified: Boolean = false,
+    val statusBeforePause: TaskStatus? = null
 )
 
 internal fun canMarkTaskCompleted(task: AgentTask): Boolean =
@@ -174,42 +176,24 @@ class TaskMemoryManager(context: Context) {
 
     fun recoverInterruptedTasks(): Int {
         val recovered = mutableListOf<AgentTask>()
-        val failed = mutableListOf<AgentTask>()
         synchronized(tasks) {
             val iterator = tasks.listIterator()
             while (iterator.hasNext()) {
                 val task = iterator.next()
                 if (task.status != TaskStatus.RUNNING) continue
-                if (task.retryCount < task.maxRetries) {
-                    val retry = task.copy(
-                        status = TaskStatus.PENDING,
-                        executeAt = System.currentTimeMillis() + 30_000L,
-                        retryCount = task.retryCount + 1,
-                        result = "Resuming after app process stopped"
-                    )
-                    iterator.set(retry)
-                    recovered.add(retry)
-                } else {
-                    val interrupted = task.copy(
-                        status = TaskStatus.FAILED,
-                        completedAt = System.currentTimeMillis(),
-                        result = "Stopped before completion after ${task.retryCount} retries",
-                        executionCheckpoint = ""
-                    )
-                    iterator.remove()
-                    failed.add(interrupted)
-                }
+                val retry = task.copy(
+                    status = TaskStatus.PENDING,
+                    executeAt = System.currentTimeMillis() + 30_000L,
+                    result = "Resuming from the last saved checkpoint after app process stopped",
+                    progress = "Recovered interrupted task; resuming from its saved checkpoint"
+                )
+                iterator.set(retry)
+                recovered.add(retry)
             }
-            if (recovered.isNotEmpty() || failed.isNotEmpty()) saveTasks()
+            if (recovered.isNotEmpty()) saveTasks()
         }
-        if (failed.isNotEmpty()) {
-            synchronized(taskHistory) {
-                taskHistory.addAll(failed)
-                saveHistory()
-            }
-        }
-        if (recovered.isNotEmpty() || failed.isNotEmpty()) {
-            Log.i(TAG, "Recovered ${recovered.size} interrupted tasks; archived ${failed.size} exhausted tasks")
+        if (recovered.isNotEmpty()) {
+            Log.i(TAG, "Recovered ${recovered.size} interrupted tasks without discarding their checkpoints")
         }
         return recovered.size
     }
@@ -238,6 +222,7 @@ class TaskMemoryManager(context: Context) {
                         TaskStatus.PENDING,
                         TaskStatus.QUEUED,
                         TaskStatus.RUNNING,
+                        TaskStatus.PAUSED,
                         TaskStatus.WAITING_FOR_USER
                     )
                 }
@@ -253,6 +238,36 @@ class TaskMemoryManager(context: Context) {
 
     fun updateTaskStatus(id: String, newStatus: TaskStatus) {
         updateTask(id) { it.copy(status = newStatus) }
+    }
+
+    fun pauseTask(id: String): Boolean {
+        var paused = false
+        updateTask(id) { task ->
+            if (task.status !in setOf(TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING)) {
+                return@updateTask task
+            }
+            paused = true
+            task.copy(status = TaskStatus.PAUSED, statusBeforePause = task.status)
+        }
+        return paused
+    }
+
+    fun resumePausedTask(id: String, executionActive: Boolean = false): Boolean {
+        var resumed = false
+        updateTask(id) { task ->
+            if (task.status != TaskStatus.PAUSED) return@updateTask task
+            val previous = task.statusBeforePause
+            resumed = true
+            task.copy(
+                status = when {
+                    previous == TaskStatus.RUNNING && executionActive -> TaskStatus.RUNNING
+                    previous == TaskStatus.PENDING && task.executeAt > System.currentTimeMillis() -> TaskStatus.PENDING
+                    else -> TaskStatus.QUEUED
+                },
+                statusBeforePause = null
+            )
+        }
+        return resumed
     }
 
     fun updateTask(task: AgentTask) {
@@ -597,6 +612,7 @@ class TaskMemoryManager(context: Context) {
             put("verificationReport", task.verificationReport)
             put("verificationAttempts", task.verificationAttempts)
             put("criteriaVerified", task.criteriaVerified)
+            put("statusBeforePause", task.statusBeforePause?.name ?: JSONObject.NULL)
         }
     }
 
@@ -631,7 +647,9 @@ class TaskMemoryManager(context: Context) {
             } ?: emptyList(),
             verificationReport = json.optString("verificationReport", ""),
             verificationAttempts = json.optInt("verificationAttempts", 0),
-            criteriaVerified = json.optBoolean("criteriaVerified", false)
+            criteriaVerified = json.optBoolean("criteriaVerified", false),
+            statusBeforePause = json.optString("statusBeforePause").takeIf { it.isNotBlank() && it != "null" }
+                ?.let { runCatching { TaskStatus.valueOf(it) }.getOrNull() }
         )
     }
 }

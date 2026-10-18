@@ -1,6 +1,6 @@
 package com.synapse.localai
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel

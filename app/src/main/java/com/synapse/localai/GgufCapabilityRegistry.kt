@@ -1,7 +1,7 @@
 package com.synapse.localai
 
 import android.content.Context
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.Locale

@@ -17,8 +17,8 @@
 #include <dlfcn.h>
 
 #define TAG "MedlamJNI"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGI(...) do { } while (0)
+#define LOGE(...) do { } while (0)
 
 static std::atomic<bool> g_is_aborted{false};
 
@@ -973,5 +973,4 @@ Java_com_synapse_localai_PageCacheAdvisor_nativeGetResidentMemoryMb(
 }
 
 } // extern "C"
-
 

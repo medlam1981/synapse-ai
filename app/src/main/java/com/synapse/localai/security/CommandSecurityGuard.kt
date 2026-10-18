@@ -1,10 +1,6 @@
 package com.synapse.localai.security
 
-import android.util.Log
-import java.io.File
-import java.nio.charset.StandardCharsets
-import java.text.SimpleDateFormat
-import java.util.Date
+import com.synapse.localai.AtlasLog as Log
 import java.util.Locale
 
 /**
@@ -14,12 +10,11 @@ import java.util.Locale
  * 1. Risk Tier Classification: Distinguishes safe read-only queries from sensitive modifications.
  * 2. Destructive Command Interception: Blocks bricking commands such as rm -rf / or dd to block devices.
  * 3. Execution Sanitization: Strips hazardous environment variable injections (LD_PRELOAD, LD_LIBRARY_PATH).
- * 4. Audit Trail: Persists structured security event logs to /sdcard/atlas-ai/logs/security_audit.log.
+ * 4. Security decisions are returned to the caller without writing command audit logs.
  */
 object CommandSecurityGuard {
 
     private const val TAG = "CommandSecurityGuard"
-    private const val AUDIT_LOG_FILE = "/sdcard/atlas-ai/logs/security_audit.log"
 
     enum class RiskTier {
         SAFE,
@@ -66,7 +61,6 @@ object CommandSecurityGuard {
         for (pattern in DESTRUCTIVE_PATTERNS) {
             if (pattern.containsMatchIn(trimmed)) {
                 val reason = "Rejected destructive command: prohibited device-bricking operation."
-                logAuditEvent(RiskTier.CRITICAL_BLOCKED, trimmed, allowed = false, reason)
                 return InspectionResult(
                     tier = RiskTier.CRITICAL_BLOCKED,
                     isAllowed = false,
@@ -90,10 +84,6 @@ object CommandSecurityGuard {
             else -> RiskTier.AUDIT_LOG
         }
 
-        if (tier != RiskTier.SAFE) {
-            logAuditEvent(tier, sanitized, allowed = true, null)
-        }
-
         return InspectionResult(
             tier = tier,
             isAllowed = true,
@@ -102,21 +92,4 @@ object CommandSecurityGuard {
         )
     }
 
-    private fun logAuditEvent(tier: RiskTier, command: String, allowed: Boolean, reason: String?) {
-        try {
-            val logFile = File(AUDIT_LOG_FILE)
-            logFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
-
-            val timeStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
-            val statusStr = if (allowed) "ALLOWED" else "BLOCKED"
-            val tierStr = tier.name
-            val reasonSuffix = if (reason != null) " - Reason: $reason" else ""
-            val entry = "[$timeStr] [$tierStr] [$statusStr] ${command.take(120)}$reasonSuffix\n"
-
-            logFile.appendText(entry, StandardCharsets.UTF_8)
-            Log.d(TAG, "Security Audit: ${entry.trim()}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed writing security audit: ${e.message}")
-        }
-    }
 }

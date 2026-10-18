@@ -2,7 +2,7 @@ package com.synapse.localai
 
 import android.os.Environment
 import android.os.StatFs
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 
 /**
  * Hardware Storage Sentinel (Disk Exhaustion Guardrail)

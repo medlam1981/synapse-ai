@@ -10,7 +10,7 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import android.net.Uri
 import android.provider.MediaStore
 import android.graphics.Bitmap
@@ -232,6 +232,8 @@ class AgentViewModel : ViewModel() {
         private const val MAX_TASK_ITERATIONS = 128
         private const val MAX_TOOL_CALLS_PER_TURN = 32
         private const val AGENTS_DIR = "/sdcard/atlas-ai/Agents"
+        private const val BACKGROUND_PROGRESS_POLL_MS = 5_000L
+        private const val BACKGROUND_PROGRESS_REMINDER_MS = 30_000L
         
         var instance: AgentViewModel? = null
             private set
@@ -334,6 +336,8 @@ class AgentViewModel : ViewModel() {
     private var portalServer: PortalServer? = null
     private var ggufClient: GGUFModelClient? = null
     private var geminiClient: GeminiModelClient? = null
+    private val configLoadLock = Any()
+    private var configLoadStarted = false
 
     // دوال توافقية فارغة لضمان عدم حدوث أي خطأ في البناء
     fun toggleTts() {}
@@ -489,6 +493,7 @@ class AgentViewModel : ViewModel() {
     private data class PendingCommand(val command: String, val fileUri: Uri?)
     private val pendingCommands = Collections.synchronizedList(mutableListOf<PendingCommand>())
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+    private var conversationContextSummary = ""
 
     private fun trimConversationHistoryToContextLimit(targetTokenCeiling: Int? = null) {
         val maxEstimatedTokens = targetTokenCeiling?.coerceAtLeast(1024) ?: run {
@@ -500,6 +505,16 @@ class AgentViewModel : ViewModel() {
             while (conversationHistory.size > 2 && (estimatedTokens > maxEstimatedTokens || conversationHistory.size > MAX_HISTORY_MESSAGES)) {
                 val removed = conversationHistory.removeAt(0)
                 estimatedTokens -= ((removed.second.length / 3.5).toInt() + 10)
+                val concise = removed.second
+                    .replace(Regex("```[\\s\\S]*?```"), "[code omitted]")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                    .take(220)
+                if (concise.isNotBlank()) {
+                    val role = if (removed.first.equals("user", true)) "User" else "Assistant"
+                    val previous = conversationContextSummary.lineSequence().filter { it.isNotBlank() }.toList()
+                    conversationContextSummary = (previous + "$role: $concise").takeLast(12).joinToString("\n").takeLast(1800)
+                }
             }
         }
     }
@@ -1075,6 +1090,10 @@ class AgentViewModel : ViewModel() {
     }
 
     fun loadConfig(context: Context) {
+        synchronized(configLoadLock) {
+            if (configLoadStarted) return
+            configLoadStarted = true
+        }
         appContext = context.applicationContext
         fileChangeJournal = FileChangeJournal(File(context.applicationContext.filesDir, "file-change-journal"))
         viewModelScope.launch(Dispatchers.IO) {
@@ -1105,20 +1124,13 @@ class AgentViewModel : ViewModel() {
                 if (prefs.getString("gemini_model_name", "") != geminiModel) {
                     prefs.edit().putString("gemini_model_name", geminiModel).apply()
                 }
-                ModelScanner.ensureDirectories()
                 val activePersonasSet = PersonaManager.getActivePersonas(context)
                 val activePersonaName = activePersonasSet.firstOrNull() ?: PersonaManager.DEFAULT_PERSONA
                 val cachedPersonasList = PersonaManager.getPersonas(context, forceRescan = false)
                 
-                var localPath = savedPath ?: ""
-                if (localPath.isBlank() || !File(localPath).exists() || !ModelScanner.isBaseModelFile(File(localPath))) {
-                    val cachedModels = ModelScanner.getBaseModels(context, forceRescan = true).filter { ModelScanner.isBaseModelFile(it) }
-                    if (cachedModels.isNotEmpty()) {
-                        val preferred = cachedModels.firstOrNull { ModelScanner.isQuantizedModel(it) } ?: cachedModels.first()
-                        localPath = preferred.absolutePath
-                        prefs.edit().putString("local_model_path", localPath).apply()
-                    }
-                }
+                val localPath = savedPath
+                    ?.takeIf { it.isNotBlank() && File(it).exists() && ModelScanner.isBaseModelFile(File(it)) }
+                    .orEmpty()
                 val rawDraft = AgentSettingsRepository.getDraftModelPath(context).ifBlank { prefs.getString("draft_model_path", "") ?: "" }
                 val draftPath = if (rawDraft.isNotBlank() && rawDraft != "STANDALONE" && File(rawDraft).exists()) rawDraft else "STANDALONE"
 
@@ -1174,7 +1186,12 @@ class AgentViewModel : ViewModel() {
 
                 if (chatDb == null) chatDb = ChatDatabaseHelper(context)
                 refreshSessions()
-                startNewSession()
+                val savedSessionId = prefs.getString("current_session_id", null)
+                if (savedSessionId != null && chatDb?.getSession(savedSessionId) != null) {
+                    switchSession(savedSessionId)
+                } else {
+                    startNewSession()
+                }
                 initTaskSystem(context)
                 startScheduler()
 
@@ -1185,6 +1202,7 @@ class AgentViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "initialize failed", e)
+                synchronized(configLoadLock) { configLoadStarted = false }
             }
         }
     }
@@ -1537,6 +1555,18 @@ User prompt is in SPANISH. You MUST reply 100% in SPANISH ONLY.
    - You MUST analyze the findings and deliver a clear, structured summary directly to the user in the same turn. State verified numbers, scores, and real metrics directly. NEVER output prompt templates or XML tags back to the user.
 """.trimIndent()
 
+        val recalledVectorMemories = if (userPrompt.isNotBlank() && !isGreeting) {
+            com.synapse.localai.memory.VectorMemoryManager.formatRelevantContextForPrompt(userPrompt)
+        } else ""
+        val vectorMemoriesSection = if (recalledVectorMemories.isNotBlank()) "\n\n$recalledVectorMemories" else ""
+        val recalledEpisodes = if (userPrompt.isNotBlank() && !isGreeting) {
+            chatDb?.searchConversationContext(userPrompt, currentSessionId.value).orEmpty()
+        } else emptyList()
+        val episodicMemorySection = if (recalledEpisodes.isEmpty()) "" else {
+            "\n\n## Relevant episodic memories from prior conversations\n" +
+                recalledEpisodes.joinToString("\n") { "- $it" }
+        }
+
         if (forLocalModel) {
             val custom = if (customPrompt.isNotBlank()) "\n$customPrompt" else ""
             if (isGreeting) {
@@ -1549,6 +1579,8 @@ $localPersona$workspaceContext$greetingDirective$custom
 
 $localPersona
 $workspaceContext
+$episodicMemorySection
+$vectorMemoriesSection
 Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
 Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 File safety: write_file creates a reversible before-image. Use rollback_file_changes(transaction_id) to restore a transaction when a change must be undone. Background writes are grouped under the task ID and automatically rolled back if the task permanently fails or is cancelled. Shell commands are not covered by this file rollback.
@@ -1563,18 +1595,13 @@ CRITICAL EXECUTION RULES:
 $languageEnforcement""".trimIndent()
         }
 
-        val recalledVectorMemories = if (userPrompt.isNotBlank()) {
-            com.synapse.localai.memory.VectorMemoryManager.formatRelevantContextForPrompt(userPrompt)
-        } else ""
-        val vectorMemoriesSection = if (recalledVectorMemories.isNotBlank()) "\n\n$recalledVectorMemories" else ""
-
-        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}|$workspaceContext"
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}|${recalledVectorMemories.hashCode()}|${recalledEpisodes.hashCode()}|$workspaceContext"
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) return cachedStaticPrefix!!
 
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), update_task(task_id, description, command, execute_at, cron_expression), pause_task(task_id), resume_scheduled_task(task_id), cancel_task(task_id), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
 - For requests to create Word or Excel files, invoke the matching document tool with complete content. For Excel, include non-empty rows and headers in data_json (array of arrays or objects); never pass an empty placeholder table. Then report the generated file and its preview. Files are saved under /sdcard/atlas-ai/documents and can be previewed or downloaded from the conversation.
 - Tool invocation format:
 <function_calls>
@@ -1588,7 +1615,7 @@ $languageEnforcement""".trimIndent()
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$workspaceContext$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$workspaceContext$episodicMemorySection$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -1668,7 +1695,15 @@ $languageEnforcement""".trimIndent()
                     isProcessing = true,
                     tokensPerSecond = 0f,
                     lastExecutionResult = "",
-                    streamInterruptMsg = null
+                    streamInterruptMsg = null,
+                    activeStatusDetail = command.lineSequence()
+                        .firstOrNull { line -> line.isNotBlank() }
+                        ?.trim()
+                        ?.let { taskTitle ->
+                            val label = if (taskTitle.any { char -> char in '\u0600'..'\u06FF' }) "المهمة" else "Task"
+                            "$label: ${taskTitle.take(96)}"
+                        }
+                        ?: if (fileUri != null) "Task: Reading attached file" else "Preparing response"
                 ) 
             }
             
@@ -1820,11 +1855,13 @@ $languageEnforcement""".trimIndent()
                     val historyCopy = synchronized(conversationHistory) {
                         trimConversationHistoryToContextLimit()
                         val historyList = conversationHistory.takeLast(MAX_HISTORY_MESSAGES).toList()
-                        historyList.mapIndexed { idx, (role, content) ->
+                        val recentHistory = historyList.mapIndexed { idx, (role, content) ->
                             val isOlder = idx < historyList.size - 2
                             val safeContent = if (isOlder && role == "assistant") compactHistoryForQuota(content) else content
                             role to safeContent
                         }.filter { it.second.trim().isNotBlank() }
+                        if (conversationContextSummary.isBlank()) recentHistory
+                        else listOf("assistant" to "Earlier conversation summary:\n$conversationContextSummary") + recentHistory
                     }
 
                     try {
@@ -2057,7 +2094,7 @@ $languageEnforcement""".trimIndent()
                             } else {
                                 when (detectedLang) {
                                     DetectedLanguage.ARABIC -> when (action) {
-                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "سأقوم بتنفيذ الأمر وفحص النظام الآن:"
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "سأنفذ الأمر المطلوب الآن:"
                                         "web_search", "search", "google_search" -> "سأقوم بالبحث والتحقق من المصادر الآن:"
                                         "click", "click_node", "tap" -> "سأقوم بالنقر والتفاعل مع العنصر المحدد الآن:"
                                         "swipe", "scroll" -> "سأقوم بتنفيذ حركة التمرير على الشاشة الآن:"
@@ -2067,7 +2104,7 @@ $languageEnforcement""".trimIndent()
                                         else -> "جاري تنفيذ العملية المطلوبة:"
                                     }
                                     DetectedLanguage.FRENCH -> when (action) {
-                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Exécution de la commande système en cours :"
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Exécution de la commande demandée :"
                                         "web_search", "search", "google_search" -> "Recherche d'informations vérifiées en cours :"
                                         "click", "click_node", "tap" -> "Interaction avec l'élément sélectionné en cours :"
                                         "swipe", "scroll" -> "Exécution du geste sur l'écran en cours :"
@@ -2077,7 +2114,7 @@ $languageEnforcement""".trimIndent()
                                         else -> "Exécution de l'opération demandée :"
                                     }
                                     DetectedLanguage.SPANISH -> when (action) {
-                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Ejecutando comando de diagnóstico del sistema ahora:"
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Ejecutando el comando solicitado:"
                                         "web_search", "search", "google_search" -> "Buscando información verificada ahora:"
                                         "click", "click_node", "tap" -> "Interactuando con el elemento en pantalla ahora:"
                                         "swipe", "scroll" -> "Realizando gesto en pantalla ahora:"
@@ -2087,7 +2124,7 @@ $languageEnforcement""".trimIndent()
                                         else -> "Ejecutando la operación solicitada:"
                                     }
                                     DetectedLanguage.ENGLISH -> when (action) {
-                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Executing system diagnostic command now:"
+                                        "run_shell", "execute_shell", "terminal", "bash", "sh" -> "Executing the requested command:"
                                         "web_search", "search", "google_search" -> "Searching for verified information now:"
                                         "click", "click_node", "tap" -> "Interacting with target screen element now:"
                                         "swipe", "scroll" -> "Performing gesture on screen now:"
@@ -2323,8 +2360,7 @@ $langFinalInstruction"""
                                 chatDb?.insertMessage(ChatMessageEntity(id = liveLogId, sessionId = sid, sender = "AGENT", text = dbText, timestamp = System.currentTimeMillis()))
                                 refreshSessions()
 
-                                val detectedPath = ToolExecutor.detectFilePath(fullResponse)
-                                EpistemicMemoryManager.recordInteraction(actualContext, command, fullResponse, detectedPath)
+                                EpistemicMemoryManager.recordInteraction(actualContext, command, fullResponse)
                             }
                             if (cleanDisplay.isNotBlank()) {
                                 synchronized(conversationHistory) {
@@ -2410,6 +2446,7 @@ $langFinalInstruction"""
         val pm = ctx?.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         val wakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "synapse:BackgroundTask")
         wakeLock?.acquire(10 * 60 * 1000L)
+        var progressReporter: Job? = null
         
         try {
             val savedTask = taskId?.let { taskMemory?.getTask(it) }
@@ -2429,6 +2466,16 @@ $langFinalInstruction"""
                     encodeTaskCheckpoint(taskHistory),
                     "Recovered an interrupted tool action; verifying state before retry"
                 )
+            }
+
+            if (taskId != null) {
+                taskMemory?.saveExecutionCheckpoint(
+                    taskId,
+                    encodeTaskCheckpoint(taskHistory),
+                    "Preparing background task"
+                )
+                updateTaskState()
+                progressReporter = startBackgroundProgressReporter(taskId)
             }
 
             if (acceptanceCriteria.isEmpty()) {
@@ -2490,10 +2537,14 @@ ${acceptanceCriteria.mapIndexed { index, criterion -> "${index + 1}. $criterion"
             
             while (keepGoing && iterations < MAX_TASK_ITERATIONS) {
                 if (taskId != null) {
-                    val status = taskMemory?.getTask(taskId)?.status
-                    if (status == null || status == TaskStatus.CANCELLED) {
-                        throw kotlinx.coroutines.CancellationException("Task was cancelled or removed before completion")
-                    }
+                var status = taskMemory?.getTask(taskId)?.status
+                while (status == TaskStatus.PAUSED) {
+                    delay(500L)
+                    status = taskMemory?.getTask(taskId)?.status
+                }
+                if (status == null || status == TaskStatus.CANCELLED) {
+                    throw kotlinx.coroutines.CancellationException("Task was cancelled or removed before completion")
+                }
                 }
                 
                 iterations++
@@ -2510,6 +2561,11 @@ ${acceptanceCriteria.mapIndexed { index, criterion -> "${index + 1}. $criterion"
                 val reply = cleanVisibleText(response).trim()
                 taskHistory.add("model" to stripThinkingForHistory(reply))
                 while (taskHistory.size > 10) taskHistory.removeAt(1)
+                taskMemory?.saveExecutionCheckpoint(
+                    taskId,
+                    encodeTaskCheckpoint(taskHistory),
+                    "Saved completed generation step $iterations"
+                )
 
                 if (reply.startsWith("NEEDS_USER_INPUT:", ignoreCase = true)) {
                     val question = reply.substringAfter(':').trim().ifBlank {
@@ -2693,9 +2749,59 @@ $evidence
             )
             return finalResult
         } finally {
+            progressReporter?.cancel()
             ctx?.let { ModelEngineService.updateStatus(it, "ATLAS-AI • Ready") }
             if (wakeLock?.isHeld == true) wakeLock.release()
             updateTaskState()
+        }
+    }
+
+    private fun startBackgroundProgressReporter(taskId: String): Job =
+        viewModelScope.launch(Dispatchers.IO) {
+            var nextReminderAt = 0L
+            while (true) {
+                val task = taskMemory?.getTask(taskId) ?: break
+                updateTaskState()
+                when (task.status) {
+                    TaskStatus.RUNNING -> {
+                        val now = System.currentTimeMillis()
+                        if (now >= nextReminderAt) {
+                            val progress = task.progress.takeIf { it.isNotBlank() }
+                                ?: "Working on the current step"
+                            (appContext ?: MainActivity.instance)?.let { context ->
+                                ModelEngineService.updateStatus(
+                                    context,
+                                    "ATLAS-AI • ${task.description.take(48)} • ${progress.take(80)}"
+                                )
+                            }
+                            addLog(
+                                LogEntry(
+                                    sender = "SYSTEM",
+                                    text = backgroundProgressMessage(task, progress)
+                                )
+                            )
+                            nextReminderAt = now + BACKGROUND_PROGRESS_REMINDER_MS
+                        }
+                    }
+                    TaskStatus.PAUSED -> Unit
+                    else -> break
+                }
+                delay(BACKGROUND_PROGRESS_POLL_MS)
+            }
+        }
+
+    private fun backgroundProgressMessage(task: AgentTask, progress: String): String {
+        val description = task.description.take(120)
+        val detail = progress.take(240)
+        return when (detectLanguage(task.command)) {
+            DetectedLanguage.ARABIC ->
+                "🔄 ما زلت أعمل على المهمة في الخلفية.\nالمهمة: $description\nآخر تقدم: $detail"
+            DetectedLanguage.FRENCH ->
+                "🔄 La tâche continue en arrière-plan.\nTâche : $description\nDernière progression : $detail"
+            DetectedLanguage.SPANISH ->
+                "🔄 La tarea sigue ejecutándose en segundo plano.\nTarea: $description\nÚltimo progreso: $detail"
+            DetectedLanguage.ENGLISH ->
+                "🔄 Background task is still running.\nTask: $description\nLatest progress: $detail"
         }
     }
 
@@ -2724,7 +2830,7 @@ $evidence
             }
             stream.collect { chunk -> sb.append(chunk); onChunk?.invoke(chunk) }
         } catch (e: Exception) {
-            android.util.Log.w("AgentViewModel", "runSingleLlmPass error: ${e.message}")
+            Log.w("AgentViewModel", "runSingleLlmPass error: ${e.message}")
         }
         sb.toString()
     }
@@ -2902,8 +3008,11 @@ $evidence
                             if (script.isNotBlank()) {
                                 actionToolUsed = true
                                 val output = PythonTool.execute(script)
-                                summaries.add("✔ Tool(run_python) ─── [EXECUTED]\n$output")
-                                addSystemLog("Python execution completed")
+                                val succeeded = !output.startsWith("✖ Python Execution Error:")
+                                summaries.add(
+                                    "${if (succeeded) "✔" else "✖"} Tool(run_python) ─── [${if (succeeded) "EXECUTED" else "FAILED"}]\n$output"
+                                )
+                                addSystemLog(if (succeeded) "Python execution completed" else "Python execution failed")
                             }
                         }
                         "fetch_web_content", "fetch_url", "read_url" -> {
@@ -3084,6 +3193,9 @@ $evidence
                             val desc = params["description"] ?: params["desc"] ?: params["title"] ?: cmd.take(50)
                             actualContext?.let { initTaskSystem(it) }
                             val taskId = taskEngine?.queueCommand(cmd, "agent")
+                            if (taskId != null) {
+                                actualContext?.let { ModelEngineService.start(it, "Queued background task: ${desc.take(40)}") }
+                            }
                             updateTaskState()
                             actionToolUsed = true
                             summaries.add("✔ Background Task Queued:\n• Description: $desc\n• Command: $cmd\n• Task ID: $taskId\n• Status: Active in background queue")
@@ -3123,7 +3235,42 @@ $evidence
                                 else "✖ Could not resume the task. Verify the full task ID, provide a non-empty clarification, and ensure the task is waiting for user input."
                             )
                         }
-                        "cancel_task" -> {
+                        "pause_task" -> {
+                            val taskId = params["task_id"] ?: params["id"] ?: ""
+                            actualContext?.let { initTaskSystem(it) }
+                            val paused = taskId.isNotBlank() && pauseManagedTask(taskId)
+                            actionToolUsed = true
+                            summaries.add(if (paused) "✔ Task $taskId paused and its execution checkpoint retained." else "✖ Task could not be paused; verify that it is active and not waiting for user input.")
+                        }
+                        "resume_scheduled_task" -> {
+                            val taskId = params["task_id"] ?: params["id"] ?: ""
+                            actualContext?.let { initTaskSystem(it) }
+                            val resumed = taskId.isNotBlank() && resumeManagedTask(taskId)
+                            actionToolUsed = true
+                            summaries.add(if (resumed) "✔ Task $taskId resumed from its saved checkpoint." else "✖ Task is not paused or could not be resumed.")
+                        }
+                        "update_task" -> {
+                            val taskId = params["task_id"] ?: params["id"] ?: ""
+                            actualContext?.let { initTaskSystem(it) }
+                            val existing = taskMemory?.getTask(taskId)
+                            val cron = params["cron_expression"] ?: params["cron"]
+                            val requestedTime = params["execute_at"]?.toLongOrNull()
+                                ?: params["delay_minutes"]?.toLongOrNull()?.let {
+                                    System.currentTimeMillis() + it.coerceAtLeast(0L) * 60_000L
+                                }
+                                ?: existing?.executeAt
+                                ?: 0L
+                            val updated = existing != null && updateManagedTask(
+                                taskId = taskId,
+                                description = params["description"] ?: existing.description,
+                                command = params["command"] ?: existing.command,
+                                executeAt = requestedTime,
+                                cronExpression = cron ?: existing.cronExpression
+                            )
+                            actionToolUsed = true
+                            summaries.add(if (updated) "✔ Task $taskId updated." else "✖ Task could not be updated; check its ID, execution time, and cron expression.")
+                        }
+                        "cancel_task", "delete_task" -> {
                             val targetId = params["task_id"] ?: params["id"] ?: params.values.firstOrNull() ?: ""
                             if (targetId.isNotBlank()) {
                                 actualContext?.let { initTaskSystem(it) }
@@ -3150,6 +3297,7 @@ $evidence
                         }
                         "run_plugin", "plugin", "exec_plugin" -> {
                             actualContext?.let { initTaskSystem(it) }
+                            com.synapse.localai.plugins.PluginRegistry.init(actualContext)
                             val pluginName = params["name"] ?: params["plugin"] ?: params["plugin_name"] ?: params.values.firstOrNull() ?: ""
                             if (pluginName.isNotBlank()) {
                                 actionToolUsed = true
@@ -3161,7 +3309,7 @@ $evidence
                         "save_memory", "store_memory", "remember" -> {
                             actualContext?.let { initTaskSystem(it) }
                             val content = params["content"] ?: params["text"] ?: params["memory"] ?: params.values.firstOrNull() ?: ""
-                            val category = params["category"] ?: params["type"] ?: "FACT"
+                            val category = params["category"] ?: params["type"] ?: "SEMANTIC_KNOWLEDGE"
                             if (content.isNotBlank()) {
                                 actionToolUsed = true
                                 val rec = com.synapse.localai.memory.VectorMemoryManager.store(content, category)
@@ -3191,6 +3339,7 @@ $evidence
                         }
                         else -> {
                             actualContext?.let { initTaskSystem(it) }
+                            com.synapse.localai.plugins.PluginRegistry.init(actualContext)
                             if (com.synapse.localai.plugins.PluginRegistry.hasPlugin(action)) {
                                 actionToolUsed = true
                                 val pluginRes = com.synapse.localai.plugins.PluginRegistry.executePlugin(action, params)
@@ -3277,6 +3426,7 @@ $evidence
         "✖ Failed to create .xlsx spreadsheet: ${e.message ?: e.javaClass.simpleName}"
     }
 
+    @Synchronized
     fun initTaskSystem(context: Context) {
         if (fileChangeJournal == null) {
             fileChangeJournal = FileChangeJournal(File(context.applicationContext.filesDir, "file-change-journal"))
@@ -3285,13 +3435,11 @@ $evidence
             val tm = TaskMemoryManager(context)
             taskMemory = tm
             val engine = BackgroundTaskEngine(tm)
-            val daemon = MaintenanceDaemon(context, tm)
-            engine.maintenanceDaemon = daemon
             taskEngine = engine
             taskEngine?.start()
         }
-        com.synapse.localai.plugins.PluginRegistry.init(context)
         com.synapse.localai.memory.VectorMemoryManager.init(context)
+        updateTaskState()
     }
     
     fun updateTaskState() {
@@ -3302,6 +3450,86 @@ $evidence
             taskSummary = tm.getTaskSummary(),
             taskEngineRunning = taskEngine?.engineState?.value?.isRunning ?: false
         ) }
+    }
+
+    fun getManagedTasks(): List<AgentTask> = taskMemory?.getAllActiveTasks().orEmpty()
+
+    fun createManagedTask(
+        description: String,
+        command: String,
+        executeAt: Long,
+        cronExpression: String?
+    ): Boolean {
+        val manager = taskMemory ?: return false
+        if (description.isBlank() || command.isBlank()) return false
+        val cron = cronExpression?.trim()?.takeIf { it.isNotEmpty() }
+        val scheduledAt = if (cron != null) {
+            CronExpressionParser.getNextExecutionTime(cron)
+        } else {
+            executeAt
+        }
+        if (scheduledAt <= System.currentTimeMillis()) return false
+        manager.addTask(
+            AgentTask(
+                description = description.trim(),
+                command = command.trim(),
+                status = TaskStatus.PENDING,
+                executeAt = scheduledAt,
+                cronExpression = cron,
+                isRecurring = cron != null,
+                source = "user"
+            )
+        )
+        updateTaskState()
+        return true
+    }
+
+    fun pauseManagedTask(taskId: String): Boolean {
+        val changed = taskEngine?.pauseTask(taskId) ?: taskMemory?.pauseTask(taskId) ?: false
+        updateTaskState()
+        return changed
+    }
+
+    fun resumeManagedTask(taskId: String): Boolean {
+        val changed = taskEngine?.resumePausedTask(taskId) ?: taskMemory?.resumePausedTask(taskId) ?: false
+        updateTaskState()
+        return changed
+    }
+
+    fun cancelManagedTask(taskId: String): Boolean {
+        if (taskMemory?.getTask(taskId) == null) return false
+        val changed = taskEngine?.cancelTask(taskId) ?: false
+        if (!changed) taskMemory?.markCancelled(taskId)
+        updateTaskState()
+        return true
+    }
+
+    fun updateManagedTask(
+        taskId: String,
+        description: String,
+        command: String,
+        executeAt: Long,
+        cronExpression: String?
+    ): Boolean {
+        val manager = taskMemory ?: return false
+        val task = manager.getTask(taskId) ?: return false
+        if (task.status == TaskStatus.RUNNING || description.isBlank() || command.isBlank()) return false
+        val cron = cronExpression?.trim()?.takeIf { it.isNotEmpty() }
+        val scheduledAt = if (cron != null) {
+            CronExpressionParser.getNextExecutionTime(cron)
+        } else {
+            executeAt
+        }
+        if (scheduledAt <= 0L) return false
+        manager.updateTask(task.copy(
+            description = description.trim(),
+            command = command.trim(),
+            executeAt = scheduledAt,
+            cronExpression = cron,
+            isRecurring = cron != null
+        ))
+        updateTaskState()
+        return true
     }
 
     fun getFileChangeJournal(): FileChangeJournal? {
@@ -3327,9 +3555,11 @@ $evidence
     fun startNewSession() {
         val newId = UUID.randomUUID().toString()
         currentSessionId.value = newId
+        appContext?.let { prefs(it).edit().putString("current_session_id", newId).apply() }
         currentSessionTitle.value = "New Session"
         _uiState.update { it.copy(logs = emptyList(), resumptionNotice = null, activeWorkspacePath = null) }
         conversationHistory.clear()
+        conversationContextSummary = ""
         viewModelScope.launch(Dispatchers.IO) {
             chatDb?.insertSession(ChatSessionEntity(id = newId, title = "New Session", createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis()))
             refreshSessions()
@@ -3369,11 +3599,13 @@ $evidence
                 )
             }
             currentSessionId.value = session.id
+            appContext?.let { prefs(it).edit().putString("current_session_id", session.id).apply() }
             currentSessionTitle.value = session.title
             val sessionPath = messages.reversed().firstNotNullOfOrNull { workspaceRootFromText(it.text) }
             _uiState.update { it.copy(logs = restoredLogs, resumptionNotice = null, activeWorkspacePath = sessionPath) }
             synchronized(conversationHistory) {
                 conversationHistory.clear()
+                conversationContextSummary = ""
                 restoredLogs.takeLast(MAX_HISTORY_MESSAGES).forEach { l ->
                     val role = if (l.sender == "USER") "user" else "model"
                     val cleanText = if (role == "model") {

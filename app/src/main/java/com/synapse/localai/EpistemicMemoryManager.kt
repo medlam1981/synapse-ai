@@ -1,7 +1,8 @@
 package com.synapse.localai
 
 import android.content.Context
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
+import com.synapse.localai.memory.VectorMemoryManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -10,7 +11,7 @@ import java.io.File
  * Epistemic Memory & Persona Manager
  *
  * Implements:
- * 1. Persistent Persona & Identity (agent_mind.json)
+ * 1. Persistent Persona & Identity, with learned memories stored in SQLite.
  *    - Living self-profile containing identity (MEDLAM-AI), operating capabilities, dialects/tone,
  *      and persistent user coding preferences.
  *    - Decoupled from transient filesystem operations and temporary tasks.
@@ -22,10 +23,8 @@ import java.io.File
 object EpistemicMemoryManager {
 
     private const val TAG = "EpistemicMemory"
-    private const val PRIMARY_DIR = "/sdcard/atlas-ai/memory"
+    private const val PRIMARY_MIND_FILE = "/sdcard/atlas-ai/memory/agent_mind.json"
     private const val LEGACY_MIND_FILE = "/sdcard/Medlam-Ai/memory/agent_mind.json"
-    private const val CHECKPOINT_FILE = "agent_checkpoint.json"
-    private const val MIND_FILE = "agent_mind.json"
 
     data class AgentCheckpoint(
         val sessionId: String = "",
@@ -61,22 +60,6 @@ object EpistemicMemoryManager {
 
     @Volatile private var cachedMind: AgentMind? = null
 
-    private fun getStorageDir(context: Context?): File {
-        val sd = File(PRIMARY_DIR)
-        if (sd.exists() && sd.canWrite()) return sd
-        try {
-            if (sd.mkdirs() && sd.canWrite()) return sd
-        } catch (_: Exception) {}
-        val fallback = if (context != null) File(context.filesDir, "memory") else File("/data/local/tmp/memory")
-        if (!fallback.exists()) fallback.mkdirs()
-        return fallback
-    }
-
-    private fun getFile(context: Context?, filename: String): File {
-        val dir = getStorageDir(context)
-        return File(dir, filename)
-    }
-
     // =========================================================================
     // 1. Deprecated Checkpoints (Clean-Slate Policy)
     // =========================================================================
@@ -88,13 +71,6 @@ object EpistemicMemoryManager {
 
     @Synchronized
     fun loadCheckpoint(context: Context?): AgentCheckpoint? {
-        // Clean-slate startup: never auto-restore sticky checkpoints on cold boot
-        try {
-            val file = getFile(context, CHECKPOINT_FILE)
-            if (file.exists()) {
-                file.delete()
-            }
-        } catch (_: Exception) {}
         return null
     }
 
@@ -118,14 +94,14 @@ object EpistemicMemoryManager {
     @Synchronized
     fun loadMind(context: Context?): AgentMind {
         if (cachedMind != null) return cachedMind!!
-        val primaryFile = File(PRIMARY_DIR, MIND_FILE)
+        val primaryFile = File(PRIMARY_MIND_FILE)
         val legacyFile = File(LEGACY_MIND_FILE)
         val file = when {
             primaryFile.exists() -> primaryFile
             legacyFile.exists() -> legacyFile
-            else -> getFile(context, MIND_FILE)
+            else -> null
         }
-        if (!file.exists() || file.length() == 0L) {
+        if (file == null || !file.exists() || file.length() == 0L) {
             val defaultMind = AgentMind().apply {
                 userPreferences.add("Prefers modern idiomatic code (Kotlin, Python, Web)")
                 userPreferences.add("Prefers direct, complete code solutions without placeholders")
@@ -134,7 +110,6 @@ object EpistemicMemoryManager {
                 learnedFacts.add("Local neural models: /sdcard/atlas-ai/models/")
                 learnedFacts.add("Speculative MTP drafts: /sdcard/atlas-ai/mtp/")
             }
-            saveMind(context, defaultMind)
             cachedMind = defaultMind
             return defaultMind
         }
@@ -178,7 +153,7 @@ object EpistemicMemoryManager {
             }
             mind
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing agent_mind.json: ${e.message}")
+            Log.e(TAG, "Error parsing legacy agent mind", e)
             val fallback = AgentMind()
             cachedMind = fallback
             fallback
@@ -187,27 +162,14 @@ object EpistemicMemoryManager {
 
     @Synchronized
     fun saveMind(context: Context?, mind: AgentMind) {
-        try {
-            cachedMind = mind
-            val file = getFile(context, MIND_FILE)
-            val json = JSONObject().apply {
-                put("identity", JSONObject().apply {
-                    put("name", mind.name)
-                    put("role", mind.role)
-                    put("runtime", mind.runtime)
-                    put("workspace_root", mind.workspaceRoot)
-                })
-                put("user_profile", JSONObject().apply {
-                    put("preferred_languages", JSONArray(mind.preferredLanguages))
-                    put("tone", mind.tone)
-                    put("user_preferences", JSONArray(mind.userPreferences.take(20)))
-                })
-                put("learned_facts", JSONArray(mind.learnedFacts.take(20)))
-            }
-            file.writeText(json.toString(2))
-            Log.d(TAG, "agent_mind.json updated successfully (${mind.userPreferences.size} preferences, ${mind.learnedFacts.size} facts)")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error saving agent_mind.json: ${e.message}")
+        cachedMind = mind
+        val appContext = context?.applicationContext ?: return
+        VectorMemoryManager.init(appContext)
+        mind.userPreferences.take(20).forEach {
+            VectorMemoryManager.store(it, category = "USER_PREFERENCE")
+        }
+        mind.learnedFacts.take(20).forEach {
+            VectorMemoryManager.store(it, category = "CORE_MEMORY")
         }
     }
 

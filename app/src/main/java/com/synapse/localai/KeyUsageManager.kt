@@ -2,7 +2,7 @@ package com.synapse.localai
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

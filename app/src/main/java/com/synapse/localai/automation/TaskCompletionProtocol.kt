@@ -2,7 +2,7 @@ package com.synapse.localai.automation
 
 import android.content.Context
 import android.content.Intent
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.MainActivity
 import com.synapse.localai.RootShellManager
 import kotlinx.coroutines.Dispatchers

@@ -1,7 +1,7 @@
 package com.synapse.localai.audio
 
 import android.content.Context
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

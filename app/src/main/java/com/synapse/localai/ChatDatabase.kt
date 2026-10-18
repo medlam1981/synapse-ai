@@ -5,7 +5,8 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import android.util.Log
+import com.synapse.localai.memory.VectorRecord
+import com.synapse.localai.AtlasLog as Log
 import java.util.UUID
 
 data class ChatSessionEntity(
@@ -30,7 +31,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
     companion object {
         private const val TAG = "ChatDatabaseHelper"
         private const val DATABASE_NAME = "synapse_chat_history.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
 
         private const val TABLE_SESSIONS = "chat_sessions"
         private const val COL_SESSION_ID = "id"
@@ -46,6 +47,9 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         private const val COL_MSG_TEXT = "text"
         private const val COL_MSG_IS_ERROR = "is_error"
         private const val COL_MSG_TIMESTAMP = "timestamp"
+        private const val TABLE_MEMORIES = "atlas_memories"
+        private const val TABLE_MEMORY_FTS = "atlas_memory_fts"
+        private const val TABLE_CHAT_FTS = "atlas_chat_fts"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -74,12 +78,155 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         db.execSQL(createSessionsTable)
         db.execSQL(createMessagesTable)
         db.execSQL("CREATE INDEX idx_msg_session ON $TABLE_MESSAGES($COL_MSG_SESSION_ID, $COL_MSG_TIMESTAMP)")
+        createMemoryTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_MESSAGES")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_SESSIONS")
-        onCreate(db)
+        if (oldVersion < 3) createMemoryTables(db)
+    }
+
+    private fun createMemoryTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS $TABLE_MEMORIES (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                category TEXT NOT NULL,
+                record_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )""".trimIndent()
+        )
+        db.execSQL(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS $TABLE_MEMORY_FTS USING fts4(content, category)"
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS atlas_memory_insert AFTER INSERT ON $TABLE_MEMORIES BEGIN
+                INSERT INTO $TABLE_MEMORY_FTS(docid, content, category) VALUES (new.rowid, new.content, new.category);
+            END""".trimIndent()
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS atlas_memory_update AFTER UPDATE ON $TABLE_MEMORIES BEGIN
+                DELETE FROM $TABLE_MEMORY_FTS WHERE docid = old.rowid;
+                INSERT INTO $TABLE_MEMORY_FTS(docid, content, category) VALUES (new.rowid, new.content, new.category);
+            END""".trimIndent()
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS atlas_memory_delete AFTER DELETE ON $TABLE_MEMORIES BEGIN
+                DELETE FROM $TABLE_MEMORY_FTS WHERE docid = old.rowid;
+            END""".trimIndent()
+        )
+        db.execSQL(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS $TABLE_CHAT_FTS USING fts4(chat_text, sender)"
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS atlas_chat_insert AFTER INSERT ON $TABLE_MESSAGES BEGIN
+                INSERT INTO $TABLE_CHAT_FTS(docid, chat_text, sender) VALUES (new.rowid, new.$COL_MSG_TEXT, new.$COL_MSG_SENDER);
+            END""".trimIndent()
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS atlas_chat_update AFTER UPDATE ON $TABLE_MESSAGES BEGIN
+                DELETE FROM $TABLE_CHAT_FTS WHERE docid = old.rowid;
+                INSERT INTO $TABLE_CHAT_FTS(docid, chat_text, sender) VALUES (new.rowid, new.$COL_MSG_TEXT, new.$COL_MSG_SENDER);
+            END""".trimIndent()
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS atlas_chat_delete AFTER DELETE ON $TABLE_MESSAGES BEGIN
+                DELETE FROM $TABLE_CHAT_FTS WHERE docid = old.rowid;
+            END""".trimIndent()
+        )
+        db.execSQL(
+            """INSERT INTO $TABLE_CHAT_FTS(docid, chat_text, sender)
+                SELECT rowid, $COL_MSG_TEXT, $COL_MSG_SENDER FROM $TABLE_MESSAGES
+                WHERE rowid NOT IN (SELECT docid FROM $TABLE_CHAT_FTS)""".trimIndent()
+        )
+    }
+
+    fun getMemoryRecords(): List<VectorRecord> {
+        val records = mutableListOf<VectorRecord>()
+        readableDatabase.rawQuery("SELECT record_json FROM $TABLE_MEMORIES ORDER BY created_at DESC", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                runCatching { VectorRecord.fromJson(org.json.JSONObject(cursor.getString(0))) }
+                    .getOrNull()
+                    ?.let(records::add)
+            }
+        }
+        return records
+    }
+
+    fun replaceMemoryRecords(records: List<VectorRecord>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(TABLE_MEMORIES, null, null)
+            records.forEach { record ->
+                val values = ContentValues().apply {
+                    put("id", record.id)
+                    put("content", record.content)
+                    put("category", record.category)
+                    put("record_json", record.toJson().toString())
+                    put("created_at", record.createdAt)
+                }
+                db.insertOrThrow(TABLE_MEMORIES, null, values)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun searchMemoryRecords(query: String, limit: Int = 20): List<VectorRecord> {
+        val tokens = query.split(Regex("[^\\p{L}\\p{Nd}]+"))
+            .filter { it.length > 1 }
+            .distinct()
+            .take(12)
+        if (tokens.isEmpty()) return emptyList()
+        val matchExpression = tokens.joinToString(" OR ") { "\"${it.replace("\"", "\"\"")}\"" }
+        val records = mutableListOf<VectorRecord>()
+        readableDatabase.rawQuery(
+            """SELECT memories.record_json FROM $TABLE_MEMORY_FTS AS search
+                JOIN $TABLE_MEMORIES AS memories ON memories.rowid = search.docid
+                WHERE $TABLE_MEMORY_FTS MATCH ?
+                LIMIT ?""".trimIndent(),
+            arrayOf(matchExpression, limit.coerceIn(1, 100).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                runCatching { VectorRecord.fromJson(org.json.JSONObject(cursor.getString(0))) }
+                    .getOrNull()
+                    ?.let(records::add)
+            }
+        }
+        return records
+    }
+
+    fun searchConversationContext(
+        query: String,
+        excludeSessionId: String? = null,
+        limit: Int = 4
+    ): List<String> {
+        val tokens = query.split(Regex("[^\\p{L}\\p{Nd}]+"))
+            .filter { it.length > 1 }
+            .distinct()
+            .take(12)
+        if (tokens.isEmpty()) return emptyList()
+        val matchExpression = tokens.joinToString(" OR ") { "\"${it.replace("\"", "\"\"")}\"" }
+        val context = mutableListOf<String>()
+        readableDatabase.rawQuery(
+            """SELECT sessions.title, messages.sender, messages.text FROM $TABLE_CHAT_FTS AS search
+                JOIN $TABLE_MESSAGES AS messages ON messages.rowid = search.docid
+                LEFT JOIN $TABLE_SESSIONS AS sessions ON sessions.$COL_SESSION_ID = messages.$COL_MSG_SESSION_ID
+                WHERE $TABLE_CHAT_FTS MATCH ? AND (? IS NULL OR messages.$COL_MSG_SESSION_ID != ?)
+                ORDER BY messages.$COL_MSG_TIMESTAMP DESC LIMIT ?""".trimIndent(),
+            arrayOf(matchExpression, excludeSessionId, excludeSessionId, limit.coerceIn(1, 12).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val title = cursor.getString(0).orEmpty().take(80)
+                val sender = cursor.getString(1).orEmpty()
+                val text = cursor.getString(2).orEmpty()
+                    .replace(Regex("\\s+"), " ")
+                    .take(360)
+                if (text.isNotBlank()) context.add("[$title] $sender: $text")
+            }
+        }
+        return context
     }
 
     fun getAllSessions(): List<ChatSessionEntity> {

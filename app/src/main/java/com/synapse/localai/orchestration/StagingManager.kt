@@ -1,6 +1,6 @@
 package com.synapse.localai.orchestration
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.HtmlSanitizer
 import com.synapse.localai.SnapshotManager
 import org.json.JSONArray

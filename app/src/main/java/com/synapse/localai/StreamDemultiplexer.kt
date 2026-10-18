@@ -1,6 +1,6 @@
 package com.synapse.localai
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID

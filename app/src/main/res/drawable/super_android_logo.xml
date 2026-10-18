@@ -13,7 +13,7 @@
         android:pathData="M4,11.5V17C4,18.1 4.9,19 6,19H7.5V22H9.5V19H14.5V22H16.5V19H18C19.1,19 20,18.1 20,17V11.5H4Z" />
     <!-- The Crossed Arms detail (Visualized as thin lines on the body) -->
     <path
-        android:strokeColor="#0A0E1A"
+        android:strokeColor="#18181B"
         android:strokeWidth="0.6"
         android:pathData="M7,13.5 Q12,12.5 17,13.5 M8,15.5 Q12,14.5 16,15.5" />
 </vector>

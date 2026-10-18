@@ -1,6 +1,6 @@
 package com.synapse.localai.tools
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.RootShellManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,13 +11,14 @@ import java.nio.charset.StandardCharsets
  * Embedded Python Execution Engine.
  *
  * Provides native on-device Python discovery, environment probing,
- * script execution with scientific library support (NumPy, Pandas, SciPy, Matplotlib),
- * timeout control, and structured execution metrics.
+ * script execution with scientific library support (NumPy, Pandas, SciPy, Matplotlib)
+ * and structured execution metrics.
  */
 object PythonExecutionEngine {
 
     private const val TAG = "PythonExecutionEngine"
     private const val SCRATCH_DIR = "/sdcard/atlas-ai/scratch"
+    private const val KALI_ROOT = "/data/local/nhsystem/kali-arm64"
 
     data class PythonResult(
         val success: Boolean,
@@ -45,14 +46,8 @@ object PythonExecutionEngine {
      * Known potential paths for Python 3 binaries across Android, NetHunter, and Termux.
      */
     private val CANDIDATE_PATHS = listOf(
-        "/data/local/nhsystem/kali-arm64/usr/bin/python3",
-        "/data/local/nhsystem/kali-arm64/bin/python3",
-        "/data/local/nhsystem/kalifs/usr/bin/python3",
-        "/usr/bin/python3",
-        "/usr/local/bin/python3",
         "/data/data/com.termux/files/usr/bin/python3",
-        "/system/bin/python3",
-        "/apex/com.android.runtime/bin/python3"
+        "/system/bin/python3"
     )
 
     /**
@@ -60,6 +55,10 @@ object PythonExecutionEngine {
      */
     fun resolvePythonBinary(): String {
         cachedRuntimeInfo?.pythonBinary?.let { return it }
+
+        if (File(KALI_ROOT).isDirectory) {
+            return "chroot $KALI_ROOT /usr/bin/python3"
+        }
 
         for (path in CANDIDATE_PATHS) {
             val f = File(path)
@@ -73,11 +72,6 @@ object PythonExecutionEngine {
         val whichOut = RootShellManager.execSingleLine("which python3 || which python")
         if (!whichOut.isNullOrBlank() && File(whichOut.trim()).exists()) {
             return whichOut.trim()
-        }
-
-        // Check if NetHunter chroot is available
-        if (File("/data/local/nhsystem/kali-arm64").exists() || File("/data/local/nhsystem/kalifs").exists()) {
-            return "bootkali python3"
         }
 
         return "python3"
@@ -125,7 +119,7 @@ except Exception:
 print("___PY_PROBE___" + json.dumps(info))
 """.trimIndent()
 
-        val probeResult = executeRawScript(binary, probeScript, timeoutSec = 10)
+        val probeResult = executeRawScript(binary, probeScript)
         var ver: String? = null
         var hasNumpy = false
         var hasPandas = false
@@ -133,7 +127,8 @@ print("___PY_PROBE___" + json.dumps(info))
         var hasMatplotlib = false
         var envType = "Standard Host"
 
-        if (probeResult.output.contains("___PY_PROBE___")) {
+        val probeSucceeded = probeResult.success && probeResult.output.contains("___PY_PROBE___")
+        if (probeSucceeded) {
             try {
                 val jsonPart = probeResult.output.substringAfter("___PY_PROBE___").lines().firstOrNull { it.trim().startsWith("{") } ?: "{}"
                 val obj = org.json.JSONObject(jsonPart.trim())
@@ -154,15 +149,15 @@ print("___PY_PROBE___" + json.dumps(info))
         }
 
         val info = RuntimeInfo(
-            pythonBinary = binary,
-            pythonVersion = ver ?: "3.x",
+            pythonBinary = binary.takeIf { probeSucceeded && ver != null },
+            pythonVersion = ver ?: "Unavailable",
             hasNumpy = hasNumpy,
             hasPandas = hasPandas,
             hasScipy = hasScipy,
             hasMatplotlib = hasMatplotlib,
-            environmentType = envType
+            environmentType = if (probeSucceeded) envType else "Unavailable"
         )
-        cachedRuntimeInfo = info
+        if (probeSucceeded) cachedRuntimeInfo = info
         info
     }
 
@@ -171,18 +166,17 @@ print("___PY_PROBE___" + json.dumps(info))
      *
      * @param script Python code to execute.
      * @param autoImportSci If true, injects helper imports (numpy, pandas, math, etc.) safely.
-     * @param timeoutSec Maximum execution time in seconds.
      */
     suspend fun execute(
         script: String,
-        autoImportSci: Boolean = true,
-        timeoutSec: Int = 30
+        autoImportSci: Boolean = true
     ): PythonResult = withContext(Dispatchers.IO) {
         if (script.isBlank()) {
             return@withContext PythonResult(
                 success = false,
                 output = "",
-                error = "Script cannot be empty."
+                error = "Script cannot be empty.",
+                exitCode = 1
             )
         }
 
@@ -206,43 +200,36 @@ except Exception:
         } else ""
 
         val fullScript = preamble + "\n" + script
-        executeRawScript(binary, fullScript, timeoutSec)
+        executeRawScript(binary, fullScript)
     }
 
     private suspend fun executeRawScript(
         binary: String,
-        fullScript: String,
-        timeoutSec: Int
+        fullScript: String
     ): PythonResult = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
+        var tempFile: File? = null
         try {
             val scratchDir = File(SCRATCH_DIR)
             if (!scratchDir.exists()) scratchDir.mkdirs()
 
-            val tempFile = File(scratchDir, "py_${System.currentTimeMillis()}_${(1000..9999).random()}.py")
-            tempFile.writeText(fullScript, StandardCharsets.UTF_8)
+            val scriptFile = File(scratchDir, "py_${System.currentTimeMillis()}_${(1000..9999).random()}.py")
+            tempFile = scriptFile
+            scriptFile.writeText(fullScript, StandardCharsets.UTF_8)
 
-            val cmd = when {
-                binary.startsWith("bootkali") -> "bootkali python3 ${tempFile.absolutePath}"
-                else -> "$binary ${tempFile.absolutePath} 2>&1"
-            }
+            val cmd = "$binary ${scriptFile.absolutePath} 2>&1"
 
-            val lines = RootShellManager.execAsync(cmd)
+            val (shellExitCode, lines) = RootShellManager.execWithExitCodeAsync(cmd)
             val duration = System.currentTimeMillis() - startTime
             val rawOutput = lines.joinToString("\n").trim()
 
-            // Delete temp file after execution to keep disk tidy
-            try { tempFile.delete() } catch (_: Exception) {}
-
-            val hasError = rawOutput.contains("Traceback (most recent call last):") ||
-                    rawOutput.contains("SyntaxError:") ||
-                    rawOutput.contains("ModuleNotFoundError:")
+            val succeeded = shellExitCode == 0
 
             PythonResult(
-                success = !hasError,
+                success = succeeded,
                 output = rawOutput.ifBlank { "[Python execution completed with no stdout]" },
-                error = if (hasError) "Execution resulted in Python Exception" else null,
-                exitCode = if (hasError) 1 else 0,
+                error = if (succeeded) null else "Python process exited with code $shellExitCode",
+                exitCode = shellExitCode,
                 executionTimeMs = duration,
                 pythonBinary = binary
             )
@@ -257,6 +244,8 @@ except Exception:
                 executionTimeMs = duration,
                 pythonBinary = binary
             )
+        } finally {
+            tempFile?.delete()
         }
     }
 }

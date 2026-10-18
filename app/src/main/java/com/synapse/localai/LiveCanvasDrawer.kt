@@ -68,7 +68,7 @@ fun LiveCanvasDrawer(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF111827), // Obsidian dark (#111827)
+        containerColor = Color(0xFF1E1E24), // Obsidian dark (#111827)
         contentColor = Color(0xFFE2E8F0),
         dragHandle = null,
         modifier = Modifier
@@ -119,12 +119,12 @@ fun LiveCanvasContent(onClose: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF111827))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // --- Obsidian Header Control Bar ---
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF0F172A),
+            color = MaterialTheme.colorScheme.surface,
             shadowElevation = 4.dp
         ) {
             Row(
@@ -144,11 +144,11 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         modifier = Modifier
                             .size(8.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF00D2FF))
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                     Text(
                         text = "PREVIEW: $displayPath",
-                        color = Color(0xFF00D2FF),
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -188,10 +188,10 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                                 }
                             },
                         shape = RoundedCornerShape(6.dp),
-                        color = if (isDesktopMode) Color(0xFF0284C7).copy(alpha = 0.3f) else Color(0xFF1E293B),
+                        color = if (isDesktopMode) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surfaceVariant,
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp,
-                            if (isDesktopMode) Color(0xFF00D2FF) else Color(0xFF334155)
+                            if (isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
                         )
                     ) {
                         Row(
@@ -202,12 +202,12 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                             Icon(
                                 imageVector = if (isDesktopMode) Icons.Filled.Laptop else Icons.Filled.PhoneAndroid,
                                 contentDescription = "Toggle Viewport",
-                                tint = if (isDesktopMode) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                tint = if (isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
                                 text = if (isDesktopMode) "1280px" else "Mobile",
-                                color = if (isDesktopMode) Color(0xFF00D2FF) else Color(0xFF94A3B8),
+                                color = if (isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.SemiBold
@@ -225,7 +225,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         Icon(
                             imageVector = Icons.Filled.Refresh,
                             contentDescription = "Reload",
-                            tint = Color(0xFF94A3B8),
+                            tint = Color(0xFFA1A1AA),
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -265,7 +265,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         Icon(
                             imageVector = Icons.Outlined.OpenInBrowser,
                             contentDescription = "Open in Chrome",
-                            tint = Color(0xFF94A3B8),
+                            tint = Color(0xFFA1A1AA),
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -278,7 +278,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         Icon(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Close Canvas",
-                            tint = Color(0xFFEF4444),
+                            tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -309,7 +309,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                     )
                     Text(
                         text = "Generate web applications using /code or asking MEDLAM AI to build in /sdcard/atlas-ai/webapp/.",
-                        color = Color(0xFF64748B),
+                        color = Color(0xFF71717A),
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center

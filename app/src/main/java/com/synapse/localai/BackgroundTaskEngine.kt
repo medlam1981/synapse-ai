@@ -1,6 +1,6 @@
 package com.synapse.localai
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,8 +59,6 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
 
     private var completedCount = 0
     private var failedCount = 0
-
-    var maintenanceDaemon: MaintenanceDaemon? = null
 
     // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -174,6 +172,7 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
                 TaskStatus.RUNNING,
                 TaskStatus.QUEUED,
                 TaskStatus.PENDING,
+                TaskStatus.PAUSED,
                 TaskStatus.WAITING_FOR_USER
             )
         ) {
@@ -182,7 +181,20 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
             updateState()
             return true
         }
+
         return false
+    }
+
+    fun pauseTask(taskId: String): Boolean {
+        val paused = taskMemory.pauseTask(taskId)
+        if (paused) updateState()
+        return paused
+    }
+
+    fun resumePausedTask(taskId: String): Boolean {
+        val resumed = taskMemory.resumePausedTask(taskId, executionActive = currentTaskId == taskId)
+        if (resumed) updateState()
+        return resumed
     }
 
     fun resumeTask(taskId: String, userInput: String): Boolean {
@@ -201,6 +213,7 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
         val tasks = taskMemory.getTasksByStatus(TaskStatus.QUEUED) +
                 taskMemory.getTasksByStatus(TaskStatus.RUNNING) +
                 taskMemory.getTasksByStatus(TaskStatus.PENDING) +
+                taskMemory.getTasksByStatus(TaskStatus.PAUSED) +
                 taskMemory.getTasksByStatus(TaskStatus.WAITING_FOR_USER)
         tasks.forEach { task ->
             taskMemory.markCancelled(task.id)
@@ -298,9 +311,8 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
      * @return `true` if the task completed successfully.
      */
     private suspend fun executeTask(task: AgentTask): Boolean {
-        val internalTask = task.command.startsWith("__INTERNAL_MAINTENANCE_")
-        val viewModel = if (internalTask) null else waitForViewModel()
-        if (!internalTask && (viewModel == null || !viewModel.isReadyForBackgroundTasks())) {
+        val viewModel = waitForViewModel()
+        if (viewModel == null || !viewModel.isReadyForBackgroundTasks()) {
             val retryAt = System.currentTimeMillis() + 30_000L
             taskMemory.deferTask(
                 task.id,
@@ -319,16 +331,7 @@ class BackgroundTaskEngine(private val taskMemory: TaskMemoryManager) {
         Log.i(TAG, "Executing task ${task.id}: \"${task.command}\"")
 
         try {
-            val result = if (task.command.startsWith("__INTERNAL_MAINTENANCE_")) {
-                when (task.command) {
-                    "__INTERNAL_MAINTENANCE_SYSTEM_CHECK__" -> maintenanceDaemon?.runSystemCheck() ?: "System check completed"
-                    "__INTERNAL_MAINTENANCE_BACKUP__" -> maintenanceDaemon?.runAgentBackup() ?: "Backup deferred"
-                    "__INTERNAL_MAINTENANCE_CACHE_CLEANUP__" -> maintenanceDaemon?.runCacheCleanup() ?: "Cleanup finished"
-                    else -> "Internal routine finished"
-                }
-            } else {
-                requireNotNull(viewModel).executeBackgroundTask(task.command, task.id)
-            }
+            val result = requireNotNull(viewModel).executeBackgroundTask(task.command, task.id)
 
             // Success
             taskMemory.markCompleted(task.id, result)

@@ -3,7 +3,7 @@ package com.synapse.localai.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**

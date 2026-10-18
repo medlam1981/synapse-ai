@@ -1,7 +1,8 @@
 package com.synapse.localai.memory
 
 import android.content.Context
-import android.util.Log
+import com.synapse.localai.ChatDatabaseHelper
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -13,14 +14,15 @@ import java.util.Collections
  * Persistent Vector Memory Engine (Long-Term Context & Semantic Recall).
  *
  * Persists user preferences, recurring scripts, project context, and knowledge
- * across working sessions in `/sdcard/atlas-ai/memory/vector_store.json`.
+ * across working sessions in the app-private SQLite database with FTS indexing.
  */
 object VectorMemoryManager {
 
     private const val TAG = "VectorMemory"
-    private const val PRIMARY_DIR = "/sdcard/atlas-ai/memory"
-    private const val LEGACY_VECTOR_FILE = "/sdcard/Medlam-Ai/memory/vector_store.json"
-    private const val VECTOR_FILE = "vector_store.json"
+    private val legacyFiles = listOf(
+        "/sdcard/atlas-ai/memory/vector_store.json",
+        "/sdcard/Medlam-Ai/memory/vector_store.json"
+    )
 
     private val records = Collections.synchronizedList(mutableListOf<VectorRecord>())
     @Volatile private var isLoaded = false
@@ -34,32 +36,28 @@ object VectorMemoryManager {
         }
     }
 
-    private fun getStorageFile(): File {
-        val primary = File(PRIMARY_DIR)
-        if (!primary.exists()) {
-            try { primary.mkdirs() } catch (_: Exception) {}
-        }
-        if (primary.exists() && primary.canWrite()) {
-            return File(primary, VECTOR_FILE)
-        }
-        val fallbackDir = appContext?.filesDir ?: File("/data/local/tmp/memory")
-        if (!fallbackDir.exists()) fallbackDir.mkdirs()
-        return File(fallbackDir, VECTOR_FILE)
-    }
-
     /**
      * Stores a new memory record, calculating its embedding vector on the fly.
      */
     fun store(
         content: String,
-        category: String = "FACT",
+        category: String = "SEMANTIC_KNOWLEDGE",
         metadata: Map<String, String> = emptyMap()
     ): VectorRecord {
         val cleanContent = content.trim()
+        require(cleanContent.isNotEmpty()) { "Memory content cannot be blank." }
+        val normalizedCategory = when (category.trim().uppercase()) {
+            "CORE", "CORE_MEMORY" -> "CORE_MEMORY"
+            "EPISODIC", "EPISODIC_MEMORY", "CONVERSATION" -> "EPISODIC_MEMORY"
+            "SEMANTIC", "SEMANTIC_MEMORY", "SEMANTIC_KNOWLEDGE", "FACT" -> "SEMANTIC_KNOWLEDGE"
+            "USER_PREFERENCE", "PREFERENCE" -> "USER_PREFERENCE"
+            "PROJECT_CONTEXT", "RECURRING_SCRIPT" -> category.trim().uppercase()
+            else -> "SEMANTIC_KNOWLEDGE"
+        }
         val vector = LightweightEmbeddingEngine.embed(cleanContent)
         val record = VectorRecord(
             content = cleanContent,
-            category = category,
+            category = normalizedCategory,
             metadata = metadata,
             vector = vector
         )
@@ -85,6 +83,9 @@ object VectorMemoryManager {
         categoryFilter: String? = null
     ): List<Pair<VectorRecord, Float>> {
         val queryVector = LightweightEmbeddingEngine.embed(query)
+        val lexicalIds = appContext?.let { context ->
+            ChatDatabaseHelper(context).searchMemoryRecords(query, topK * 4).mapTo(mutableSetOf()) { it.id }
+        }.orEmpty()
         val matches = mutableListOf<Pair<VectorRecord, Float>>()
 
         synchronized(records) {
@@ -93,8 +94,8 @@ object VectorMemoryManager {
                     continue
                 }
                 val sim = LightweightEmbeddingEngine.cosineSimilarity(queryVector, rec.vector)
-                if (sim >= minSimilarity) {
-                    matches.add(rec to sim)
+                if (sim >= minSimilarity || rec.id in lexicalIds) {
+                    matches.add(rec to (sim + if (rec.id in lexicalIds) 0.15f else 0f))
                 }
             }
         }
@@ -160,6 +161,9 @@ object VectorMemoryManager {
         sb.appendLine("The following relevant user preferences, scripts, or project facts were recalled from persistent vector memory:")
         topMatches.forEach { (rec, score) ->
             val label = when (rec.category.uppercase()) {
+                "CORE_MEMORY" -> "Core Memory"
+                "EPISODIC_MEMORY" -> "Episodic Memory"
+                "SEMANTIC_KNOWLEDGE" -> "Semantic Knowledge"
                 "USER_PREFERENCE" -> "User Preference"
                 "RECURRING_SCRIPT" -> "Recurring Script"
                 "PROJECT_CONTEXT" -> "Project Context"
@@ -172,17 +176,17 @@ object VectorMemoryManager {
 
     private fun loadRecords() {
         try {
-            val primaryFile = File(PRIMARY_DIR, VECTOR_FILE)
-            val legacyFile = File(LEGACY_VECTOR_FILE)
-            val file = when {
-                primaryFile.exists() -> primaryFile
-                legacyFile.exists() -> legacyFile
-                else -> getStorageFile()
-            }
-            if (!file.exists()) {
-                seedInitialPreferences()
+            val context = appContext ?: return
+            val database = ChatDatabaseHelper(context)
+            val storedRecords = database.getMemoryRecords()
+            if (storedRecords.isNotEmpty()) {
+                synchronized(records) {
+                    records.clear()
+                    records.addAll(storedRecords)
+                }
                 return
             }
+            val file = legacyFiles.asSequence().map(::File).firstOrNull { it.isFile } ?: return
             val content = file.readText(StandardCharsets.UTF_8).trim()
             if (content.isEmpty()) return
 
@@ -196,40 +200,17 @@ object VectorMemoryManager {
                         Log.w(TAG, "Corrupt vector record at index $i: ${e.message}")
                     }
                 }
+                if (records.isNotEmpty()) database.replaceMemoryRecords(records.toList())
             }
-            Log.i(TAG, "Loaded ${records.size} vector records from ${file.absolutePath}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error loading vector records: ${e.message}", e)
+            Log.e(TAG, "Unable to load persistent memory", e)
         }
     }
 
     private fun saveRecords() {
-        try {
-            val file = getStorageFile()
-            file.parentFile?.let { if (!it.exists()) it.mkdirs() }
-
-            val array = JSONArray()
-            synchronized(records) {
-                records.forEach { array.put(it.toJson()) }
-            }
-            file.writeText(array.toString(2), StandardCharsets.UTF_8)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error saving vector records: ${e.message}", e)
+        val context = appContext ?: throw IllegalStateException("Persistent memory database is not initialized.")
+        synchronized(records) {
+            ChatDatabaseHelper(context).replaceMemoryRecords(records.toList())
         }
-    }
-
-    private fun seedInitialPreferences() {
-        store(
-            content = "Target Android architecture is arm64-v8a with full root superuser privileges.",
-            category = "PROJECT_CONTEXT"
-        )
-        store(
-            content = "User prefers concise system diagnostic metrics with human-readable numbers (-h).",
-            category = "USER_PREFERENCE"
-        )
-        store(
-            content = "Kali Linux NetHunter chroot environment is available locally for penetration testing and system maintenance.",
-            category = "PROJECT_CONTEXT"
-        )
     }
 }

@@ -62,9 +62,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -90,7 +90,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.PrintWriter
@@ -99,6 +99,7 @@ import java.util.UUID
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.Date
+import kotlin.math.roundToInt
 
 data class SystemStats(
     val battery: Int,
@@ -109,12 +110,23 @@ data class SystemStats(
     val cpuTemp: String,
     val cpuTempInt: Int,
     val currentKeyIndex: Int,
-    val totalKeys: Int
+    val totalKeys: Int,
+    val swapUsage: String = "--",
+    val sdcardFree: String = "--",
+    val cpuUsagePercent: Int? = null,
+    val ramUsedPercent: Int? = null,
+    val swapUsedPercent: Int? = null,
+    val storageUsedPercent: Int? = null
 )
 
 private var lastCpuTotal: Long = 0
 private var lastCpuIdle: Long = 0
 private var cachedCpuUsage: String = "0%"
+
+private fun usagePercent(used: Long, total: Long): Int? {
+    if (total <= 0L) return null
+    return ((used.coerceIn(0L, total).toDouble() / total) * 100).toInt().coerceIn(0, 100)
+}
 
 private fun readCpuStatLine(): String? {
     try {
@@ -147,9 +159,42 @@ fun getSystemStats(context: Context): SystemStats {
     val memoryInfo = android.app.ActivityManager.MemoryInfo()
     activityManager.getMemoryInfo(memoryInfo)
     val ramFree = String.format(Locale.US, "%.1fGB", memoryInfo.availMem / 1024.0 / 1024.0 / 1024.0)
+    val ramUsedPercent = usagePercent(memoryInfo.totalMem - memoryInfo.availMem, memoryInfo.totalMem)
 
-    val statFs = android.os.StatFs(android.os.Environment.getDataDirectory().path)
-    val storageFree = String.format(Locale.US, "%.0fGB", statFs.availableBlocksLong * statFs.blockSizeLong / 1024.0 / 1024.0 / 1024.0)
+    val memoryFields = runCatching {
+        File("/proc/meminfo").useLines { lines ->
+            lines.mapNotNull { line ->
+                val parts = line.split(Regex("\\s+"))
+                val value = parts.getOrNull(1)?.toLongOrNull()
+                if (value == null) null else parts.first().removeSuffix(":") to value
+            }.toMap()
+        }
+    }.getOrDefault(emptyMap())
+    val swapTotalKb = memoryFields["SwapTotal"] ?: 0L
+    val swapFreeKb = memoryFields["SwapFree"] ?: 0L
+    val swapUsedKb = (swapTotalKb - swapFreeKb).coerceAtLeast(0L)
+    val swapUsage = if (swapTotalKb > 0L) {
+        String.format(
+            Locale.US,
+            "%.1f / %.1f GB",
+            swapUsedKb / 1024.0 / 1024.0,
+            swapTotalKb / 1024.0 / 1024.0
+        )
+    } else {
+        "Unavailable"
+    }
+    val swapUsedPercent = usagePercent(swapUsedKb, swapTotalKb)
+
+    val storageStats = runCatching {
+        @Suppress("DEPRECATION")
+        val sdcardPath = android.os.Environment.getExternalStorageDirectory().path
+        val sdcardStats = android.os.StatFs(sdcardPath)
+        val totalBytes = sdcardStats.totalBytes
+        val availableBytes = sdcardStats.availableBytes
+        String.format(Locale.US, "%.1f GB", availableBytes / 1024.0 / 1024.0 / 1024.0) to
+            usagePercent(totalBytes - availableBytes, totalBytes)
+    }.getOrDefault("Unavailable" to null)
+    val sdcardFree = storageStats.first
 
     val prefs = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
     val geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
@@ -159,6 +204,7 @@ fun getSystemStats(context: Context): SystemStats {
     val maxTemp = DeviceProfile.readDeviceTemperature()
 
     var cpuUsage = cachedCpuUsage
+    var cpuUsagePercent = cachedCpuUsage.removeSuffix("%").toIntOrNull()
     try {
         val line = readCpuStatLine()
         if (line != null && line.startsWith("cpu")) {
@@ -181,6 +227,7 @@ fun getSystemStats(context: Context): SystemStats {
                     if (deltaTotal > 0) {
                         val pct = (100 * (deltaTotal - deltaIdle) / deltaTotal).toInt().coerceIn(0, 100)
                         cpuUsage = "$pct%"
+                        cpuUsagePercent = pct
                         cachedCpuUsage = cpuUsage
                     }
                 }
@@ -195,11 +242,17 @@ fun getSystemStats(context: Context): SystemStats {
         isCharging = isCharging,
         ramFree = ramFree,
         cpuUsage = cpuUsage,
-        storageFree = storageFree,
+        storageFree = sdcardFree,
         cpuTemp = if (maxTemp > 0) "${maxTemp}°C" else "--",
         cpuTempInt = maxTemp,
         currentKeyIndex = currentKeyIndex,
-        totalKeys = totalKeys
+        totalKeys = totalKeys,
+        swapUsage = swapUsage,
+        sdcardFree = sdcardFree,
+        cpuUsagePercent = cpuUsagePercent,
+        ramUsedPercent = ramUsedPercent,
+        swapUsedPercent = swapUsedPercent,
+        storageUsedPercent = storageStats.second
     )
 }
 
@@ -278,8 +331,6 @@ class MainActivity : ComponentActivity() {
         instance = this
 
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        setupGlobalCrashHandler()
-
         try {
             LlamaServerJNI.load()
         } catch (t: Throwable) {
@@ -310,6 +361,10 @@ class MainActivity : ComponentActivity() {
             Log.w("MainActivity", "ModelEngineService launch note: ${e.message}")
         }
 
+        lifecycleScope.launch(Dispatchers.IO) {
+            viewModel.initTaskSystem(applicationContext)
+        }
+
         lifecycleScope.launch {
             try {
                 checkStoragePermissions()
@@ -318,7 +373,7 @@ class MainActivity : ComponentActivity() {
                 delay(800)
                 checkAndRequestRootAccess()
             } catch (e: Exception) {
-                logToCrashFile("Startup Permission Logic Error: ${e.message}")
+                Log.e("MainActivity", "Startup permission logic failed", e)
             }
         }
 
@@ -338,34 +393,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-    }
-
-    private fun setupGlobalCrashHandler() {
-        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            val sw = StringWriter()
-            throwable.printStackTrace(PrintWriter(sw))
-            val stackTrace = sw.toString()
-
-            Log.e("CRITICAL_CRASH", stackTrace)
-            logToCrashFile("CRASH in thread ${thread.name}:\n$stackTrace")
-            oldHandler?.uncaughtException(thread, throwable)
-        }
-    }
-
-    private fun logToCrashFile(message: String) {
-        try {
-            val dir = File("/sdcard/atlas-ai")
-            if (!dir.exists()) dir.mkdirs()
-            val file = File(dir, "crash_report.txt")
-            val fos = FileOutputStream(file, true)
-            fos.write("\n--- SYSTEM LOG AT ${java.util.Date()} ---\n".toByteArray())
-            fos.write(message.toByteArray())
-            fos.write("\n-------------------------------\n".toByteArray())
-            fos.close()
-        } catch (e: Exception) {
-            Log.e("LOG_ERROR", "Failed to write to crash file: ${e.message}")
-        }
     }
 
     private fun checkStoragePermissions() {
@@ -431,6 +458,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     val listState = rememberLazyListState()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
+    var showTaskManager by remember { mutableStateOf(false) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
     var isRecording by remember { mutableStateOf(false) }
     var textInput by remember { mutableStateOf("") }
@@ -563,7 +591,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
             SidebarContent(
                 viewModel = viewModel,
                 onCloseDrawer = { coroutineScope.launch { drawerState.close() } },
-                onOpenSettings = { showSettings = true }
+                onOpenSettings = { showSettings = true },
+                onOpenTaskManager = { showTaskManager = true }
             )
         }
     ) {
@@ -629,7 +658,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 .padding(bottom = 12.dp),
                             shape = RoundedCornerShape(6.dp),
                             color = if (isDark) Color(0xFF161B22).copy(alpha = 0.95f) else Color(0xFFF1F5F9).copy(alpha = 0.95f),
-                            border = BorderStroke(1.dp, if (isDark) Color(0xFF30363D) else Color(0xFFCBD5E1))
+                            border = BorderStroke(1.dp, if (isDark) Color(0xFF30363D) else DayOutlineVariant)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -892,7 +921,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         Icon(
                                             imageVector = if (isRecording) Icons.Filled.Mic else Icons.Outlined.Mic,
                                             contentDescription = "Mic",
-                                            tint = if (isRecording) Color(0xFFEF4444) else textDim,
+                                            tint = if (isRecording) MaterialTheme.colorScheme.error else textDim,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -921,7 +950,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                                 modifier = Modifier
                                                     .size(11.dp)
                                                     .clip(RoundedCornerShape(2.dp))
-                                                    .background(Color(0xFFEF4444))
+                                                    .background(MaterialTheme.colorScheme.error)
                                             )
                                         } else {
                                             Icon(
@@ -944,6 +973,10 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     if (showSettings) {
         BackHandler { showSettings = false }
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
+    }
+
+    if (showTaskManager) {
+        ScheduledTaskManagerScreen(viewModel = viewModel, onBack = { showTaskManager = false })
     }
 
     LiveCanvasDrawer(
@@ -1000,51 +1033,120 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 }
 
 @Composable
-private fun TelemetryMicroChip(
+private fun TelemetryGauge(
     icon: ImageVector,
-    text: String,
-    accentColor: Color,
+    percentage: Int?,
+    value: String,
     contentDescription: String,
-    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    accentColor: Color,
     modifier: Modifier = Modifier,
-    iconSize: androidx.compose.ui.unit.Dp = 10.5.dp,
-    fontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
-    paddingHorizontal: androidx.compose.ui.unit.Dp = 3.5.dp,
-    paddingVertical: androidx.compose.ui.unit.Dp = 2.5.dp
+    progressDots: Int? = null
 ) {
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        color = accentColor.copy(alpha = 0.08f),
-        border = BorderStroke(
-            0.6.dp,
-            Brush.verticalGradient(
-                listOf(accentColor.copy(alpha = 0.40f), accentColor.copy(alpha = 0.12f))
-            )
-        ),
-        modifier = modifier
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = paddingHorizontal, vertical = paddingVertical),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+        Canvas(Modifier.fillMaxSize()) {
+            val dotCount = 32
+            val radius = size.minDimension / 2f - 2.dp.toPx()
+            val dotRadius = 1.dp.toPx()
+            val filledDots = progressDots?.coerceIn(0, dotCount)
+                ?: percentage?.coerceIn(0, 100)?.let { (dotCount * it / 100f).roundToInt() }
+                ?: 0
+
+            repeat(dotCount) { index ->
+                val angle = (index.toDouble() / dotCount * 2.0 * Math.PI) - Math.PI / 2.0
+                val center = androidx.compose.ui.geometry.Offset(
+                    x = size.width / 2f + kotlin.math.cos(angle).toFloat() * radius,
+                    y = size.height / 2f + kotlin.math.sin(angle).toFloat() * radius
+                )
+                drawCircle(
+                    color = if (index < filledDots) accentColor else accentColor.copy(alpha = 0.16f),
+                    radius = dotRadius,
+                    center = center
+                )
+            }
+        }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
+            Text(
+                text = value,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 8.sp,
+                lineHeight = 9.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
                 tint = accentColor,
-                modifier = Modifier.size(iconSize)
-            )
-            Spacer(Modifier.width(2.5.dp))
-            Text(
-                text = text,
-                color = textColor,
-                fontSize = fontSize,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                softWrap = false
+                modifier = Modifier.size(10.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun DashboardGaugeRow(
+    stats: SystemStats,
+    uiState: AgentUiState,
+    isDark: Boolean,
+    totalTasks: Int,
+    gaugeSize: Dp,
+    modifier: Modifier = Modifier
+) {
+    val isCloudMode = uiState.activeModelType == ModelType.GEMINI ||
+        (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
+    val effectiveDraftPath = uiState.activeDraftModelPath
+        ?: uiState.config.draftModelPath.takeIf { it != "STANDALONE" && it.isNotBlank() }
+    val hasMtp = !isCloudMode && !effectiveDraftPath.isNullOrBlank() && effectiveDraftPath != "STANDALONE"
+    val registeredKeys = uiState.config.geminiApiKeys.split(",").count { it.isNotBlank() }
+    val keyPoolSize = maxOf(uiState.totalKeys, registeredKeys)
+    val authText = if (isCloudMode) {
+        if (keyPoolSize > 0) "${(uiState.currentKeyIndex % keyPoolSize) + 1}/$keyPoolSize" else "NO KEY"
+    } else if (uiState.localModelLoaded) {
+        "LOCAL"
+    } else {
+        "N/A"
+    }
+    val thermalColor = when {
+        stats.cpuTempInt < 50 -> MaterialTheme.colorScheme.primary
+        stats.cpuTempInt <= 90 -> MaterialTheme.colorScheme.secondary
+        else -> MaterialTheme.colorScheme.error
+    }
+    val authColor = when {
+        isCloudMode && keyPoolSize == 0 -> MaterialTheme.colorScheme.error
+        isCloudMode || uiState.localModelLoaded -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    }
+    val mtpColor = if (hasMtp) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val storageColor = if (isDark) SuccessGreen else DaySuccess
+    val temperatureProgress = stats.cpuTempInt.takeIf { it > 0 }?.coerceIn(0, 100)
+    val selectedKeyProgress = if (isCloudMode && keyPoolSize > 0) {
+        ((Math.floorMod(uiState.currentKeyIndex, keyPoolSize) + 1) * 100) / keyPoolSize
+    } else {
+        null
+    }
+    Row(
+        modifier = modifier.padding(vertical = 1.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TelemetryGauge(Icons.Filled.DeveloperBoard, stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--", "CPU load", MaterialTheme.colorScheme.primary, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.Memory, stats.ramUsedPercent, stats.ramUsedPercent?.let { "$it%" } ?: "--", "RAM used", MaterialTheme.colorScheme.secondary, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.SwapHoriz, stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--", "Swap used", MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.SdStorage, stats.storageUsedPercent, stats.storageUsedPercent?.let { "$it%" } ?: "--", "/sdcard used", storageColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.Thermostat, temperatureProgress, if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°", "CPU temperature", thermalColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.VpnKey, selectedKeyProgress, authText, "Active API key pool", authColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.Bolt, if (hasMtp) 100 else 0, if (hasMtp) "ON" else "OFF", "Hardware accelerator", mtpColor, Modifier.weight(1f).height(gaugeSize))
+        TelemetryGauge(Icons.Filled.Assignment, null, totalTasks.toString(), "Task queue", MaterialTheme.colorScheme.secondary, Modifier.weight(1f).height(gaugeSize), progressDots = totalTasks)
     }
 }
 
@@ -1085,20 +1187,20 @@ fun ModelLifecycleBeacon(
                     .size(6.dp)
                     .scale(haloScale)
                     .clip(CircleShape)
-                    .background(Color(0xFF22C55E).copy(alpha = (1.8f - haloScale) * 0.45f * alphaAnim))
+                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = (1.8f - haloScale) * 0.45f * alphaAnim))
             )
             Box(
                 modifier = Modifier
                     .size(5.5.dp)
                     .alpha(alphaAnim)
                     .clip(CircleShape)
-                    .background(Color(0xFF22C55E))
+                    .background(MaterialTheme.colorScheme.secondary)
             )
         }
     } else {
         val dotColor = when {
-            isReady -> Color(0xFF22C55E)
-            isError -> Color(0xFFEF4444)
+            isReady -> MaterialTheme.colorScheme.secondary
+            isError -> MaterialTheme.colorScheme.error
             else -> MaterialTheme.colorScheme.outline
         }
         Box(
@@ -1166,6 +1268,14 @@ fun ConsolidatedMasterHeader(
     isDark: Boolean,
     onOpenDrawer: () -> Unit
 ) {
+    val configuration = LocalConfiguration.current
+    val compactHeader = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
+        configuration.screenWidthDp >= 600
+    val gaugeSize = when {
+        configuration.screenWidthDp >= 900 -> 42.dp
+        compactHeader -> 34.dp
+        else -> 38.dp
+    }
     val headerBg = MaterialTheme.colorScheme.surfaceContainer
     val subCardBg = MaterialTheme.colorScheme.surfaceContainerHigh
     val textBright = MaterialTheme.colorScheme.onSurface
@@ -1174,36 +1284,37 @@ fun ConsolidatedMasterHeader(
     val secondaryAccent = MaterialTheme.colorScheme.secondary
 
     val totalTasks = maxOf(uiState.activeTasks.size, uiState.taskQueueSize)
-    val cyanAccent = Color(0xFF00D2FF)
-    val cyanBorder = Color(0xFF00B4D8)
+    val cyanAccent = MaterialTheme.colorScheme.primary
+    val cyanBorder = MaterialTheme.colorScheme.primary
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 4.dp)
+            .padding(top = if (compactHeader) 2.dp else 4.dp, bottom = if (compactHeader) 2.dp else 4.dp)
             .background(headerBg)
-            .padding(horizontal = 15.dp, vertical = 8.dp)
+            .padding(horizontal = if (compactHeader) 8.dp else 15.dp, vertical = if (compactHeader) 3.dp else 8.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(if (compactHeader) 3.dp else 6.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                    .padding(horizontal = 2.dp, vertical = if (compactHeader) 0.dp else 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = if (compactHeader) Arrangement.spacedBy(4.dp) else Arrangement.SpaceBetween
             ) {
                 Row(
+                    modifier = if (compactHeader) Modifier.weight(0.34f) else Modifier,
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(if (compactHeader) 4.dp else 8.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
-                            .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .size(if (compactHeader) 30.dp else 36.dp)
+                            .background(cyanAccent.copy(alpha = 0.12f), RoundedCornerShape(if (compactHeader) 8.dp else 10.dp))
                     ) {
                         Surface(
                             onClick = onOpenDrawer,
-                            shape = RoundedCornerShape(9.dp),
+                            shape = RoundedCornerShape(if (compactHeader) 7.dp else 9.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerHigh,
                             border = BorderStroke(
                                 1.dp,
@@ -1219,43 +1330,54 @@ fun ConsolidatedMasterHeader(
                                     imageVector = Icons.Outlined.Widgets,
                                     contentDescription = "Menu",
                                     tint = cyanAccent,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(if (compactHeader) 17.dp else 20.dp)
                                 )
                             }
                         }
                     }
 
                     AtlasAiBranding(
-                        fontSize = 16.sp,
+                        fontSize = if (compactHeader) 11.sp else 16.sp,
                         lineHeight = 2.dp
                     )
 
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    if (!compactHeader) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(5.dp)
-                                    .clip(CircleShape)
-                                    .background(if (uiState.isProcessing) primaryAccent else textDim)
-                            )
-                            Text(
-                                text = if (uiState.isProcessing) "RUNNING" else "IDLE",
-                                color = if (uiState.isProcessing) primaryAccent else textDim,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(5.dp)
+                                        .clip(CircleShape)
+                                        .background(if (uiState.isProcessing) primaryAccent else textDim)
+                                )
+                                Text(
+                                    text = if (uiState.isProcessing) "RUNNING" else "IDLE",
+                                    color = if (uiState.isProcessing) primaryAccent else textDim,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
                     }
                 }
-
+                if (compactHeader) {
+                    DashboardGaugeRow(
+                        stats = stats,
+                        uiState = uiState,
+                        isDark = isDark,
+                        totalTasks = totalTasks,
+                        gaugeSize = gaugeSize,
+                        modifier = Modifier.weight(0.66f)
+                    )
+                }
             }
 
             val isCloudMode = uiState.activeModelType == ModelType.GEMINI || (uiState.activeModelType == null && uiState.config.preferredModelType == ModelType.GEMINI)
@@ -1330,7 +1452,7 @@ fun ConsolidatedMasterHeader(
                     Text(
                         text = specChipText,
                         color = textDim,
-                        fontSize = 9.5.sp,
+                        fontSize = if (compactHeader) 8.sp else 9.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
@@ -1339,94 +1461,8 @@ fun ConsolidatedMasterHeader(
                 }
             }
 
-            val cpuColor = Color(0xFF10B981) 
-            val ramColor = Color(0xFF06B6D4) 
-            val thermalColor = when {
-                stats.cpuTempInt <= 0 -> Color(0xFF2DD4BF)
-                stats.cpuTempInt < 50 -> Color(0xFF2DD4BF) 
-                stats.cpuTempInt <= 90 -> Color(0xFFF59E0B) 
-                else -> Color(0xFFEF4444) 
-            }
-            val storageColor = Color(0xFF38BDF8) 
-            val registeredKeysList = remember(uiState.config.geminiApiKeys) {
-                uiState.config.geminiApiKeys.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            }
-            val keyPoolSize = if (uiState.totalKeys > 0) uiState.totalKeys else registeredKeysList.size
-            val authText = if (isCloudMode) {
-                if (keyPoolSize > 0) {
-                    val activeKeyNum = (uiState.currentKeyIndex % keyPoolSize) + 1
-                    "$activeKeyNum/$keyPoolSize"
-                } else {
-                    "NO KEY"
-                }
-            } else {
-                if (uiState.localModelLoaded) "LOCAL" else "N/A"
-            }
-            val authColor = if (isCloudMode) {
-                if (keyPoolSize > 0) Color(0xFFA855F7) else Color(0xFFEF4444)
-            } else {
-                if (uiState.localModelLoaded) Color(0xFFA855F7) else textDim.copy(alpha = 0.6f)
-            }
-            val mtpColor = if (hasMtp) Color(0xFF00E5FF) else textDim.copy(alpha = 0.6f) 
-            val mtpText = if (hasMtp) "MTP ON" else "OFF"
-            val taskColor = Color(0xFF818CF8) 
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 2.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                TelemetryMicroChip(
-                    icon = Icons.Filled.DeveloperBoard,
-                    text = stats.cpuUsage,
-                    accentColor = cpuColor,
-                    contentDescription = "CPU Usage"
-                )
-
-                TelemetryMicroChip(
-                    icon = Icons.Filled.Memory,
-                    text = stats.ramFree,
-                    accentColor = ramColor,
-                    contentDescription = "RAM Allocation"
-                )
-
-                TelemetryMicroChip(
-                    icon = Icons.Filled.Thermostat,
-                    text = stats.cpuTemp,
-                    accentColor = thermalColor,
-                    contentDescription = "Thermals"
-                )
-
-                TelemetryMicroChip(
-                    icon = Icons.Filled.Storage,
-                    text = stats.storageFree,
-                    accentColor = storageColor,
-                    contentDescription = "Storage"
-                )
-
-                TelemetryMicroChip(
-                    icon = Icons.Filled.VpnKey,
-                    text = authText,
-                    accentColor = authColor,
-                    contentDescription = "Active API Key / Pool"
-                )
-
-                TelemetryMicroChip(
-                    icon = Icons.Filled.Bolt,
-                    text = mtpText,
-                    accentColor = mtpColor,
-                    textColor = mtpColor,
-                    contentDescription = "Hardware Accelerator"
-                )
-
-                TelemetryMicroChip(
-                    icon = Icons.Filled.Assignment,
-                    text = "TSK $totalTasks",
-                    accentColor = taskColor,
-                    contentDescription = "Task Queue"
-                )
+            if (!compactHeader) {
+                DashboardGaugeRow(stats, uiState, isDark, totalTasks, gaugeSize, Modifier.fillMaxWidth())
             }
 
             if (uiState.activeTasks.isNotEmpty()) {
@@ -1439,10 +1475,11 @@ fun ConsolidatedMasterHeader(
                 ) {
                     uiState.activeTasks.forEach { task ->
                         val (statusLabel, statusColor) = when (task.status) {
-                            TaskStatus.RUNNING -> "RUNNING" to Color(0xFF10B981)
-                            TaskStatus.WAITING_FOR_USER -> "NEEDS INPUT" to Color(0xFFF59E0B)
-                            TaskStatus.QUEUED -> "QUEUED" to Color(0xFF38BDF8)
-                            TaskStatus.PENDING -> "PENDING" to Color(0xFF818CF8)
+                            TaskStatus.RUNNING -> "RUNNING" to MaterialTheme.colorScheme.primary
+                            TaskStatus.WAITING_FOR_USER -> "NEEDS INPUT" to MaterialTheme.colorScheme.secondary
+                            TaskStatus.QUEUED -> "QUEUED" to MaterialTheme.colorScheme.secondary
+                            TaskStatus.PENDING -> "PENDING" to textDim
+                            TaskStatus.PAUSED -> "PAUSED" to textDim
                             else -> task.status.name to textDim
                         }
                         Surface(
@@ -1534,10 +1571,10 @@ fun CliThoughtContainer(
         0f
     }
 
-    val traceColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val traceAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
-    val gutterColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)
-    val amberBullet = if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309)
+    val traceColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val traceAccent = MaterialTheme.colorScheme.primary
+    val gutterColor = if (isDark) NightOutlineVariant else DayOutlineVariant
+    val amberBullet = MaterialTheme.colorScheme.secondary
 
     Column(
         modifier = Modifier
@@ -1690,12 +1727,12 @@ fun CliCodeBlockContainer(
         1f
     }
 
-    val blockBg = if (isDark) Color(0xFF0D1117) else Color(0xFFF8FAFC)
-    val headerBg = if (isDark) Color(0xFF161B22) else Color(0xFFF1F5F9)
-    val borderColor = if (isDark) Color(0xFF21262D) else Color(0xFFE2E8F0)
-    val langAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
-    val pathColor = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val blockBg = if (isDark) NightBackground else DayBackground
+    val headerBg = if (isDark) NightSurface else DaySurfaceVariant
+    val borderColor = if (isDark) NightOutlineVariant else DayOutlineVariant
+    val langAccent = MaterialTheme.colorScheme.primary
+    val pathColor = if (isDark) NightTertiary else DayTertiary
+    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
 
     Surface(
         modifier = Modifier
@@ -1770,11 +1807,11 @@ fun CliCodeBlockContainer(
                                     .size(4.5.dp)
                                     .alpha(livePulse)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF10B981))
+                                    .background(MaterialTheme.colorScheme.primary)
                             )
                             Text(
                                 text = "LIVE",
-                                color = Color(0xFF10B981),
+                                color = MaterialTheme.colorScheme.primary,
                                 fontSize = 9.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,
@@ -1786,7 +1823,7 @@ fun CliCodeBlockContainer(
 
                     Text(
                         text = if (copied) "[COPIED]" else "[COPY]",
-                        color = if (copied) Color(0xFF10B981) else textDim,
+                        color = if (copied) MaterialTheme.colorScheme.primary else textDim,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -1833,7 +1870,7 @@ fun CliCodeBlockContainer(
                         fontSize = 11.5.sp,
                         fontFamily = FontFamily.Monospace,
                         lineHeight = 15.5.sp,
-                        color = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
+                        color = if (isDark) NightOnBackground else DayOnBackground
                     )
                 }
             }
@@ -1922,17 +1959,17 @@ fun CliTerminalToolLine(
                       rawLine.contains("Production Sync:", ignoreCase = true) || rawLine.contains("Status:", ignoreCase = true)
 
     val bulletColor = when {
-        rawLine.contains("Storage Sentinel", ignoreCase = true) || isFailed -> if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626) 
-        isRunningOrchestrator || isTelemetry -> if (isDark) Color(0xFF00D2FF) else Color(0xFF0284C7) 
-        isManageTask -> if (isDark) Color(0xFFF59E0B) else Color(0xFFB45309) 
-        isBash -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)       
-        isSuccess || isFileWrite -> if (isDark) Color(0xFF10B981) else Color(0xFF059669) 
-        else -> if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+        rawLine.contains("Storage Sentinel", ignoreCase = true) || isFailed -> MaterialTheme.colorScheme.error
+        isRunningOrchestrator || isTelemetry -> MaterialTheme.colorScheme.primary
+        isManageTask -> MaterialTheme.colorScheme.secondary
+        isBash -> MaterialTheme.colorScheme.primary
+        isSuccess || isFileWrite -> if (isDark) SuccessGreen else DaySuccess
+        else -> if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
     }
 
-    val cmdColor = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val gutterColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1)
+    val cmdColor = if (isDark) NightOnBackground else DayOnBackground
+    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val gutterColor = if (isDark) NightOutlineVariant else DayOutlineVariant
 
     val displayText = rawLine.trim().replace(Regex("^[●*•⚡\\s]+"), "")
     val hasExpandableOutput = !isTelemetry && (displayText.contains(" -> ") || displayText.contains("\n"))
@@ -1952,14 +1989,14 @@ fun CliTerminalToolLine(
             } else if (isSuccess) {
                 Text(
                     text = "✔",
-                    color = if (isDark) Color(0xFF10B981) else Color(0xFF059669),
+                    color = if (isDark) SuccessGreen else DaySuccess,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
             } else if (isFailed) {
                 Text(
                     text = "✖",
-                    color = if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626),
+                    color = MaterialTheme.colorScheme.error,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -2032,52 +2069,34 @@ fun CliLogMessageView(
     val isUser = log.sender == "USER"
     val isSystem = log.sender == "SYSTEM"
 
-    val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val primaryAccent = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val textBright = if (isDark) NightOnBackground else DayOnBackground
+    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val userMessageColor = if (isDark) UserMessageDark else UserMessageLight
 
     val isLogArabic = isArabic(log.text)
 
     when {
         isUser -> {
-            val userBubbleBorder = if (isDark) Color(0xFF38BDF8).copy(alpha = 0.42f) else Color(0xFF0284C7).copy(alpha = 0.38f)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 3.dp)
-                    .background(MaterialTheme.colorScheme.background)
-                    .border(1.dp, userBubbleBorder, RectangleShape)
                     .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
                 CompositionLocalProvider(
                     LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                 ) {
-                    Row(
+                    CliMathFormattedText(
+                        text = log.text,
+                        isDark = isDark,
+                        isRtl = isLogArabic,
+                        color = userMessageColor,
+                        fontSize = 13.sp,
+                        lineHeight = if (isLogArabic) 19.sp else 18.sp,
+                        textAlign = TextAlign.Start,
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = if (isLogArabic) "❮" else "❯",
-                            color = primaryAccent,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(top = 1.dp)
-                        )
-
-                        CliMathFormattedText(
-                            text = log.text,
-                            isDark = isDark,
-                            isRtl = isLogArabic,
-                            color = textBright,
-                            fontSize = 13.sp,
-                            lineHeight = if (isLogArabic) 19.sp else 18.sp,
-                            textAlign = TextAlign.Start,
-                            modifier = Modifier.weight(1f),
-                            markdownStyler = { txt, _, rtl -> AnnotatedString(if (rtl) applyBidiIsolation(txt) else txt) }
-                        )
-                    }
+                        markdownStyler = { txt, _, rtl -> AnnotatedString(if (rtl) applyBidiIsolation(txt) else txt) }
+                    )
                 }
 
                 Text(
@@ -2094,7 +2113,7 @@ fun CliLogMessageView(
 
         isSystem -> {
             val isError = log.isError
-            val bulletColor = if (isError) Color(0xFFEF4444) else textDim
+            val bulletColor = if (isError) MaterialTheme.colorScheme.error else textDim
             val marker = if (isError) "✖ Error:" else "● System:"
 
             Row(
@@ -2113,7 +2132,7 @@ fun CliLogMessageView(
                 )
                 Text(
                     text = log.text,
-                    color = if (isError) Color(0xFFEF4444) else textDim,
+                    color = if (isError) MaterialTheme.colorScheme.error else textDim,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 15.sp,
@@ -2247,9 +2266,9 @@ fun CliInlineImage(
         }
     }
 
-    val borderColor = if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)
-    val cardBg = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val borderColor = if (isDark) NightOutlineVariant else NightOnBackground
+    val cardBg = if (isDark) NightBackground else DayBackground
+    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
 
     Column(
         modifier = Modifier
@@ -2316,13 +2335,13 @@ fun CliInlineImage(
         } else {
             Surface(
                 shape = RoundedCornerShape(8.dp),
-                color = if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9),
-                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f)),
+                color = if (isDark) NightSurfaceContainer else DaySurfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     text = "✖ [Image Rendering Failed: Unable to decode bitmap bytes]",
-                    color = Color(0xFFEF4444),
+                    color = MaterialTheme.colorScheme.error,
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.padding(10.dp)
@@ -2372,7 +2391,7 @@ private fun CliFileArtifactCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RectangleShape,
         color = MaterialTheme.colorScheme.background,
-        border = BorderStroke(1.dp, if (isDark) Color(0xFF38BDF8).copy(alpha = 0.32f) else Color(0xFF0284C7).copy(alpha = 0.28f))
+        border = BorderStroke(1.dp, if (isDark) MaterialTheme.colorScheme.primary.copy(alpha = 0.32f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.28f))
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -2382,13 +2401,13 @@ private fun CliFileArtifactCard(
                 Icon(
                     imageVector = Icons.Filled.InsertDriveFile,
                     contentDescription = null,
-                    tint = if (artifact.format.equals("xlsx", true)) Color(0xFF22C55E) else Color(0xFF3B82F6)
+                    tint = if (artifact.format.equals("xlsx", true)) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         artifact.fileName,
-                        color = if (isDark) Color.White else Color(0xFF0F172A),
+                        color = if (isDark) Color.White else DayOnBackground,
                         fontWeight = FontWeight.Medium,
                         fontSize = 13.sp,
                         maxLines = 1,
@@ -2396,7 +2415,7 @@ private fun CliFileArtifactCard(
                     )
                     Text(
                         "${artifact.format.uppercase()} · ${artifact.path}",
-                        color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                        color = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant,
                         fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -2507,10 +2526,10 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
         }
     }
 
-    val obsidianBg = Color(0xFF0B0F17)
+    val obsidianBg = NightBackground
     val subtleBorder = Color.White.copy(alpha = 0.08f)
-    val terminalText = Color(0xFFCBD5E1)
-    val terminalAccent = Color(0xFF38BDF8)
+    val terminalText = MaterialTheme.colorScheme.onSurfaceVariant
+    val terminalAccent = MaterialTheme.colorScheme.primary
 
     Surface(
         modifier = Modifier
@@ -2548,7 +2567,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                     ) {
                         Text(
                             text = if (copiedRecently) "[COPIED]" else "[COPY]",
-                            color = if (copiedRecently) Color(0xFF10B981) else Color(0xFF94A3B8),
+                            color = if (copiedRecently) MaterialTheme.colorScheme.primary else NightOnSurfaceVariant,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
@@ -2568,7 +2587,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
 
                         Text(
                             text = if (isExpanded) "[HIDE]" else "[SHOW]",
-                            color = if (isExpanded) Color(0xFF38BDF8) else Color(0xFFCBD5E1),
+                            color = if (isExpanded) MaterialTheme.colorScheme.primary else DayOutlineVariant,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
@@ -2618,7 +2637,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
                                 text = if (rawOutput.isNotBlank()) rawOutput else "[No output returned]",
-                                color = Color(0xFF94A3B8),
+                                color = NightOnSurfaceVariant,
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
@@ -2630,7 +2649,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "[-] Hide",
-                                color = Color(0xFF64748B),
+                                color = DayOnSurfaceVariant,
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Medium,
@@ -2665,7 +2684,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
 
                         Text(
                             text = if (block.isRunning) "[SHOW • $totalLines]" else "[SHOW • $totalLines]",
-                            color = Color(0xFF38BDF8),
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
@@ -2684,6 +2703,8 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
     val paramStr = block.params.entries.joinToString(", ") { "${it.key}: \"${it.value}\"" }
     val isRunning = !block.isClosed
     val statusSuffix = if (isRunning) " -> Dispatched" else " -> Completed"
+    val toolAccent = MaterialTheme.colorScheme.secondary
+    val completedColor = if (isDark) SuccessGreen else DaySuccess
     val displayText = buildString {
         append("Tool(")
         append(block.toolName)
@@ -2696,9 +2717,9 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
     }
 
     Surface(
-        color = if (isDark) Color(0xFF0F172A).copy(alpha = 0.85f) else Color(0xFFF1F5F9),
+        color = if (isDark) DayOnBackground.copy(alpha = 0.85f) else Color(0xFFF1F5F9),
         shape = RoundedCornerShape(4.dp),
-        border = BorderStroke(0.5.dp, if (isDark) Color(0xFF38BDF8).copy(alpha = 0.35f) else Color(0xFF0284C7).copy(alpha = 0.35f)),
+        border = BorderStroke(0.5.dp, toolAccent.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
@@ -2713,14 +2734,14 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
             } else {
                 Text(
                     text = "✔",
-                    color = if (isDark) Color(0xFF10B981) else Color(0xFF059669),
+                    color = completedColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
             Text(
                 text = displayText,
-                color = if (isRunning) (if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)) else (if (isDark) Color(0xFF10B981) else Color(0xFF059669)),
+                color = if (isRunning) toolAccent else completedColor,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
@@ -2736,9 +2757,9 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
     val text = remember(raw) { StreamDemultiplexer.sanitizeProse(raw).trim() }
     if (text.isBlank()) return
 
-    val textBright = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val headingColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF0369A1)
+    val textBright = if (isDark) NightOnBackground else DayOnBackground
+    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val headingColor = MaterialTheme.colorScheme.primary
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -2912,10 +2933,10 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
     val boldRegex = "(\\*\\*[^*]+\\*\\*)"
     val combinedRegex = Regex("$pathRegex|$inlineCodeRegex|$boldRegex")
 
-    val amberAccent = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
-    val pathBg = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
-    val codeBg = if (isDark) Color(0xFF161B22) else Color(0xFFF1F5F9)
-    val codeColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val amberAccent = if (isDark) NightTertiary else DayTertiary
+    val pathBg = if (isDark) NightSurfaceContainer else DaySurfaceContainer
+    val codeBg = if (isDark) NightSurface else DaySurfaceContainer
+    val codeColor = if (isDark) NightPrimary else DayPrimary
 
     val builder = AnnotatedString.Builder()
     var lastIndex = 0
@@ -2960,8 +2981,8 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
 
 fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = false): AnnotatedString {
     val pathRegex = Regex("(/sdcard/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*|/(?:data|storage|system|etc|proc|sys)/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)")
-    val amberAccent = if (isDark) Color(0xFFFFB86C) else Color(0xFFD97706)
-    val pathBg = if (isDark) Color(0xFF1B2332) else Color(0xFFE2E8F0)
+    val amberAccent = if (isDark) NightTertiary else DayTertiary
+    val pathBg = if (isDark) Color(0xFF1B2332) else NightOnBackground
     val builder = AnnotatedString.Builder()
     var lastIndex = 0
 
@@ -2989,10 +3010,10 @@ fun CliWelcomeScreen(
 ) {
     val isDark = isSystemInDarkTheme()
     val electricCyan = MaterialTheme.colorScheme.primary
-    val neonGreen = Color(0xFF00E676)
-    val crimsonRed = Color(0xFFFF2A4D)
+    val neonGreen = if (isDark) SuccessGreen else DaySuccess
+    val crimsonRed = MaterialTheme.colorScheme.error
     val vibrantBlue = MaterialTheme.colorScheme.secondary
-    val amber = Color(0xFFF59E0B)
+    val amber = MaterialTheme.colorScheme.secondary
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val cardBg = MaterialTheme.colorScheme.surfaceVariant
@@ -3041,7 +3062,7 @@ fun CliWelcomeScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    color = Color(0x3300E676),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                     shape = RoundedCornerShape(4.dp),
                     border = BorderStroke(0.5.dp, neonGreen.copy(alpha = 0.5f))
                 ) {
@@ -3056,13 +3077,13 @@ fun CliWelcomeScreen(
                 }
 
                 Surface(
-                    color = Color(0x33007BFF),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                     shape = RoundedCornerShape(4.dp),
                     border = BorderStroke(0.5.dp, vibrantBlue.copy(alpha = 0.5f))
                 ) {
                     Text(
                         text = "⚡ SPECULATIVE MTP",
-                        color = Color(0xFF60A5FA),
+                        color = MaterialTheme.colorScheme.primary,
                         fontSize = 8.5.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -3219,10 +3240,10 @@ private fun InitializationStateItem(
     showProgressBar: Boolean,
     isDark: Boolean
 ) {
-    val electricCyan = Color(0xFF00D2FF)
-    val neonGreen = Color(0xFF10B981)
-    val textBright = if (isDark) Color(0xFFF8FAFC) else Color(0xFF0F172A)
-    val textDim = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val electricCyan = MaterialTheme.colorScheme.primary
+    val neonGreen = MaterialTheme.colorScheme.primary
+    val textBright = if (isDark) Color(0xFFF8FAFC) else DayOnBackground
+    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
 
     val titleColor = when {
         isCompleted -> neonGreen
@@ -3321,7 +3342,7 @@ private fun InitializationStateItem(
                     .height(5.dp)
                     .clip(RoundedCornerShape(3.dp)),
                 color = electricCyan,
-                trackColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+                trackColor = MaterialTheme.colorScheme.surfaceContainer
             )
         }
     }
@@ -3331,7 +3352,8 @@ private fun InitializationStateItem(
 fun SidebarContent(
     viewModel: AgentViewModel,
     onCloseDrawer: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenTaskManager: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
     val sessions by viewModel.chatSessions.collectAsState()
@@ -3442,6 +3464,29 @@ fun SidebarContent(
 
             Surface(
                 onClick = {
+                    onOpenTaskManager()
+                    onCloseDrawer()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .tactileGlassGlow(cornerRadius = 8.dp, isDark = isDark, elevation = 2.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Outlined.Schedule, "Scheduled tasks", tint = primary, modifier = Modifier.size(20.dp))
+                    Text("Scheduled Tasks", color = onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+                onClick = {
                     onOpenSettings()
                     onCloseDrawer()
                 },
@@ -3457,8 +3502,8 @@ fun SidebarContent(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Outlined.Settings, "Settings", tint = primary, modifier = Modifier.size(18.dp))
-                    Text("System Settings", color = onSurface, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                    Icon(Icons.Outlined.Settings, "Settings", tint = primary, modifier = Modifier.size(20.dp))
+                    Text("System Settings", color = onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }

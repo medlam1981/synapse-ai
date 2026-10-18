@@ -6,8 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.system.Os
-import android.system.OsConstants
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -80,11 +79,6 @@ class GGUFModelClient {
 
         private fun fileLog(msg: String) {
             Log.d(TAG, msg)
-            try {
-                val dir = File("/sdcard/atlas-ai")
-                if (!dir.exists()) dir.mkdirs()
-                File(dir, "gguf_log.txt").appendText("[${java.util.Date()}] $msg\n")
-            } catch (_: Exception) {}
         }
     }
 
@@ -241,66 +235,7 @@ class GGUFModelClient {
         }
     }
 
-    private fun clearBridgeLogs() {
-        // No-op: Preserve system logcat buffer and native crash diagnostics
-    }
-
-    private fun isDraftErrorLine(line: String): Boolean {
-        val l = line.lowercase()
-        return l.contains("failed to load draft") ||
-               l.contains("error loading draft") ||
-               l.contains("different vocabulary") ||
-               l.contains("different n_vocab") ||
-               l.contains("vocab mismatch") ||
-               l.contains("invalid draft") ||
-               l.contains("cannot load draft") ||
-               l.contains("failed to build speculative graph") ||
-               l.contains("speculative decoding failed") ||
-               l.contains("speculative graph error") ||
-               l.contains("draft model is not compatible") ||
-               l.contains("draft model has different") ||
-               l.contains("failed to initialize draft") ||
-               l.contains("failed to init draft") ||
-               l.contains("error initializing draft") ||
-               l.contains("failed to create draft context") ||
-               l.contains("unordered_map::at: key not found") ||
-               l.contains("sigsegv")
-    }
-
-    private fun readRecentLog(logFile: File, maxBytes: Long = 64 * 1024L): String {
-        if (!logFile.exists()) return ""
-        return try {
-            java.io.RandomAccessFile(logFile, "r").use { file ->
-                val start = (file.length() - maxBytes).coerceAtLeast(0L)
-                file.seek(start)
-                ByteArray((file.length() - start).toInt()).also(file::readFully).toString(Charsets.UTF_8)
-            }
-        } catch (_: Exception) {
-            ""
-        }
-    }
-
-    private fun checkLogFileForDraftError(logFile: File): Boolean {
-        return readRecentLog(logFile).lineSequence().any { isDraftErrorLine(it) }
-    }
-
-    private fun checkRecentErrors(): Boolean {
-        return try {
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "60", "-s", "LlamaBridge:V", "DEBUG:V"))
-            val text = process.inputStream.bufferedReader().readText()
-            for (line in text.lines()) {
-                if (isDraftErrorLine(line)) {
-                    fileLog("⚠️ Draft error line in logcat: $line")
-                    return true
-                }
-            }
-            false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private suspend fun launchNativeProcess(args: Array<String>, logFile: File): Int {
+    private suspend fun launchNativeProcess(args: Array<String>): Int {
         return withContext(Dispatchers.IO) {
             try {
                 try {
@@ -318,17 +253,6 @@ class GGUFModelClient {
                     Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
                 } catch (_: Exception) {}
 
-                // Eliminate pipe buffer deadlock: Merge stderr directly into stdout at the OS level
-                try {
-                    val fd = Os.open(logFile.absolutePath, OsConstants.O_CREAT or OsConstants.O_WRONLY or OsConstants.O_TRUNC, 438)
-                    Os.dup2(fd, OsConstants.STDOUT_FILENO)
-                    Os.dup2(fd, OsConstants.STDERR_FILENO)
-                    try { Os.close(fd) } catch (_: Exception) {}
-                } catch (e: Exception) {
-                    fileLog("Stderr/stdout redirection warning: ${e.message}")
-                }
-
-                clearBridgeLogs()
                 LlamaServerJNI.start(args)
             } catch (t: Throwable) {
                 fileLog("Native execution crash: ${t.message}")
@@ -558,11 +482,6 @@ class GGUFModelClient {
                 RootShellManager.exec("echo 1024 > /sys/block/mmcblk0/queue/read_ahead_kb 2>/dev/null || echo 1024 > /sys/block/sda/queue/read_ahead_kb 2>/dev/null")
             } catch (_: Exception) {}
 
-            val internalLogDir = File("/sdcard/atlas-ai")
-            if (!internalLogDir.exists()) internalLogDir.mkdirs()
-            val logFile = File(internalLogDir, "native_log.txt")
-            try { logFile.delete() } catch (_: Exception) {}
-
             // 2. Model Architecture & Metadata Detection
             val hw = deviceMemory
             val meta = ChatTemplateEngine.extractMetadata(modelFile)
@@ -632,8 +551,7 @@ class GGUFModelClient {
                 "--host", "127.0.0.1",
                 "--port", serverPort.toString(),
                 "--no-warmup",
-                "--fit", "off",
-                "--log-file", logFile.absolutePath
+                "--fit", "off"
             )
 
             val serverTmplArg = ChatTemplateEngine.getServerTemplateArg(meta.architecture)
@@ -708,7 +626,7 @@ class GGUFModelClient {
 
             val nativeReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
             val newThread = Thread {
-                val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(trialArgs.toTypedArray(), logFile) }
+                val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(trialArgs.toTypedArray()) }
                 nativeReturnCode.set(ret)
                 fileLog("Native server thread returned: $ret")
             }.apply {
@@ -728,8 +646,6 @@ class GGUFModelClient {
             globalLoadedContextLength = contextLength
             val startTime = System.currentTimeMillis()
             var serverBecameAlive = false
-            var draftFailureDetected = false
-            var lastLogcatCheckTime = 0L
             var nativeReturnObserved = false
             val maxStartupWait = startupTimeoutMs(modelFile)
 
@@ -762,7 +678,6 @@ class GGUFModelClient {
                 if (retCode != null) {
                     if (retCode != 0) {
                         fileLog("⚠️ Native server failed to launch with return code: $retCode")
-                        draftFailureDetected = true
                         break
                     }
                     if (!nativeReturnObserved) {
@@ -775,30 +690,9 @@ class GGUFModelClient {
                     continue
                 }
 
-                if (hasDraft && System.currentTimeMillis() - lastLogcatCheckTime >= 5_000L) {
-                    lastLogcatCheckTime = System.currentTimeMillis()
-                    if (checkRecentErrors()) {
-                        draftFailureDetected = true
-                        break
-                    }
-                }
-
-                if (hasDraft && logFile.exists()) {
-                    if (checkLogFileForDraftError(logFile)) {
-                        draftFailureDetected = true
-                        break
-                    }
-                }
-
                 val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
                 val progress = (elapsedSec / 20f).coerceIn(0.08f, 0.95f)
-                val recentLog = readRecentLog(logFile, 16 * 1024L).lowercase()
-                val loadPhase = when {
-                    recentLog.contains("load_tensors") || recentLog.contains("loading model") -> "Reading model weights"
-                    recentLog.contains("allocating") || recentLog.contains("context") -> "Allocating inference memory"
-                    serverBecameAlive -> "Initializing model runtime"
-                    else -> "Starting native server"
-                }
+                val loadPhase = if (serverBecameAlive) "Initializing model runtime" else "Starting native server"
                 val statusText = "$loadPhase (${elapsedSec.toInt()}s)..."
 
                 onProgress(progress, statusText)
@@ -806,9 +700,6 @@ class GGUFModelClient {
 
                 delay(SERVER_POLL_INTERVAL_MS)
             }
-
-            val finalError = readRecentLog(logFile, 8 * 1024L).lines().takeLast(6).joinToString(" | ")
-            fileLog("Startup pass ended. isReady=${isServerReady()}, hasDraft=$hasDraft, draftFailureDetected=$draftFailureDetected. Output: $finalError")
 
             if (hasDraft && !isLoaded) {
                 fileLog("Draft companion failed to load. Falling back to STANDALONE mode...")
@@ -825,7 +716,7 @@ class GGUFModelClient {
                 activeDraftModelPath = null
                 delay(300)
 
-                val fallbackSuccess = startServerStandalone(resolvedPath, baseArgs.toTypedArray(), logFile, onStatus, onProgress)
+                val fallbackSuccess = startServerStandalone(resolvedPath, baseArgs.toTypedArray(), onStatus, onProgress)
                 if (fallbackSuccess) {
                     activeDraftModelPath = null
                     onStatus("⚠️ Standalone mode active ✓")
@@ -852,7 +743,7 @@ class GGUFModelClient {
                 if (gpuLayerArg >= 0 && gpuLayerArg + 1 < cpuArgs.size) {
                     cpuArgs[gpuLayerArg + 1] = "0"
                 }
-                if (startServerStandalone(resolvedPath, cpuArgs.toTypedArray(), logFile, onStatus, onProgress)) {
+                if (startServerStandalone(resolvedPath, cpuArgs.toTypedArray(), onStatus, onProgress)) {
                     activeDraftModelPath = null
                     onStatus("Local Model Ready (CPU fallback) ✓")
                     return@withLock true
@@ -864,7 +755,7 @@ class GGUFModelClient {
                 fileLog("Retrying model startup with low-memory profile: ctx=1024, batch=64, GPU=off.")
                 onStatus("Retrying with low-memory CPU profile...")
                 if (stopNativeServerAndWait()) {
-                    if (startServerStandalone(resolvedPath, lowMemoryArgs.toTypedArray(), logFile, onStatus, onProgress)) {
+                    if (startServerStandalone(resolvedPath, lowMemoryArgs.toTypedArray(), onStatus, onProgress)) {
                         activeDraftModelPath = null
                         onStatus("Local Model Ready (low-memory mode) ✓")
                         return@withLock true
@@ -874,13 +765,8 @@ class GGUFModelClient {
                 }
             }
 
-            val finalLog = readRecentLog(logFile, 8 * 1024L).lines().takeLast(10).joinToString(" | ")
             onProgress(0f, "Model startup failed")
-            onStatus(
-                if (finalLog.isNotBlank()) "❌ Model failed to start: $finalLog"
-                else if (finalError.isNotBlank()) "❌ Model failed to start: $finalError"
-                else "❌ Model startup failed. Check gguf_log.txt and native_log.txt."
-            )
+            onStatus("❌ Model startup failed. Verify the model file, supported format, and available memory.")
             return@withLock false
         }
     }
@@ -888,7 +774,6 @@ class GGUFModelClient {
     private suspend fun startServerStandalone(
         resolvedPath: String,
         args: Array<String>,
-        logFile: File,
         onStatus: (String) -> Unit,
         onProgress: (Float, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
@@ -951,7 +836,7 @@ class GGUFModelClient {
 
         val fallbackReturnCode = java.util.concurrent.atomic.AtomicReference<Int?>(null)
         val newThread = Thread {
-            val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(standaloneArgs, logFile) }
+            val ret = kotlinx.coroutines.runBlocking { launchNativeProcess(standaloneArgs) }
             fallbackReturnCode.set(ret)
             fileLog("Standalone server thread returned: $ret")
         }.apply {

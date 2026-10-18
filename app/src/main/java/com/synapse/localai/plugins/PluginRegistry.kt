@@ -1,7 +1,7 @@
 package com.synapse.localai.plugins
 
 import android.content.Context
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.RootShellManager
 import com.synapse.localai.ToolHandler
 import com.synapse.localai.tools.PythonExecutionEngine
@@ -47,10 +47,6 @@ object PluginRegistry {
         val legacyDir = File(LEGACY_PLUGIN_DIR)
         val appInternalDir = context?.let { File(it.filesDir, "plugins") }
         val fallbackDir = File(FALLBACK_PLUGIN_DIR)
-
-        // Ensure primary directory exists
-        if (!primaryDir.exists()) primaryDir.mkdirs()
-        seedDefaultPlugins(primaryDir)
 
         listOfNotNull(legacyDir, primaryDir, appInternalDir, fallbackDir).forEach { dir ->
             if (dir.exists() && dir.isDirectory) {
@@ -174,81 +170,4 @@ object PluginRegistry {
         return sb.toString()
     }
 
-    /**
-     * Seeds built-in starter plugins into disk if directory is empty.
-     */
-    private fun seedDefaultPlugins(dir: File) {
-        val existing = dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }
-        if (!existing.isNullOrEmpty()) return
-
-        try {
-            // 1. system_health_audit
-            val p1 = PluginManifest(
-                id = "system_health_audit",
-                name = "system_health_audit",
-                description = "Comprehensive audit of memory, storage, swap, and top processes",
-                version = "1.0.0",
-                category = "System",
-                executionType = PluginExecutionType.SHELL,
-                parameters = emptyList(),
-                script = """
-echo "=== RAM & SWAP ===" && free -h 2>/dev/null || free -m
-echo "\n=== INTERNAL STORAGE ===" && df -h /sdcard 2>/dev/null
-echo "\n=== TOP 10 CPU CONSUMERS ===" && ps -ef 2>/dev/null | head -n 12 || top -n 1 2>/dev/null | head -n 15
-""".trimIndent()
-            )
-            File(dir, "system_health_audit.json").writeText(p1.toJson().toString(2), StandardCharsets.UTF_8)
-
-            // 2. data_stats (Python & Pandas)
-            val p2 = PluginManifest(
-                id = "data_stats",
-                name = "data_stats",
-                description = "Extracts statistical summaries and shape of CSV or JSON data files using Pandas",
-                version = "1.0.0",
-                category = "Data Science",
-                executionType = PluginExecutionType.PYTHON,
-                parameters = listOf(
-                    PluginParameter(name = "path", type = "string", description = "Path to CSV or JSON file", required = true)
-                ),
-                script = """
-import os, sys, pandas as pd
-target_path = "${'$'}{path}"
-if not os.path.exists(target_path):
-    print(f"Error: Target file not found at {target_path}")
-    sys.exit(1)
-
-try:
-    df = pd.read_csv(target_path) if target_path.endswith('.csv') else pd.read_json(target_path)
-    print("=== DATASET OVERVIEW ===")
-    print(f"File: {target_path}")
-    print(f"Dimensions: {df.shape[0]} rows x {df.shape[1]} columns")
-    print("\n[Column Data Types]:\n", df.dtypes)
-    print("\n[Descriptive Statistics]:\n", df.describe(include='all'))
-except Exception as e:
-    print(f"Pandas processing error: {e}")
-""".trimIndent()
-            )
-            File(dir, "data_stats.json").writeText(p2.toJson().toString(2), StandardCharsets.UTF_8)
-
-            // 3. network_port_audit
-            val p3 = PluginManifest(
-                id = "network_port_audit",
-                name = "network_port_audit",
-                description = "Scans active network listening sockets and open ports",
-                version = "1.0.0",
-                category = "Network",
-                executionType = PluginExecutionType.SHELL,
-                parameters = emptyList(),
-                script = """
-echo "=== ACTIVE LISTENING PORTS & SOCKETS ==="
-(ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || ip link show 2>/dev/null)
-""".trimIndent()
-            )
-            File(dir, "network_port_audit.json").writeText(p3.toJson().toString(2), StandardCharsets.UTF_8)
-
-            Log.i(TAG, "Seeded default dynamic plugins in ${dir.absolutePath}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed seeding starter plugins: ${e.message}")
-        }
-    }
 }

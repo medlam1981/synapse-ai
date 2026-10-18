@@ -1,6 +1,6 @@
 package com.synapse.localai.orchestration
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File

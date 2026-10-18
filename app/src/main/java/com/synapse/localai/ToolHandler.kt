@@ -1,7 +1,7 @@
 package com.synapse.localai
 
 import android.content.Context
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.tools.WebSearchClient
 import java.io.File
 

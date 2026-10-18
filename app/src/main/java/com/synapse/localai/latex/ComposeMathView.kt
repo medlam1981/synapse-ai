@@ -45,7 +45,7 @@ fun CliBlockMathFormula(
     val density = LocalDensity.current.density
     val textColor = if (isDark) Color(0xFFECEFF4) else Color(0xFF1E293B)
     val cardBg = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
-    val borderColor = if (isDark) Color(0xFF273549) else Color(0xFFCBD5E1)
+    val borderColor = if (isDark) Color(0xFF35353D) else Color(0xFFCBD5E1)
 
     // Render formula using MathRenderer with 44px text size for display math
     val rendered = remember(formula, isDark, density) {
@@ -91,7 +91,7 @@ fun CliBlockMathFormula(
                     // Fallback to monospace raw text if LaTeX syntax fails to parse
                     Text(
                         text = rawText.ifBlank { "$$ $formula $$" },
-                        color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                        color = if (isDark) Color(0xFFA1A1AA) else Color(0xFF71717A),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center

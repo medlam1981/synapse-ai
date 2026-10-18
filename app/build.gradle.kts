@@ -13,6 +13,21 @@ configurations.all {
     }
 }
 
+val nativeCmakeArguments = mutableListOf(
+    "-DANDROID_STL=c++_shared",
+    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DGGML_OPENMP=OFF",
+    "-DGGML_LLAMAFILE=OFF"
+)
+if (
+    System.getProperty("os.name").startsWith("Linux", ignoreCase = true) &&
+    System.getProperty("os.arch") in setOf("aarch64", "arm64") &&
+    file("/usr/bin/ninja").canExecute()
+) {
+    nativeCmakeArguments += "-DCMAKE_MAKE_PROGRAM=/usr/bin/ninja"
+}
+
 android {
     namespace = "com.synapse.localai"
     compileSdk = 36
@@ -36,13 +51,7 @@ android {
             cmake {
                 // تفعيل رايات تسريع المعالج الفائقة مع تضمين dotprod و fp16 لحل بطء التكميم والحرارة
                 cppFlags("-O3", "-DNDEBUG", "-fvectorize", "-march=armv8.2-a+dotprod+fp16")
-                arguments(
-                    "-DANDROID_STL=c++_shared",
-                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DGGML_OPENMP=OFF",
-                    "-DGGML_LLAMAFILE=OFF"
-                )
+                arguments(*nativeCmakeArguments.toTypedArray())
             }
         }
 

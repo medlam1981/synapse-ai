@@ -2,7 +2,7 @@ package com.synapse.localai.tools
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.itextpdf.text.pdf.PdfReader
 import com.itextpdf.text.pdf.parser.PdfTextExtractor
 import kotlinx.coroutines.Dispatchers

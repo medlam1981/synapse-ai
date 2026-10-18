@@ -2,7 +2,7 @@ package com.synapse.localai
 
 import android.os.Build
 import android.os.Process
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 
 /**
  * Resilient Zero-Forced-RAM Kernel Page Management & I/O Thrashing Guard.

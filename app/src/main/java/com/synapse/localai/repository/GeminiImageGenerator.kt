@@ -1,7 +1,7 @@
 package com.synapse.localai.repository
 
 import android.util.Base64
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType

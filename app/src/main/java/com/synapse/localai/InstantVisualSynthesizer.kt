@@ -1,7 +1,7 @@
 package com.synapse.localai
 
 import android.graphics.*
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import kotlin.math.*

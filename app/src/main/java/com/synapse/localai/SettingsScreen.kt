@@ -127,17 +127,7 @@ fun SettingsScreenContent(
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
 
     LaunchedEffect(Unit) {
-        models = ModelScanner.getBaseModels(context, forceRescan = false)
-        mtpModels = ModelScanner.getMtpModels(context, forceRescan = false)
-        if (mtpModels.isEmpty()) {
-            val (freshBase, freshMtp) = ModelScanner.rescanModels(context)
-            models = freshBase
-            mtpModels = freshMtp
-        }
-        acousticModels = ModelScanner.getAcousticModels(context, forceRescan = false)
-        vocoderModels = ModelScanner.getVocoderModels(context, forceRescan = false)
-        speakerModels = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
-        isScanning = false // End of initial scan
+        isScanning = false
     }
 
     Column(
@@ -852,8 +842,8 @@ fun SettingsScreenContent(
                                                 // Option A: RAM (mlock)
                                                 Surface(
                                                     shape = RoundedCornerShape(4.dp),
-                                                    color = if (config.pinModelInRam || !config.useMmap) Color(0xFF00E676).copy(alpha = 0.25f) else Color.Transparent,
-                                                    border = BorderStroke(1.dp, if (config.pinModelInRam || !config.useMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.outlineVariant),
+                                                    color = if (config.pinModelInRam || !config.useMmap) primary.copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (config.pinModelInRam || !config.useMmap) primary else MaterialTheme.colorScheme.outlineVariant),
                                                     modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
                                                         viewModel.togglePinModelInRam(true, context)
                                                     }
@@ -863,15 +853,15 @@ fun SettingsScreenContent(
                                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                                         fontSize = 9.5.sp,
                                                         fontWeight = if (config.pinModelInRam || !config.useMmap) FontWeight.Bold else FontWeight.Medium,
-                                                        color = if (config.pinModelInRam || !config.useMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                        color = if (config.pinModelInRam || !config.useMmap) primary else MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
 
                                                 // Option B: DISK (mmap)
                                                 Surface(
                                                     shape = RoundedCornerShape(4.dp),
-                                                    color = if (!config.pinModelInRam && config.useMmap) Color(0xFF007BFF).copy(alpha = 0.25f) else Color.Transparent,
-                                                    border = BorderStroke(1.dp, if (!config.pinModelInRam && config.useMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.outlineVariant),
+                                                    color = if (!config.pinModelInRam && config.useMmap) primary.copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (!config.pinModelInRam && config.useMmap) primary else MaterialTheme.colorScheme.outlineVariant),
                                                     modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
                                                         viewModel.togglePinModelInRam(false, context)
                                                     }
@@ -881,7 +871,7 @@ fun SettingsScreenContent(
                                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                                         fontSize = 9.5.sp,
                                                         fontWeight = if (!config.pinModelInRam && config.useMmap) FontWeight.Bold else FontWeight.Medium,
-                                                        color = if (!config.pinModelInRam && config.useMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                        color = if (!config.pinModelInRam && config.useMmap) primary else MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
                                             }
@@ -1053,8 +1043,8 @@ fun SettingsScreenContent(
                                                 // Option A: RAM (mlock)
                                                 Surface(
                                                     shape = RoundedCornerShape(4.dp),
-                                                    color = if (!config.draftUseMmap) Color(0xFF00E676).copy(alpha = 0.25f) else Color.Transparent,
-                                                    border = BorderStroke(1.dp, if (!config.draftUseMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.outlineVariant),
+                                                    color = if (!config.draftUseMmap) primary.copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (!config.draftUseMmap) primary else MaterialTheme.colorScheme.outlineVariant),
                                                     modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
                                                         viewModel.toggleDraftMmapState(false, context)
                                                     }
@@ -1064,15 +1054,15 @@ fun SettingsScreenContent(
                                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                                         fontSize = 9.5.sp,
                                                         fontWeight = if (!config.draftUseMmap) FontWeight.Bold else FontWeight.Medium,
-                                                        color = if (!config.draftUseMmap) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                        color = if (!config.draftUseMmap) primary else MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
 
                                                 // Option B: DISK (mmap)
                                                 Surface(
                                                     shape = RoundedCornerShape(4.dp),
-                                                    color = if (config.draftUseMmap) Color(0xFF007BFF).copy(alpha = 0.25f) else Color.Transparent,
-                                                    border = BorderStroke(1.dp, if (config.draftUseMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.outlineVariant),
+                                                    color = if (config.draftUseMmap) primary.copy(alpha = 0.25f) else Color.Transparent,
+                                                    border = BorderStroke(1.dp, if (config.draftUseMmap) primary else MaterialTheme.colorScheme.outlineVariant),
                                                     modifier = Modifier.clickable(enabled = !uiState.localModelLoading) {
                                                         viewModel.toggleDraftMmapState(true, context)
                                                     }
@@ -1082,7 +1072,7 @@ fun SettingsScreenContent(
                                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                                         fontSize = 9.5.sp,
                                                         fontWeight = if (config.draftUseMmap) FontWeight.Bold else FontWeight.Medium,
-                                                        color = if (config.draftUseMmap) Color(0xFF007BFF) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                        color = if (config.draftUseMmap) primary else MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
                                             }
@@ -1258,7 +1248,7 @@ fun SettingsScreenContent(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val badgeColor = if (isVkSupported) Color(0xFF00E676) else Color(0xFFFFB300)
+                        val badgeColor = if (isVkSupported) primary else MaterialTheme.colorScheme.secondary
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
@@ -1699,16 +1689,16 @@ private fun UnifiedPersonaCard(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     lineHeight = 14.5.sp,
-                    color = Color(0xFF79C0FF)
+                    color = MaterialTheme.colorScheme.primary
                 ),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = Color(0xFF30363D),
-                    focusedTextColor = Color(0xFF79C0FF),
-                    unfocusedTextColor = Color(0xFF79C0FF),
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                    focusedTextColor = MaterialTheme.colorScheme.primary,
+                    unfocusedTextColor = MaterialTheme.colorScheme.primary,
                     cursorColor = MaterialTheme.colorScheme.primary,
-                    focusedContainerColor = Color(0xFF090D12),
-                    unfocusedContainerColor = Color(0xFF090D12)
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
@@ -1727,7 +1717,7 @@ private fun UnifiedPersonaCard(
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = "Saved",
-                        tint = Color(0xFF10B981).copy(alpha = 0.85f),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
                         modifier = Modifier.size(13.dp)
                     )
                     Text(

@@ -10,17 +10,15 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import androidx.core.app.NotificationCompat
 
 /**
  * ModelEngineService — High-Priority Persistent Foreground Service for ATLAS-AI.
  *
- * Guarantees:
- * 1. Persistent Foreground Process status preventing Android OOM killer termination.
- * 2. High-priority WakeLock maintaining active CPU clock during complex automation cycles.
- * 3. Dynamic real-time notification status reflecting ongoing agent execution tasks.
- * 4. Resilient START_STICKY lifecycle recovery.
+ * Best-effort background execution support: foreground priority, a bounded wake lock,
+ * ongoing status notification, and START_STICKY restart requests. Android can still
+ * stop this process under resource pressure or after a user force-stop.
  */
 class ModelEngineService : Service() {
 

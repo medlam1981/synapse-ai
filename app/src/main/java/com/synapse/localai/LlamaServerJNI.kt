@@ -1,6 +1,6 @@
 package com.synapse.localai
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 
 /** JNI bridge to libllama_server.so via the compiled synapse_bridge shared library. */
 object LlamaServerJNI {

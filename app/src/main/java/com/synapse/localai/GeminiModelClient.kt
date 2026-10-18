@@ -2,7 +2,7 @@ package com.synapse.localai
 
 import android.graphics.BitmapFactory
 import android.util.Base64
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlockThreshold
 import com.google.ai.client.generativeai.type.Content
@@ -92,11 +92,6 @@ class GeminiModelClient(
 
     private fun fileLog(msg: String) {
         Log.d(TAG, msg)
-        try {
-            val dir = File("/sdcard/atlas-ai")
-            if (!dir.exists()) dir.mkdirs()
-            File(dir, "gguf_log.txt").appendText("[${Date()}] [GEMINI] $msg\n")
-        } catch (_: Exception) {}
     }
 
     private fun markKeyDegraded(keyIdx: Int, cooldownDuration: Long, errorMsg: String) {

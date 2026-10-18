@@ -1,6 +1,6 @@
 package com.synapse.localai.audio
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 
 /**
  * High-Performance Audio Normalizer Bridge.

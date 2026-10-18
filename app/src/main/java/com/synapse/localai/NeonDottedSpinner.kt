@@ -3,6 +3,7 @@ package com.synapse.localai
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -17,13 +18,13 @@ import kotlin.math.sin
 /**
  * Neon Cyan Dotted Orbit Spinner:
  * Discrete circular dots arranged along a circular path that illuminate sequentially
- * with a smooth trailing fade, matching the dark-mode electric cyan palette (#00D2FF).
+ * with a smooth trailing fade, matching the muted mauve accent palette.
  */
 @Composable
 fun NeonDottedSpinner(
     modifier: Modifier = Modifier.size(16.dp),
     dotCount: Int = 8,
-    activeColor: Color = Color(0xFF00D2FF),
+    activeColor: Color = MaterialTheme.colorScheme.primary,
     inactiveAlpha: Float = 0.15f,
     cycleDurationMs: Int = 1000
 ) {

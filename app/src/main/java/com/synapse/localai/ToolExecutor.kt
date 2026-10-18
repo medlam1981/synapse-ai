@@ -1,6 +1,6 @@
 package com.synapse.localai
 
-import android.util.Log
+import com.synapse.localai.AtlasLog as Log
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileOutputStream
@@ -601,11 +601,7 @@ object ToolExecutor {
     }
 
     private fun fileLog(msg: String) {
-        try {
-            val dir = File(BASE_DIR)
-            if (!dir.exists()) dir.mkdirs()
-            File(dir, "tool_executor.log").appendText("[${java.util.Date()}] $msg\n")
-        } catch (_: Exception) {}
+        Log.d(TAG, msg)
     }
 
     /**
