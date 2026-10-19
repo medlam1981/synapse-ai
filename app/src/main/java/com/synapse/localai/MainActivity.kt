@@ -1418,6 +1418,7 @@ fun ConsolidatedMasterHeader(
                         )
                     }
 
+                    Spacer(modifier = Modifier.weight(1f))
                     if (!compactHeader) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
