@@ -57,6 +57,12 @@ object StreamDemultiplexer {
             val format: String,
             val preview: String
         ) : DemuxBlock()
+        data class VisualArtifact(
+            val executionId: String,
+            val type: String,
+            val title: String,
+            val payloadJson: String
+        ) : DemuxBlock()
         data class Image(
             val executionId: String = UUID.randomUUID().toString(),
             val imageBytes: ByteArray,
@@ -104,7 +110,7 @@ object StreamDemultiplexer {
     private val RE_TOOL_CALL = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|$)""", RegexOption.IGNORE_CASE)
     private val RE_FUNCTION_CALL = Regex("""<function_call\b[^>]*>([\s\S]*?)(?:</function_call>|$)""", RegexOption.IGNORE_CASE)
     private val RE_INVOKE = Regex("""<invoke\s+name=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)(?:</invoke>|$)""", RegexOption.IGNORE_CASE)
-    private val RE_FUNCTION_CALL_STYLE = Regex("""\b(run_shell|open_app|web_search|write_file|create_word_document|create_docx|create_excel_spreadsheet|create_xlsx|rollback_file_changes|read_file_range|run_python|fetch_web_content|schedule_task|run_plugin|save_memory|search_memory|complete)\s*\(([\s\S]*?)\)""", RegexOption.IGNORE_CASE)
+    private val RE_FUNCTION_CALL_STYLE = Regex("""\b(run_shell|open_app|web_search|write_file|create_word_document|create_docx|create_excel_spreadsheet|create_xlsx|rollback_file_changes|read_file_range|run_python|fetch_web_content|schedule_task|run_plugin|save_memory|search_memory|semantic_search|probe_telemetry|render_artifact|complete)\s*\(([\s\S]*?)\)""", RegexOption.IGNORE_CASE)
     private val RE_FENCED_JSON = Regex("""```(?:json)?\s*\n?(\{[\s\S]*?\}|\[[\s\S]*?\])\s*\n?```""", RegexOption.IGNORE_CASE)
     private val RE_RAW_JSON = Regex("""(?:\A|\n)\s*(\{\s*\"(?:name|tool|action|type)\"\s*:[\s\S]*?(?:\}\s*(?:\n|\Z)|$))""")
     private val RE_DEMUX_PLACEHOLDER = Regex("""___DEMUX_BLOCK_([a-zA-Z0-9_\-]+)___""")
@@ -112,6 +118,7 @@ object StreamDemultiplexer {
     private val RE_RAW_TOOL_JSON = Regex("""(?:\A|\n)\s*\{\s*\"(?:name|tool|action)\"\s*:\s*\"[^\"]+\"[\s\S]*?\}\s*(?:\n|\Z)""")
     private val RE_TERMINAL_FRAME = Regex("""<terminal_frame([^>]*)>([\s\S]*?)(?:</terminal_frame>|$)""", RegexOption.IGNORE_CASE)
     private val RE_FILE_ARTIFACT = Regex("""<file_artifact\b([^>]*)>([\s\S]*?)(?:</file_artifact>|$)""", RegexOption.IGNORE_CASE)
+    private val RE_VISUAL_ARTIFACT = Regex("""<visual_artifact\b([^>]*)>([\s\S]*?)(?:</visual_artifact>|$)""", RegexOption.IGNORE_CASE)
     private val RE_ATTR_PAIR = Regex("""([a-zA-Z0-9_-]+)=(["'])(.*?)\2""")
     private val RE_LEGACY_SHELL = Regex("""Shell output \(`([^`]+)`\):\s*```(?:bash|sh)?\r?\n([\s\S]*?)(?:```|$)""", RegexOption.IGNORE_CASE)
     private val RE_FENCED_BASH_BLOCK = Regex("""```(?:bash|sh|shell)\r?\n([\s\S]*?)```""", RegexOption.IGNORE_CASE)
@@ -818,6 +825,24 @@ object StreamDemultiplexer {
                 fileName = fileName,
                 format = format,
                 preview = unescapeXml(match.groupValues[2].trim())
+            )
+            "\n___DEMUX_BLOCK_${id}___\n"
+        }
+
+        cleanText = RE_VISUAL_ARTIFACT.replace(cleanText) { match ->
+            val attrs = RE_ATTR_PAIR.findAll(match.groupValues[1])
+                .associate { it.groupValues[1].lowercase() to unescapeXml(it.groupValues[3]) }
+            val type = attrs["type"].orEmpty()
+            val title = attrs["title"].orEmpty()
+            val payload = unescapeXml(match.groupValues[2].trim())
+            val id = UUID.nameUUIDFromBytes(
+                "visual:$type:$title:$payload".toByteArray(StandardCharsets.UTF_8)
+            ).toString()
+            blockMap[id] = DemuxBlock.VisualArtifact(
+                executionId = id,
+                type = type,
+                title = title,
+                payloadJson = payload
             )
             "\n___DEMUX_BLOCK_${id}___\n"
         }

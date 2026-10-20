@@ -22,8 +22,10 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -152,6 +154,9 @@ fun CliMathFormattedText(
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = lineHeight,
                                 textAlign = textAlign,
+                                style = TextStyle(
+                                    textDirection = if (isRtl) TextDirection.ContentOrRtl else TextDirection.ContentOrLtr
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -219,6 +224,9 @@ private fun RenderInlineMathLine(
             fontFamily = FontFamily.Monospace,
             lineHeight = lineHeight,
             textAlign = textAlign,
+            style = TextStyle(
+                textDirection = if (isRtl) TextDirection.ContentOrRtl else TextDirection.ContentOrLtr
+            ),
             modifier = modifier.fillMaxWidth()
         )
         return
@@ -298,6 +306,9 @@ private fun RenderInlineMathLine(
         fontFamily = FontFamily.Monospace,
         lineHeight = lineHeight,
         textAlign = textAlign,
+        style = TextStyle(
+            textDirection = if (isRtl) TextDirection.ContentOrRtl else TextDirection.ContentOrLtr
+        ),
         modifier = modifier.fillMaxWidth()
     )
 }

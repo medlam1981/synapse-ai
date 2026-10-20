@@ -148,7 +148,10 @@ Real-time persistent strip showing:
 - Parallel task execution with the `MultiWorkerOrchestrator`
 - Background task queue surviving app restarts
 - Scheduled tasks via `schedule_task` tool
-- Epistemic memory manager for persistent context
+- Private SQLite memory for agent profile, preferences, learned facts, and episodic chat history
+- Int8-quantized semantic vectors with cosine retrieval, SQLite full-text search, access tracking, and stale-memory pruning
+- Memory operates entirely in app-private storage and does not access legacy public-storage memory files
+- Current embeddings are a deterministic subword-hash projection, not a transformer embedding model; semantic quality and ANN latency targets are not represented as MiniLM/HNSW benchmarks
 
 ---
 
@@ -169,10 +172,19 @@ Real-time persistent strip showing:
 | `read_file(path)` | Inspect files, scripts, logs |
 | `list_directory(path)` | Explore directory structures |
 | `execute_shell(command)` | Run native shell/Termux commands |
+| `semantic_search(query, k, scope)` | Search app-private local vector and full-text memory |
+| `probe_telemetry(domain)` | Read structured local system, network-state, battery, or app-storage metrics |
+| `render_artifact(type, schema, data)` | Render bounded interactive charts, tables, and graph diagrams inline |
 | `device_navigation` | Android Accessibility — click, scroll, interact |
 | `generate_image(prompt)` | Local Stable Diffusion via sd-cli (CPU/GPU) |
 | `schedule_task(...)` | Schedule recurring or delayed tasks |
 | `add_task(...)` | Queue background follow-up tasks |
+
+`probe_telemetry` is read-only and reports Android network transports, interface state, route/socket counts where permitted, battery/thermal state, USB device count, RAM, and app-private storage. It does not scan Wi-Fi, capture handshakes, or collect network identifiers. Optional workspace and power/network event watchers run only while the app is foregrounded; they report event types (not file contents or names) into the next prompt and never execute actions automatically. `render_artifact` uses native Compose rendering for validated chart/table/graph JSON; arbitrary HTML and scripts are deliberately not executed. Unattended self-modifying repair loops are not enabled.
+
+### In-chat file previews
+
+Generated Atlas documents and files selected through Android's document picker can be inspected in-chat. CSV and `.xlsx` workbooks use a bounded native table viewer (5,000 cells, searchable rows and worksheet tabs); `.docx` is extracted to readable text; PDFs render one page at a time; images, sanitized SVG, audio, and common source/text files use local previewers. Image/PDF zoom, text copying, and file sharing/export are available in the viewer. Unsupported formats such as legacy `.xls` retain the external-app fallback. Picked attachments are copied to app cache for preview and remain subject to Android cache cleanup.
 
 ---
 

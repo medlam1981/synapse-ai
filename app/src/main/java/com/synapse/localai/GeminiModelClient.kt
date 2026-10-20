@@ -744,6 +744,32 @@ class GeminiModelClient(
                         requiredParameters = listOf("task_id", "user_input")
                     ),
                     defineFunction(
+                        name = "semantic_search",
+                        description = "Search Atlas's on-device vector and full-text memory. Scope may be all or a memory category.",
+                        parameters = listOf(
+                            Schema.str("query", "Search phrase"),
+                            Schema.str("k", "Maximum number of results from 1 to 10"),
+                            Schema.str("scope", "Optional memory category or all")
+                        ),
+                        requiredParameters = listOf("query")
+                    ),
+                    defineFunction(
+                        name = "probe_telemetry",
+                        description = "Read local structured Android telemetry. Domain: system, network, battery, storage, or all. Does not scan networks or collect identifiers.",
+                        parameters = listOf(Schema.str("domain", "Telemetry domain: system, network, battery, storage, or all")),
+                        requiredParameters = listOf("domain")
+                    ),
+                    defineFunction(
+                        name = "render_artifact",
+                        description = "Render a safe inline chart, data table, or flow diagram. Supported types: bar_chart, line_chart, table, mermaid. Pass chart/table/graph data as JSON; arbitrary HTML and scripts are not accepted.",
+                        parameters = listOf(
+                            Schema.str("type", "bar_chart, line_chart, table, or mermaid"),
+                            Schema.str("schema", "Optional JSON schema/display metadata"),
+                            Schema.str("data", "JSON data matching the selected type")
+                        ),
+                        requiredParameters = listOf("type", "data")
+                    ),
+                    defineFunction(
                         name = "complete",
                         description = "Finalize task execution cycles",
                         parameters = listOf(

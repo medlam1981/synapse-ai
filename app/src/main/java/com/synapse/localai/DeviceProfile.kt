@@ -141,9 +141,31 @@ object DeviceProfile {
     fun inferenceContextLength(requestedContextLength: Int, freeRamMb: Long): Int =
         if (freeRamMb < 1_536L) 2048 else requestedContextLength.coerceIn(2048, 4096)
 
+    fun qwenGpuLayerBudget(
+        modelSizeMb: Long,
+        freeRamMb: Long,
+        blockCount: Int?,
+        reservedRamMb: Long = 512L,
+        maxLayers: Int = 8
+    ): Int {
+        if (blockCount == null || blockCount <= 1 || modelSizeMb <= 0L ||
+            freeRamMb <= reservedRamMb || maxLayers <= 0
+        ) {
+            return 0
+        }
+        val estimatedLayerMb = ((modelSizeMb * 0.8) / blockCount * 1.25)
+            .toLong()
+            .coerceAtLeast(1L)
+        val availableLayers = ((freeRamMb - reservedRamMb) / estimatedLayerMb).toInt()
+        return availableLayers.coerceIn(0, minOf(maxLayers, blockCount - 1))
+    }
+
     fun optimalBatchThreads(hw: HardwareProfile): Int {
         return hw.performanceCores.coerceIn(1, hw.totalCores.coerceAtLeast(1))
     }
+
+    fun qwenBatchThreads(hw: HardwareProfile?): Int =
+        hw?.totalCores?.coerceIn(1, 8) ?: 4
 
     /**
      * Dynamically computes CPU core range for affinity binding.

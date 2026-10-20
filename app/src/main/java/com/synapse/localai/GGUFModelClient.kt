@@ -246,8 +246,18 @@ class GGUFModelClient {
                 } catch (_: Exception) {}
                 // Active worker thread execution without kernel futex sleep penalty
                 try {
+                    val requestedOmpThreads = args.toList()
+                        .windowed(2)
+                        .firstOrNull { it[0] == "-tb" }
+                        ?.get(1)
+                        ?.toIntOrNull()
+                        ?: 4
+                    val ompThreads = requestedOmpThreads.coerceIn(
+                        1,
+                        Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+                    )
                     Os.setenv("OMP_WAIT_POLICY", "PASSIVE", true)
-                    Os.setenv("OMP_NUM_THREADS", "4", true)
+                    Os.setenv("OMP_NUM_THREADS", ompThreads.toString(), true)
                     Os.setenv("KMP_BLOCKTIME", "0", true)
                     Os.unsetenv("OMP_PROC_BIND")
                     Os.setenv("GGML_SCHED_MAX_COPIES", "4", true)
@@ -494,14 +504,54 @@ class GGUFModelClient {
 
             // Compute Allocation: strictly dedicate all 4 Kryo Gold Big performance cores (Cores 4-7)
             val effectiveThreads = DeviceProfile.inferenceThreads(threadCount, freeRam, hw)
-            val effectiveBatchThreads = effectiveThreads.coerceAtMost(4)
-            val resolvedCtx = DeviceProfile.inferenceContextLength(this@GGUFModelClient.contextLength, freeRam)
+            val effectiveBatchThreads = if (
+                meta.architecture == ChatTemplateEngine.Architecture.QWEN && freeRam >= 768L
+            ) {
+                DeviceProfile.qwenBatchThreads(hw)
+            } else {
+                effectiveThreads.coerceAtMost(4)
+            }
+            val deviceContextLength = DeviceProfile.inferenceContextLength(this@GGUFModelClient.contextLength, freeRam)
+            val resolvedCtx = if (
+                meta.architecture == ChatTemplateEngine.Architecture.QWEN &&
+                ((hw?.totalRamMb ?: 0L) < 8_192L || freeRam < 3_072L)
+            ) {
+                minOf(deviceContextLength, 2048)
+            } else {
+                deviceContextLength
+            }
             val vkSupported = LlamaServerJNI.safeRegisterVulkan()
             val autoGpuFitsMemory = (hw?.totalRamMb ?: 0L) >= 8_192L &&
                 freeRam >= (modelSizeMb * 2L + 1_536L)
             val effectiveGpuLayers = if (vkSupported) {
-                if (requestedGpuLayers == AUTO_GPU_LAYER_COUNT && !autoGpuFitsMemory) {
-                    fileLog("Automatic Vulkan offload skipped: device RAM headroom is insufficient (${freeRam}MB available, ${modelSizeMb}MB model); using memory-mapped CPU mode.")
+                if (requestedGpuLayers == AUTO_GPU_LAYER_COUNT && autoGpuFitsMemory) {
+                    requestedGpuLayers
+                } else if (
+                    requestedGpuLayers == AUTO_GPU_LAYER_COUNT &&
+                    meta.architecture == ChatTemplateEngine.Architecture.QWEN &&
+                    meta.blockCount != null
+                ) {
+                    val layerBudget = DeviceProfile.qwenGpuLayerBudget(
+                        modelSizeMb = modelSizeMb,
+                        freeRamMb = freeRam,
+                        blockCount = meta.blockCount
+                    )
+                    if (layerBudget > 0) {
+                        android.util.Log.i(
+                            TAG,
+                            "Qwen Vulkan partial offload: $layerBudget/${meta.blockCount} layers, " +
+                                "${freeRam}MB free RAM, ${resolvedCtx}-token context."
+                        )
+                        layerBudget
+                    } else {
+                        fileLog(
+                            "Automatic Vulkan offload skipped for Qwen: only ${freeRam}MB RAM is free; " +
+                                "keeping memory-mapped CPU inference and ${resolvedCtx}-token context."
+                        )
+                        0
+                    }
+                } else if (requestedGpuLayers == AUTO_GPU_LAYER_COUNT) {
+                    fileLog("Automatic Vulkan offload skipped: insufficient memory headroom (${freeRam}MB available, ${modelSizeMb}MB model); using memory-mapped CPU mode.")
                     0
                 } else if (requestedGpuLayers != AUTO_GPU_LAYER_COUNT &&
                     freeRam < (modelSizeMb + 1_536L)
@@ -517,12 +567,17 @@ class GGUFModelClient {
             }
 
             val effectiveBatch = when {
+                meta.architecture == ChatTemplateEngine.Architecture.QWEN -> 64
                 freeRam >= 6_144L -> 256
                 freeRam >= 3_072L -> 128
                 freeRam >= 1_536L -> 64
                 else -> 32
             }
-            val effectiveUbatch = effectiveBatch.coerceAtMost(64)
+            val effectiveUbatch = if (meta.architecture == ChatTemplateEngine.Architecture.QWEN) {
+                32
+            } else {
+                effectiveBatch.coerceAtMost(64)
+            }
             // CPU inference: Flash Attention disabled on ARM Cortex-A73 to avoid tiling overhead
             val flashAttnArg = "off"
 
@@ -591,7 +646,6 @@ class GGUFModelClient {
 
             val hasDraft = !activeDraftPath.isNullOrBlank() && activeDraftPath != "STANDALONE" && File(activeDraftPath).exists()
             val trialArgs = baseArgs.toMutableList()
-            PageCacheAdvisor.adviseModelActive(resolvedPath)
 
             if (hasDraft) {
                 activeDraftModelPath = activeDraftPath
@@ -651,12 +705,25 @@ class GGUFModelClient {
 
             while (System.currentTimeMillis() - startTime < maxStartupWait) {
                 if (isServerReady()) {
+                    PageCacheAdvisor.adviseModelActive(resolvedPath)
+                    if (meta.architecture == ChatTemplateEngine.Architecture.QWEN) {
+                        android.util.Log.i(
+                            TAG,
+                            "Qwen runtime ready: requestedGpuLayers=$effectiveGpuLayers, " +
+                                "threads=$effectiveThreads, batch=$effectiveBatch/$effectiveUbatch, " +
+                                "context=$resolvedCtx, mmap=$effectiveMmap."
+                        )
+                    }
                     val totalSec = (System.currentTimeMillis() - startTime) / 1000
-                    val perfMask = hw?.let { DeviceProfile.performanceAffinityMask(it) } ?: "f0"
-                    LlamaNativeEngine.pinToBigCores()
-                    val nativePinned = LlamaServerJNI.safeBindPerformanceCores()
-                    val shellPinned = ZramOptimizer.pinToPerformanceCores(perfMask)
-                    fileLog("🚀 Performance Cores Dedicated: Native=$nativePinned, Shell=$shellPinned (mask $perfMask)")
+                    if (meta.architecture == ChatTemplateEngine.Architecture.QWEN) {
+                        fileLog("Qwen CPU policy: batch evaluation may use up to $effectiveBatchThreads available cores; Android retains thermal and frequency control.")
+                    } else {
+                        val perfMask = hw?.let { DeviceProfile.performanceAffinityMask(it) } ?: "f0"
+                        LlamaNativeEngine.pinToBigCores()
+                        val nativePinned = LlamaServerJNI.safeBindPerformanceCores()
+                        val shellPinned = ZramOptimizer.pinToPerformanceCores(perfMask)
+                        fileLog("🚀 Performance Cores Dedicated: Native=$nativePinned, Shell=$shellPinned (mask $perfMask)")
+                    }
                     isLoaded = true
                     activeDraftModelPath = if (hasDraft) activeDraftPath else null
 
@@ -858,9 +925,11 @@ class GGUFModelClient {
         while (System.currentTimeMillis() - startTime < startupTimeoutMs(File(resolvedPath))) {
             if (isServerReady()) {
                 val totalSec = (System.currentTimeMillis() - startTime) / 1000
-                LlamaNativeEngine.pinToBigCores()
-                LlamaServerJNI.safeBindPerformanceCores()
-                ZramOptimizer.pinToPerformanceCores("f0")
+                if (currentMetadata?.architecture != ChatTemplateEngine.Architecture.QWEN) {
+                    LlamaNativeEngine.pinToBigCores()
+                    LlamaServerJNI.safeBindPerformanceCores()
+                    ZramOptimizer.pinToPerformanceCores("f0")
+                }
                 isLoaded = true
                 activeDraftModelPath = null
                 onProgress(1.0f, "ONLINE • 100%")

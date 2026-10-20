@@ -3,13 +3,14 @@ package com.synapse.localai.memory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import kotlin.math.roundToInt
 
 data class VectorRecord(
     val id: String = UUID.randomUUID().toString(),
     val content: String,
     val category: String = "FACT", // USER_PREFERENCE, RECURRING_SCRIPT, PROJECT_CONTEXT, FACT
     val metadata: Map<String, String> = emptyMap(),
-    val vector: FloatArray = FloatArray(128),
+    var vector: FloatArray = FloatArray(128),
     val createdAt: Long = System.currentTimeMillis(),
     var lastAccessedAt: Long = System.currentTimeMillis(),
     var accessCount: Int = 0
@@ -23,7 +24,7 @@ data class VectorRecord(
 
     override fun hashCode(): Int = id.hashCode()
 
-    fun toJson(): JSONObject = JSONObject().apply {
+    fun toJson(includeVector: Boolean = true): JSONObject = JSONObject().apply {
         put("id", id)
         put("content", content)
         put("category", category)
@@ -31,9 +32,11 @@ data class VectorRecord(
         metadata.forEach { (k, v) -> metaObj.put(k, v) }
         put("metadata", metaObj)
 
-        val vecArray = JSONArray()
-        vector.forEach { vecArray.put(it.toDouble()) }
-        put("vector", vecArray)
+        if (includeVector) {
+            val vecArray = JSONArray()
+            vector.forEach { vecArray.put(it.toDouble()) }
+            put("vector", vecArray)
+        }
 
         put("createdAt", createdAt)
         put("lastAccessedAt", lastAccessedAt)
@@ -41,6 +44,18 @@ data class VectorRecord(
     }
 
     companion object {
+        fun quantize(vector: FloatArray): Pair<ByteArray, Float> {
+            val maxAbs = vector.maxOfOrNull { kotlin.math.abs(it) } ?: 0f
+            val scale = if (maxAbs > 0f) maxAbs / 127f else 1f
+            val quantized = ByteArray(vector.size) { index ->
+                (vector[index] / scale).roundToInt().coerceIn(-127, 127).toByte()
+            }
+            return quantized to scale
+        }
+
+        fun dequantize(vector: ByteArray, scale: Float): FloatArray =
+            FloatArray(vector.size) { index -> vector[index].toInt() * scale }
+
         fun fromJson(json: JSONObject): VectorRecord {
             val metaMap = mutableMapOf<String, String>()
             val metaObj = json.optJSONObject("metadata")

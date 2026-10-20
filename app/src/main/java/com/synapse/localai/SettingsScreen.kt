@@ -125,6 +125,12 @@ fun SettingsScreenContent(
     var threadCountText by remember(config.threadCount) { mutableStateOf(config.threadCount.toString()) }
     var gpuLayersText by remember(config.gpuLayers) { mutableStateOf(config.gpuLayers.toString()) }
     var temperatureState by remember(config.temperature) { mutableStateOf(config.temperature) }
+    var systemWatchersEnabled by remember {
+        mutableStateOf(
+            context.getSharedPreferences(SystemEventMonitor.PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(SystemEventMonitor.PREF_ENABLED, false)
+        )
+    }
 
     LaunchedEffect(Unit) {
         isScanning = false
@@ -190,6 +196,47 @@ fun SettingsScreenContent(
                 .padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            SettingsCard(
+                title = "OPT-IN SYSTEM EVENT WATCHERS",
+                titleColor = primary,
+                statusText = if (systemWatchersEnabled) "FOREGROUND ONLY" else "OFF"
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Observe workspace and device state",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "While Atlas is open, observe file-change events in /sdcard/atlas-ai and network/power state changes. File contents, Wi-Fi handshakes, and Bluetooth discovery are not collected. Events are queued for the next prompt; no action runs automatically.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    }
+                    Switch(
+                        checked = systemWatchersEnabled,
+                        onCheckedChange = { enabled ->
+                            systemWatchersEnabled = enabled
+                            context.getSharedPreferences(SystemEventMonitor.PREFS_NAME, Context.MODE_PRIVATE)
+                                .edit()
+                                .putBoolean(SystemEventMonitor.PREF_ENABLED, enabled)
+                                .apply()
+                            if (enabled) {
+                                SystemEventMonitor.start(context, viewModel::queueSystemEvent)
+                            } else {
+                                SystemEventMonitor.stop()
+                            }
+                        }
+                    )
+                }
+            }
+
             // ==========================================
             // CARD 1: COGNITIVE ENGINE SELECTOR (AUTO-SAVING)
             // ==========================================

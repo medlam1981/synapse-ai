@@ -226,6 +226,8 @@ class SynchronousToolBarrierException : kotlinx.coroutines.CancellationException
 
 class AgentViewModel : ViewModel() {
 
+    private val pendingSystemEvents = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
     companion object {
         private const val TAG = "SYNAPSE_CORE"
         private const val MAX_HISTORY_MESSAGES = 48
@@ -819,6 +821,12 @@ class AgentViewModel : ViewModel() {
                     val safeFormat = StreamDemultiplexer.escapeXml(block.format)
                     val safePreview = StreamDemultiplexer.escapeXml(block.preview)
                     """<file_artifact path="$safePath" name="$safeName" format="$safeFormat">$safePreview</file_artifact>"""
+                }
+                is StreamDemultiplexer.DemuxBlock.VisualArtifact -> {
+                    val safeType = StreamDemultiplexer.escapeXml(block.type)
+                    val safeTitle = StreamDemultiplexer.escapeXml(block.title)
+                    val safePayload = StreamDemultiplexer.escapeXml(block.payloadJson)
+                    """<visual_artifact type="$safeType" title="$safeTitle">$safePayload</visual_artifact>"""
                 }
             }
         }
@@ -1468,7 +1476,7 @@ class AgentViewModel : ViewModel() {
         return arabicKeywords.any { lower.contains(it) } || englishKeywords.any { lower.contains(it) }
     }
 
-    private fun buildSystemPrompt(
+    private suspend fun buildSystemPrompt(
         context: Context? = null,
         forLocalModel: Boolean = false,
         dynamicPersonaPrompt: String? = null,
@@ -1476,8 +1484,16 @@ class AgentViewModel : ViewModel() {
         isGreeting: Boolean = false,
         userPrompt: String = ""
     ): String {
-        val config = _uiState.value.config
         val actualContext = context ?: appContext ?: MainActivity.instance
+        actualContext?.let(com.synapse.localai.memory.VectorMemoryManager::init)
+        val eventSignals = buildList {
+            while (true) add(pendingSystemEvents.poll() ?: break)
+        }.takeLast(12)
+        val eventSignalContext = eventSignals.takeIf { it.isNotEmpty() }?.joinToString(
+            prefix = "\n\n## Recent opt-in device event signals\n",
+            separator = "\n"
+        ) { "- $it (observation only; do not take action unless the user asks)" }.orEmpty()
+        val config = _uiState.value.config
         val customPrompt = config.systemPrompt.trim()
         val effectivePersona = (dynamicPersonaPrompt ?: _customPersonaPrompt.value.ifBlank {
             actualContext?.let { PersonaDataStore.getCustomPersonaPromptSync(it) } ?: PersonaDataStore.DEFAULT_PROMPT
@@ -1578,13 +1594,13 @@ $localPersona$workspaceContext$greetingDirective$custom
             return """$languageEnforcement
 
 $localPersona
-$workspaceContext
+$workspaceContext$eventSignalContext
 $episodicMemorySection
 $vectorMemoriesSection
 Response style: Answer the user's actual question directly and with only the detail it calls for. Keep simple questions to one or two sentences. Do not add an introduction, self-description, role list, or unsolicited explanation; describe yourself only when explicitly asked.
 Autonomy: Continue multi-step tasks through planning, tool execution, verification, and a final summary. Ask the user only when a required fact, choice, or authorization cannot be safely inferred; state exactly what is needed and do not claim completion while blocked.
 File safety: write_file creates a reversible before-image. Use rollback_file_changes(transaction_id) to restore a transaction when a change must be undone. Background writes are grouped under the task ID and automatically rolled back if the task permanently fails or is cancelled. Shell commands are not covered by this file rollback.
-Tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), list_tasks(), resume_task(task_id, user_input).
+Tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), semantic_search(query, k, scope), probe_telemetry(domain), render_artifact(type, schema, data), list_tasks(), resume_task(task_id, user_input).
 Format: <invoke name="tool_name"><parameter name="param">value</parameter></invoke>$custom
 CRITICAL EXECUTION RULES:
 - ZERO HALLUCINATION: Never claim you opened an app or ran a command without invoking the tool!
@@ -1595,13 +1611,13 @@ CRITICAL EXECUTION RULES:
 $languageEnforcement""".trimIndent()
         }
 
-        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}|${recalledVectorMemories.hashCode()}|${recalledEpisodes.hashCode()}|$workspaceContext"
+        val currentKey = "PERSONA:${effectivePersona.hashCode()}|$customPrompt|$isCodeRequest|$isGreeting|${detectedLang.name}|${userPrompt.hashCode()}|${recalledVectorMemories.hashCode()}|${recalledEpisodes.hashCode()}|$workspaceContext|${eventSignalContext.hashCode()}"
         if (cachedPrefixKey == currentKey && cachedStaticPrefix != null) return cachedStaticPrefix!!
 
         val livingMind = actualContext?.let { EpistemicMemoryManager.getDistilledContextPrompt(it) } ?: ""
         val toolsAndGuidelines = """
 ## Host Toolchains & Execution Guidelines:
-- Available tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), schedule_task(description, command, cron_expression, delay_minutes), update_task(task_id, description, command, execute_at, cron_expression), pause_task(task_id), resume_scheduled_task(task_id), cancel_task(task_id), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
+- Available tools: open_app(package_name), run_shell(command), write_file(path, content), create_word_document(title, content, filename), create_excel_spreadsheet(data_json, filename, sheet_name), rollback_file_changes(transaction_id), web_search(query), run_python(script), fetch_web_content(url), read_file_range(path, start_line, line_count), semantic_search(query, k, scope), probe_telemetry(domain), render_artifact(type, schema, data), schedule_task(description, command, cron_expression, delay_minutes), update_task(task_id, description, command, execute_at, cron_expression), pause_task(task_id), resume_scheduled_task(task_id), cancel_task(task_id), queue_background_task(command), list_tasks(), resume_task(task_id, user_input), run_plugin(name), save_memory(content, category), search_memory(query), complete(summary).
 - For requests to create Word or Excel files, invoke the matching document tool with complete content. For Excel, include non-empty rows and headers in data_json (array of arrays or objects); never pass an empty placeholder table. Then report the generated file and its preview. Files are saved under /sdcard/atlas-ai/documents and can be previewed or downloaded from the conversation.
 - Tool invocation format:
 <function_calls>
@@ -1615,7 +1631,7 @@ $languageEnforcement""".trimIndent()
 """.trimIndent()
 
         val customPromptSection = if (customPrompt.isNotBlank()) "\n\n$customPrompt" else ""
-        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$workspaceContext$episodicMemorySection$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
+        val compiled = "$languageEnforcement\n\n$livingMind\n\n$effectivePersona\n\n$workspaceContext$eventSignalContext$episodicMemorySection$vectorMemoriesSection\n\n$toolsAndGuidelines$customPromptSection$antiMonologueDirective$greetingDirective$universalGroundingDirective\n\n$languageEnforcement"
         cachedPrefixKey = currentKey
         cachedStaticPrefix = compiled
         return compiled
@@ -3317,12 +3333,19 @@ $evidence
                                 addSystemLog("Saved vector memory: ${rec.id}")
                             }
                         }
-                        "search_memory", "query_memory", "recall" -> {
+                        "search_memory", "query_memory", "recall", "semantic_search" -> {
                             actualContext?.let { initTaskSystem(it) }
                             val q = params["query"] ?: params["q"] ?: params.values.firstOrNull() ?: ""
                             if (q.isNotBlank()) {
                                 actionToolUsed = true
-                                val results = com.synapse.localai.memory.VectorMemoryManager.search(q, topK = 3)
+                                val requestedK = params["k"]?.toIntOrNull()?.coerceIn(1, 10) ?: 3
+                                val requestedScope = params["scope"]?.trim()
+                                    ?.takeIf { it.isNotEmpty() && !it.equals("all", ignoreCase = true) }
+                                val results = com.synapse.localai.memory.VectorMemoryManager.search(
+                                    query = q,
+                                    topK = requestedK,
+                                    categoryFilter = requestedScope
+                                )
                                 val summary = if (results.isNotEmpty()) {
                                     buildString {
                                         appendLine("🔍 Semantic Memory Recall for \"$q\":")
@@ -3335,6 +3358,29 @@ $evidence
                                 }
                                 summaries.add(summary)
                                 addSystemLog("Searched vector memory for: $q")
+                            }
+                        }
+                        "probe_telemetry" -> {
+                            val domain = params["domain"]?.trim().orEmpty()
+                            if (domain.isNotBlank()) {
+                                actionToolUsed = true
+                                val telemetryContext = actualContext
+                                    ?: throw IllegalStateException("Android context is unavailable for telemetry.")
+                                val result = com.synapse.localai.tools.TelemetryProbe.probe(telemetryContext, domain)
+                                summaries.add("📊 Local telemetry ($domain):\n$result")
+                                addSystemLog("Read local telemetry domain: $domain")
+                            }
+                        }
+                        "render_artifact" -> {
+                            val type = params["type"]?.trim().orEmpty()
+                            val schema = params["schema"].orEmpty()
+                            val data = params["data"] ?: params["data_json"].orEmpty()
+                            if (type.isNotBlank() && data.isNotBlank()) {
+                                actionToolUsed = true
+                                summaries.add(
+                                    com.synapse.localai.tools.VisualArtifactTool.render(type, schema, data)
+                                )
+                                addSystemLog("Rendered local visual artifact: $type")
                             }
                         }
                         else -> {
@@ -3679,6 +3725,11 @@ $evidence
     }
 
     fun addSystemLog(text: String) { Log.i(TAG, "SystemLog: $text") }
+    fun queueSystemEvent(event: String) {
+        if (pendingSystemEvents.size >= 32) pendingSystemEvents.poll()
+        pendingSystemEvents.offer(event.take(180))
+        addLog(LogEntry(sender = "SYSTEM", text = "Observed device event: $event"))
+    }
     private fun prefs(context: Context) = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
     private fun addLog(entry: LogEntry) { _uiState.update { it.copy(logs = it.logs + entry) } }
 

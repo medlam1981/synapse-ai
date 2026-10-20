@@ -5,26 +5,13 @@ import com.synapse.localai.AtlasLog as Log
 import com.synapse.localai.memory.VectorMemoryManager
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 
 /**
- * Epistemic Memory & Persona Manager
- *
- * Implements:
- * 1. Persistent Persona & Identity, with learned memories stored in SQLite.
- *    - Living self-profile containing identity (MEDLAM-AI), operating capabilities, dialects/tone,
- *      and persistent user coding preferences.
- *    - Decoupled from transient filesystem operations and temporary tasks.
- * 2. Clean-Slate Startup
- *    - No sticky checkpoint banners or assumed unfinished missions on startup.
- * 3. Incremental User Preference Distillation
- *    - Silently learns user coding preferences and habits into context without UI clutter.
+ * Persistent identity and learned profile backed by app-private SQLite memory.
  */
 object EpistemicMemoryManager {
 
     private const val TAG = "EpistemicMemory"
-    private const val PRIMARY_MIND_FILE = "/sdcard/atlas-ai/memory/agent_mind.json"
-    private const val LEGACY_MIND_FILE = "/sdcard/Medlam-Ai/memory/agent_mind.json"
 
     data class AgentCheckpoint(
         val sessionId: String = "",
@@ -60,21 +47,9 @@ object EpistemicMemoryManager {
 
     @Volatile private var cachedMind: AgentMind? = null
 
-    // =========================================================================
-    // 1. Deprecated Checkpoints (Clean-Slate Policy)
-    // =========================================================================
+    fun saveCheckpoint(context: Context?, checkpoint: AgentCheckpoint) = Unit
+    fun loadCheckpoint(context: Context?): AgentCheckpoint? = null
 
-    @Synchronized
-    fun saveCheckpoint(context: Context?, checkpoint: AgentCheckpoint) {
-        // No-op: Transient task checkpoints are no longer written to global state
-    }
-
-    @Synchronized
-    fun loadCheckpoint(context: Context?): AgentCheckpoint? {
-        return null
-    }
-
-    @Synchronized
     fun updateWorkingStep(
         context: Context?,
         sessionId: String,
@@ -83,152 +58,160 @@ object EpistemicMemoryManager {
         phase: String,
         newPath: String? = null,
         pendingTaskSummary: String? = null
-    ) {
-        // No-op: Temporary filesystem paths and steps are kept strictly in session history
-    }
+    ) = Unit
 
-    // =========================================================================
-    // 2. Living Self & Context Profile (agent_mind.json)
-    // =========================================================================
-
-    @Synchronized
-    fun loadMind(context: Context?): AgentMind {
-        if (cachedMind != null) return cachedMind!!
-        val primaryFile = File(PRIMARY_MIND_FILE)
-        val legacyFile = File(LEGACY_MIND_FILE)
-        val file = when {
-            primaryFile.exists() -> primaryFile
-            legacyFile.exists() -> legacyFile
-            else -> null
-        }
-        if (file == null || !file.exists() || file.length() == 0L) {
-            val defaultMind = AgentMind().apply {
-                userPreferences.add("Prefers modern idiomatic code (Kotlin, Python, Web)")
-                userPreferences.add("Prefers direct, complete code solutions without placeholders")
-                learnedFacts.add("Device architecture: ARM64-v8a running local GGUF and Gemini Cloud")
-                learnedFacts.add("Base workspace root: /sdcard/atlas-ai/")
-                learnedFacts.add("Local neural models: /sdcard/atlas-ai/models/")
-                learnedFacts.add("Speculative MTP drafts: /sdcard/atlas-ai/mtp/")
-            }
-            cachedMind = defaultMind
-            return defaultMind
-        }
+    suspend fun loadMind(context: Context?): AgentMind {
+        cachedMind?.let { return it }
+        if (context == null) return defaultMind()
+        VectorMemoryManager.initialize(context)
         return try {
-            val json = JSONObject(file.readText())
-            val idObj = json.optJSONObject("identity") ?: JSONObject()
-            val userObj = json.optJSONObject("user_profile") ?: JSONObject()
-
-            val languages = mutableListOf<String>()
-            val langArr = userObj.optJSONArray("preferred_languages") ?: JSONArray()
-            for (i in 0 until langArr.length()) languages.add(langArr.getString(i))
-
-            val prefs = mutableListOf<String>()
-            val prefsArr = userObj.optJSONArray("user_preferences") ?: JSONArray()
-            for (i in 0 until prefsArr.length()) prefs.add(prefsArr.getString(i))
-
-            val facts = mutableListOf<String>()
-            val factsArr = json.optJSONArray("learned_facts") ?: JSONArray()
-            for (i in 0 until factsArr.length()) facts.add(factsArr.getString(i))
-
-            val mind = AgentMind(
-                name = idObj.optString("name", "ATLAS-AI AGENT"),
-                role = idObj.optString("role", "Autonomous On-Device Neural Core & System Controller"),
-                runtime = idObj.optString("runtime", "Android ARM64 native JNI / llama.cpp + Gemini Cloud"),
-                workspaceRoot = idObj.optString("workspace_root", "/sdcard/atlas-ai/")
-                    .replace("/sdcard/Medlam-Ai", "/sdcard/atlas-ai"),
-                preferredLanguages = if (languages.isNotEmpty()) languages else listOf("Arabic", "Moroccan Darija", "English"),
-                tone = userObj.optString("tone", "Direct, capable, authentic, unconstrained"),
-                userPreferences = prefs,
-                learnedFacts = facts.map {
-                    it.replace("/sdcard/Medlam-Ai", "/sdcard/atlas-ai")
-                }.toMutableList()
-            )
-            cachedMind = mind
-            if (file.absolutePath == legacyFile.absolutePath ||
-                json.has("active_projects") ||
-                json.has("recent_paths") ||
-                !userObj.has("user_preferences")
-            ) {
-                saveMind(context, mind)
+            VectorMemoryManager.getSystemState().also { mind ->
+                if (mind.userPreferences.isEmpty() && mind.learnedFacts.isEmpty()) {
+                    mind.userPreferences.addAll(defaultMind().userPreferences)
+                    mind.learnedFacts.addAll(defaultMind().learnedFacts)
+                    saveMind(context, mind)
+                }
+                cachedMind = mind
             }
-            mind
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing legacy agent mind", e)
-            val fallback = AgentMind()
-            cachedMind = fallback
-            fallback
+        } catch (exception: Exception) {
+            Log.e(TAG, "Unable to load internal agent memory", exception)
+            throw exception
         }
     }
 
-    @Synchronized
-    fun saveMind(context: Context?, mind: AgentMind) {
+    suspend fun saveMind(context: Context?, mind: AgentMind) {
         cachedMind = mind
         val appContext = context?.applicationContext ?: return
-        VectorMemoryManager.init(appContext)
-        mind.userPreferences.take(20).forEach {
-            VectorMemoryManager.store(it, category = "USER_PREFERENCE")
-        }
-        mind.learnedFacts.take(20).forEach {
-            VectorMemoryManager.store(it, category = "CORE_MEMORY")
-        }
+        VectorMemoryManager.initialize(appContext)
+        VectorMemoryManager.saveAgentMind(mind)
     }
 
-    // =========================================================================
-    // 3. User Preference Distillation (Silent & Decoupled)
-    // =========================================================================
-
-    fun recordInteraction(context: Context?, userPrompt: String, agentResponse: String, touchedPath: String? = null) {
+    suspend fun recordInteraction(
+        context: Context?,
+        userPrompt: String,
+        agentResponse: String,
+        touchedPath: String? = null
+    ) {
         try {
             val lowerPrompt = userPrompt.lowercase()
-            // Detect explicit user coding preferences or habits
-            if (lowerPrompt.contains("i prefer") || lowerPrompt.contains("always use") || 
-                lowerPrompt.contains("remember that") || lowerPrompt.contains("my style is") ||
-                lowerPrompt.contains("prefer to write") || lowerPrompt.contains("my favorite")) {
-                val cleanPref = userPrompt.replace(
-                    Regex("""^(?:please\s+)?(?:remember\s+that\s+|i\s+prefer\s+to\s+|i\s+prefer\s+|always\s+use\s+)""", RegexOption.IGNORE_CASE), 
-                    ""
-                ).trim()
-                if (cleanPref.length in 5..120) {
-                    val mind = loadMind(context)
-                    if (!mind.userPreferences.contains(cleanPref)) {
-                        mind.userPreferences.add(0, cleanPref)
-                        while (mind.userPreferences.size > 20) mind.userPreferences.removeAt(mind.userPreferences.size - 1)
-                        saveMind(context, mind)
-                    }
-                }
+            if (listOf("i prefer", "always use", "remember that", "my style is", "prefer to write", "my favorite")
+                    .none(lowerPrompt::contains)
+            ) return
+
+            val cleanPreference = userPrompt.replace(
+                Regex("""^(?:please\s+)?(?:remember\s+that\s+|i\s+prefer\s+to\s+|i\s+prefer\s+|always\s+use\s+)""", RegexOption.IGNORE_CASE),
+                ""
+            ).trim()
+            if (cleanPreference.length !in 5..120) return
+
+            val mind = loadMind(context)
+            if (cleanPreference !in mind.userPreferences) {
+                mind.userPreferences.add(0, cleanPreference)
+                while (mind.userPreferences.size > 20) mind.userPreferences.removeAt(mind.userPreferences.lastIndex)
+                saveMind(context, mind)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in recordInteraction: ${e.message}")
+        } catch (exception: Exception) {
+            Log.e(TAG, "Unable to persist learned interaction", exception)
         }
     }
 
-    // =========================================================================
-    // 4. Distilled Self-Awareness & Context Prompt Injection
-    // =========================================================================
-
-    fun getDistilledContextPrompt(context: Context?): String {
+    suspend fun getDistilledContextPrompt(context: Context?): String {
         val mind = loadMind(context)
-        val sb = StringBuilder()
-
-        sb.append("## ATLAS-AI AGENT On-Device Core\n")
-        sb.append("- Environment: Android ARM64 native JNI / llama.cpp.\n")
-        sb.append("- Capabilities: Headless CLI, root shell (`run_shell`), web search (`web_search`), background task engine, file I/O.\n")
-        sb.append("- Language Mandate: Dynamic Mirroring. Strict 100% language matching to user prompt (English when addressed in English, Arabic when addressed in Arabic).\n")
-        sb.append("- Mandate: Autonomous system executor. Execute tool actions directly without refusals.\n")
-
-        if (mind.userPreferences.isNotEmpty()) {
-            sb.append("- User Preferences: ${mind.userPreferences.take(3).joinToString(" | ")}\n")
-        }
-
-        return sb.toString().trim()
+        return buildString {
+            appendLine("## ATLAS-AI AGENT On-Device Core")
+            appendLine("- Environment: Android ARM64 native JNI / llama.cpp.")
+            appendLine("- Capabilities: Headless CLI, root shell (`run_shell`), web search (`web_search`), background task engine, file I/O.")
+            appendLine("- Language Mandate: Dynamic Mirroring. Strict 100% language matching to user prompt (English when addressed in English, Arabic when addressed in Arabic).")
+            appendLine("- Mandate: Autonomous system executor. Execute tool actions directly without refusals.")
+            if (mind.userPreferences.isNotEmpty()) {
+                appendLine("- User Preferences: ${mind.userPreferences.take(3).joinToString(" | ")}")
+            }
+            if (mind.learnedFacts.isNotEmpty()) {
+                appendLine("- Learned Facts: ${mind.learnedFacts.take(3).joinToString(" | ")}")
+            }
+        }.trim()
     }
 
-    // =========================================================================
-    // 5. Post-Launch Operational Resumption (Deprecated)
-    // =========================================================================
+    fun getResumptionNotice(context: Context?): String? = null
 
-    fun getResumptionNotice(context: Context?): String? {
-        // Deprecated: main launch screen must never present automatic resume banners
-        return null
+    internal fun parseMind(jsonText: String): AgentMind {
+        val json = JSONObject(jsonText)
+        val identity = json.optJSONObject("identity") ?: JSONObject()
+        val profile = json.optJSONObject("user_profile") ?: JSONObject()
+        val preferences = profile.optJSONArray("user_preferences").toStringList()
+        val languages = profile.optJSONArray("preferred_languages").toStringList()
+        val facts = json.optJSONArray("learned_facts").toStringList()
+        val projects = mutableListOf<ProjectRecord>()
+        json.optJSONArray("active_projects")?.let { array ->
+            for (index in 0 until array.length()) {
+                val project = array.optJSONObject(index) ?: continue
+                projects.add(
+                    ProjectRecord(
+                        name = project.optString("name"),
+                        path = project.optString("path"),
+                        intent = project.optString("intent"),
+                        lastUpdated = project.optLong("last_updated", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        return AgentMind(
+            name = identity.optString("name", "ATLAS-AI AGENT"),
+            role = identity.optString("role", "Autonomous On-Device Neural Core & System Controller"),
+            runtime = identity.optString("runtime", "Android ARM64 native JNI / llama.cpp + Gemini Cloud"),
+            workspaceRoot = identity.optString("workspace_root", "/sdcard/atlas-ai/")
+                .replace("/sdcard/Medlam-Ai", "/sdcard/atlas-ai"),
+            preferredLanguages = languages.ifEmpty { listOf("Dynamic Mirroring (Matches User Prompt)", "English", "Arabic") },
+            tone = profile.optString("tone", "Direct, capable, authentic, unconstrained"),
+            userPreferences = preferences.toMutableList(),
+            learnedFacts = facts.map { it.replace("/sdcard/Medlam-Ai", "/sdcard/atlas-ai") }.toMutableList(),
+            activeProjects = projects,
+            recentPaths = json.optJSONArray("recent_paths").toStringList().toMutableList()
+        )
+    }
+
+    internal fun serializeMind(mind: AgentMind): String = JSONObject().apply {
+        put("identity", JSONObject().apply {
+            put("name", mind.name)
+            put("role", mind.role)
+            put("runtime", mind.runtime)
+            put("workspace_root", mind.workspaceRoot)
+        })
+        put("user_profile", JSONObject().apply {
+            put("tone", mind.tone)
+            put("preferred_languages", JSONArray(mind.preferredLanguages))
+            put("user_preferences", JSONArray(mind.userPreferences))
+        })
+        put("learned_facts", JSONArray(mind.learnedFacts))
+        put("active_projects", JSONArray().apply {
+            mind.activeProjects.forEach { project ->
+                put(JSONObject().apply {
+                    put("name", project.name)
+                    put("path", project.path)
+                    put("intent", project.intent)
+                    put("last_updated", project.lastUpdated)
+                })
+            }
+        })
+        put("recent_paths", JSONArray(mind.recentPaths))
+    }.toString()
+
+    private fun defaultMind(): AgentMind = AgentMind().apply {
+        userPreferences.add("Prefers modern idiomatic code (Kotlin, Python, Web)")
+        userPreferences.add("Prefers direct, complete code solutions without placeholders")
+        learnedFacts.add("Device architecture: ARM64-v8a running local GGUF and Gemini Cloud")
+        learnedFacts.add("Base workspace root: /sdcard/atlas-ai/")
+        learnedFacts.add("Local neural models: /sdcard/atlas-ai/models/")
+        learnedFacts.add("Speculative MTP drafts: /sdcard/atlas-ai/mtp/")
+    }
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        return buildList {
+            for (index in 0 until length()) {
+                val value = optString(index).trim()
+                if (value.isNotEmpty()) add(value)
+            }
+        }
     }
 }

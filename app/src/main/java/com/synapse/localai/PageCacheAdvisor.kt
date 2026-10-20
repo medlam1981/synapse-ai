@@ -9,7 +9,7 @@ import com.synapse.localai.AtlasLog as Log
  *
  * Implements:
  * 1. Kernel Memory Advice (`madvise`):
- *    - Informs Linux kernel with MADV_WILLNEED during active inference for sequential read-ahead.
+ *    - Keeps the default readahead and page-retention policy for recurrent model inference.
  *    - Issues MADV_DONTNEED when transitioning to IDLE or when a secondary engine takes focus,
  *      allowing the OS to drop clean file pages instantly without writing to swap or triggering kswapd thrashing.
  * 2. Storage Layer & FUSE Mitigation:
@@ -23,7 +23,7 @@ object PageCacheAdvisor {
 
     const val ADVICE_WILLNEED = 1
     const val ADVICE_DONTNEED = 2
-    const val ADVICE_SEQUENTIAL = 3
+    const val ADVICE_RETAIN = 4
     const val ADVICE_NORMAL = 4
 
     init {
@@ -55,14 +55,14 @@ object PageCacheAdvisor {
     }
 
     /**
-     * Informs the Linux kernel that model pages are accessed sequentially without forcing MADV_WILLNEED.
-     * Prevents synchronous kernel page-fault thrashing storms on RAM-constrained devices.
+     * Keeps the normal page-cache policy. Autoregressive inference revisits model weights on every
+     * token, so MADV_SEQUENTIAL can discard pages that will immediately be needed again.
      */
     fun adviseModelActive(pathPattern: String? = null) {
         try {
-            val advisedBytes = nativeAdviseModelMemory(pathPattern, ADVICE_SEQUENTIAL)
+            val advisedBytes = nativeAdviseModelMemory(pathPattern, ADVICE_RETAIN)
             val mb = advisedBytes / (1024 * 1024)
-            Log.i(TAG, "⚡ [PageCache] Issued madvise(MADV_SEQUENTIAL) on $mb MB of model pages")
+            Log.i(TAG, "⚡ [PageCache] Restored normal page retention on $mb MB of model pages")
         } catch (t: Throwable) {
             Log.w(TAG, "adviseModelActive notice: ${t.message}")
         }

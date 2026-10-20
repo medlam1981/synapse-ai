@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import android.graphics.BitmapFactory
+import android.provider.OpenableColumns
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.window.Dialog
@@ -59,8 +60,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -129,6 +133,21 @@ private fun usagePercent(used: Long, total: Long): Int? {
     if (total <= 0L) return null
     return ((used.coerceIn(0L, total).toDouble() / total) * 100).toInt().coerceIn(0, 100)
 }
+
+private fun metricGradientColor(percentage: Int, higherIsBetter: Boolean): Color {
+    val lowColor = if (higherIsBetter) Color(0xFFF44336) else Color(0xFF4CAF50)
+    val middleColor = Color(0xFFFFEB3B)
+    val highColor = if (higherIsBetter) Color(0xFF4CAF50) else Color(0xFFF44336)
+    val fraction = percentage.coerceIn(0, 100) / 100f
+    return if (fraction <= 0.5f) {
+        lerp(lowColor, middleColor, fraction * 2f)
+    } else {
+        lerp(middleColor, highColor, (fraction - 0.5f) * 2f)
+    }
+}
+
+private fun temperatureLoadPercent(celsius: Int): Int =
+    (((celsius - 20).coerceIn(0, 65) / 65f) * 100).roundToInt()
 
 private fun readCpuStatLine(): String? {
     try {
@@ -278,50 +297,14 @@ fun isArabic(text: String): Boolean = isRtlText(text)
 fun applyBidiIsolation(text: String): String {
     if (text.isBlank()) return text
 
-    val arabicColonRegex = Regex("([\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF])(:|：)(\\s*)")
-    var processed = arabicColonRegex.replace(text) { m ->
-        "${m.groupValues[1]}${m.groupValues[2]}\u200F${m.groupValues[3]}"
+    val ltrRun = Regex(
+        """(?<![\p{L}\p{N}])(?:https?://[^\s<>]+|[\(\[\{]?[A-Za-z0-9][A-Za-z0-9_./:@+\-]*(?:[ \t]+(?:[,;!?][ \t]*)?[A-Za-z0-9][A-Za-z0-9_./:@+\-]*)*[\)\]\}]?[,;.!?]?)(?![\p{L}\p{N}])"""
+    )
+    return ltrRun.replace(text) { match ->
+        val value = match.value
+        if (value.startsWith("\u2066") || value.startsWith("\u2068")) value
+        else "\u2066$value\u2069"
     }
-
-    val parenLatinRegex = Regex("(\\([A-Za-z0-9_\\-&/.,\\s+]+\\))")
-    processed = parenLatinRegex.replace(processed) { m ->
-        "\u2068${m.value}\u2069"
-    }
-
-    val bracketLatinRegex = Regex("(\\[[A-Za-z0-9_\\-&/.,\\s+]+\\])")
-    processed = bracketLatinRegex.replace(processed) { m ->
-        "\u2068${m.value}\u2069"
-    }
-
-    val sb = StringBuilder()
-    var inIsolate = false
-    var i = 0
-    while (i < processed.length) {
-        val ch = processed[i]
-        if (ch == '\u2068' || ch == '\u2066') {
-            inIsolate = true
-            sb.append(ch)
-            i++
-        } else if (ch == '\u2069') {
-            inIsolate = false
-            sb.append(ch)
-            i++
-        } else if (!inIsolate) {
-            val nextIsolate = processed.indexOfAny(charArrayOf('\u2068', '\u2066'), i)
-            val chunkEnd = if (nextIsolate != -1) nextIsolate else processed.length
-            val chunk = processed.substring(i, chunkEnd)
-            val isolatedChunk = chunk.replace(Regex("(?<![/`])\\b([A-Za-z][A-Za-z0-9_\\-&./]*(?:\\s+[A-Za-z][A-Za-z0-9_\\-&./]*)*)\\b(?!`)")) { m ->
-                val v = m.value
-                if (v.isBlank() || v.startsWith("http") || v.startsWith("/")) v else "\u2068$v\u2069"
-            }
-            sb.append(isolatedChunk)
-            i = chunkEnd
-        } else {
-            sb.append(ch)
-            i++
-        }
-    }
-    return sb.toString()
 }
 
 class MainActivity : ComponentActivity() {
@@ -404,6 +387,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        SystemEventMonitor.start(this, viewModel::queueSystemEvent)
+    }
+
+    override fun onPause() {
+        SystemEventMonitor.stop()
+        super.onPause()
     }
 
     private fun checkStoragePermissions() {
@@ -471,6 +460,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
     var showSettings by remember { mutableStateOf(false) }
     var showTaskManager by remember { mutableStateOf(false) }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedPreviewArtifact by remember { mutableStateOf<StreamDemultiplexer.DemuxBlock.FileArtifact?>(null) }
+    val attachmentScope = rememberCoroutineScope()
     var isRecording by remember { mutableStateOf(false) }
     var textInput by remember { mutableStateOf("") }
     var viewingImageBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -527,7 +518,25 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri -> selectedFileUri = uri }
+        onResult = { uri ->
+            selectedFileUri = uri
+            selectedPreviewArtifact = null
+            if (uri != null) {
+                attachmentScope.launch {
+                    try {
+                        selectedPreviewArtifact = withContext(Dispatchers.IO) {
+                            stageChatAttachment(context, uri)
+                        }
+                    } catch (failure: Exception) {
+                        Toast.makeText(
+                            context,
+                            "Could not prepare file preview: ${failure.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }
     )
 
     val speechLauncher = rememberLauncherForActivityResult(
@@ -540,6 +549,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 val text = matches[0]
                 viewModel.sendCommand(text, selectedFileUri, context)
                 selectedFileUri = null
+                selectedPreviewArtifact = null
             }
         }
     }
@@ -806,6 +816,10 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     val isInputReady = !uiState.isProcessing
                     val canSend = isInputReady && (textInput.isNotBlank() || selectedFileUri != null)
 
+                    selectedPreviewArtifact?.let { artifact ->
+                        UniversalFilePreviewCard(artifact)
+                    }
+
                     CompositionLocalProvider(
                         LocalLayoutDirection provides if (inputIsArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
                     ) {
@@ -947,6 +961,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                                     focusManager.clearFocus()
                                                     viewModel.sendCommand(cmd, selectedFileUri, context)
                                                     selectedFileUri = null
+                                                    selectedPreviewArtifact = null
                                                 }
                                             },
                                         contentAlignment = Alignment.Center
@@ -1046,17 +1061,26 @@ private fun DashboardMetric(
     contentDescription: String,
     isDark: Boolean,
     modifier: Modifier = Modifier,
+    temperatureCelsius: Int? = null,
     onClick: (() -> Unit)? = null
 ) {
     val metricValue = percentage?.coerceIn(0, 100)
-    val activeDots = metricValue?.let { (it / 5f).roundToInt().coerceIn(0, 20) } ?: 0
-    val activeColor = when {
-        metricValue == null -> MaterialTheme.colorScheme.onSurfaceVariant
-        metricValue < 60 -> Color(0xFF00E5FF)
-        metricValue <= 85 -> Color(0xFFFF9100)
-        else -> Color(0xFFFF1744)
+    val normalColor = MaterialTheme.colorScheme.primary
+    val warningColor = Color(0xFFFFB74D)
+    val criticalColor = Color(0xFFEF5350)
+    val metricColor = when {
+        label == "TEMP" && temperatureCelsius != null -> when {
+            temperatureCelsius < 50 -> Color(0xFF4CAF50)
+            temperatureCelsius < 70 -> warningColor
+            else -> criticalColor
+        }
+        label == "MEM" && metricValue != null ->
+            if (metricValue < 15) criticalColor else normalColor
+        label == "NET" -> if (value == "ON") Color(0xFF4CAF50) else criticalColor
+        metricValue != null && metricValue > 85 -> criticalColor
+        metricValue != null && metricValue > 70 -> warningColor
+        else -> normalColor
     }
-    val inactiveColor = if (isDark) Color(0x25FFFFFF) else Color(0x30000000)
     val rowModifier = modifier
         .then(
             if (onClick != null) {
@@ -1072,51 +1096,39 @@ private fun DashboardMetric(
 
     Surface(
         modifier = rowModifier,
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.48f else 0.62f),
         shape = RoundedCornerShape(6.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(1.dp)
+                .heightIn(min = 24.dp, max = 26.dp)
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "$label:",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 8.sp,
+                text = label,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 9.sp,
                 lineHeight = 10.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
-                modifier = Modifier.width(34.dp)
+                textAlign = TextAlign.Start,
+                overflow = TextOverflow.Clip
             )
-            Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(1.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                repeat(20) { index ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(if (index < activeDots) 8.dp else 4.dp)
-                            .clip(RoundedCornerShape(topStart = 1.dp, topEnd = 1.dp))
-                            .background(if (index < activeDots) activeColor else inactiveColor)
-                    )
-                }
-            }
             Text(
                 text = value,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 8.sp,
-                lineHeight = 10.sp,
+                color = metricColor,
+                fontSize = 10.sp,
+                lineHeight = 11.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 textAlign = TextAlign.End,
-                modifier = Modifier.width(34.dp)
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.weight(1f)
             )
         }
     }
@@ -1132,48 +1144,52 @@ private fun DashboardGaugeRow(
     onTaskGaugeClick: () -> Unit = {}
 ) {
     val metrics = listOf(
-        listOf(
-            Triple("RAM", stats.ramUsedPercent, stats.ramUsedPercent?.let { "$it%" } ?: "--"),
-            Triple("CPU", stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--"),
-            Triple("MEM", stats.ramUsedPercent?.let { 100 - it }, stats.ramFree),
-            Triple("DISK", stats.storageUsedPercent, stats.storageUsedPercent?.let { "$it%" } ?: "--")
+        DashboardMetricData("CPU", stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--"),
+        DashboardMetricData("MEM", stats.ramUsedPercent?.let { 100 - it }, stats.ramFree.replace("GB", "G")),
+        DashboardMetricData(
+            "TEMP",
+            stats.cpuTempInt.takeIf { it > 0 }?.let(::temperatureLoadPercent),
+            if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°",
+            temperatureCelsius = stats.cpuTempInt.takeIf { it > 0 }
         ),
-        listOf(
-            Triple("TEMP", stats.cpuTempInt.takeIf { it > 0 }?.coerceAtMost(100), if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°"),
-            Triple("BATT", stats.battery.takeIf { it in 0..100 }, if (stats.battery in 0..100) "${stats.battery}%" else "--"),
-            Triple("SWAP", stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--"),
-            Triple("TASK", (totalTasks.coerceIn(0, 10) * 10), totalTasks.toString())
-        )
+        DashboardMetricData("SWAP", stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--"),
+        DashboardMetricData("TASK", (totalTasks.coerceIn(0, 10) * 10), totalTasks.toString()),
+        DashboardMetricData("NET", if (stats.networkConnected) 100 else 0, if (stats.networkConnected) "ON" else "OFF")
     )
 
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(1.dp)
-    ) {
-        metrics.forEach { columnMetrics ->
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
-            ) {
-                columnMetrics.forEach { (label, percentage, value) ->
-                    DashboardMetric(
-                        label = label,
-                        percentage = percentage,
-                        value = value,
-                        contentDescription = if (label == "TASK") {
-                            if (taskStripExpanded) "Hide active task details" else "Show active task details"
-                        } else {
-                            label
-                        },
-                        isDark = isDark,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = if (label == "TASK") onTaskGaugeClick else null
-                    )
-                }
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .heightIn(max = 26.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            metrics.forEach { metric ->
+                DashboardMetric(
+                    label = metric.label,
+                    percentage = metric.percentage,
+                    value = metric.value,
+                    temperatureCelsius = metric.temperatureCelsius,
+                    contentDescription = if (metric.label == "TASK") {
+                        if (taskStripExpanded) "Hide active task details" else "Show active task details"
+                    } else {
+                        metric.label
+                    },
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = if (metric.label == "TASK") onTaskGaugeClick else null
+                )
             }
         }
     }
 }
+
+private data class DashboardMetricData(
+    val label: String,
+    val percentage: Int?,
+    val value: String,
+    val temperatureCelsius: Int? = null
+)
 
 @Composable
 fun ModelLifecycleBeacon(
@@ -1343,11 +1359,14 @@ fun ConsolidatedMasterHeader(
         if (name.isBlank()) "GEMMA-4-E2B Q4" else name
     }
     val formattedTps = String.format(Locale.US, "%.1f", uiState.tokensPerSecond.coerceAtLeast(0f))
-    val specChipText = when {
-        isCloudMode -> "GEMINI CLOUD • ${uiState.config.geminiModelName.uppercase()} • $formattedTps T/s"
-        hasMtp && draftTag != null -> "$cleanBaseName • MTP: $draftTag • $formattedTps T/s"
-        else -> "$cleanBaseName • STANDALONE • $formattedTps T/s"
+    val modelName = if (isCloudMode) uiState.config.geminiModelName.uppercase() else cleanBaseName
+    val modelDetails = when {
+        isCloudMode -> "GEMINI CLOUD • $modelName • $formattedTps T/s"
+        hasMtp && draftTag != null -> "$modelName • MTP: $draftTag • $formattedTps T/s"
+        else -> "$modelName • STANDALONE • $formattedTps T/s"
     }
+    val modelDetailsStart = modelDetails.indexOf(modelName)
+    val modelDetailsEnd = modelDetailsStart + modelName.length
 
     Column(
         modifier = Modifier
@@ -1400,50 +1419,67 @@ fun ConsolidatedMasterHeader(
                         }
                     }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                        AtlasAiBranding(
-                            fontSize = if (compactHeader) 11.sp else 16.sp,
-                            lineHeight = 2.dp
-                        )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            AtlasAiBranding(
+                                fontSize = if (compactHeader) 11.sp else 16.sp,
+                                lineHeight = 2.dp
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(if (uiState.isProcessing) primaryAccent else textDim)
+                                    )
+                                    Text(
+                                        text = if (uiState.isProcessing) "RUNNING" else "IDLE",
+                                        color = if (uiState.isProcessing) primaryAccent else textDim,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
                         Text(
-                            text = specChipText,
-                            color = textDim,
-                            fontSize = if (compactHeader) 6.sp else 7.sp,
+                            text = androidx.compose.ui.text.buildAnnotatedString {
+                                append(modelDetails)
+                                if (modelDetailsStart >= 0) {
+                                    addStyle(
+                                        SpanStyle(
+                                            color = primaryAccent,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        modelDetailsStart,
+                                        modelDetailsEnd
+                                    )
+                                }
+                            },
+                            color = textBright,
+                            fontSize = if (compactHeader) 7.sp else 8.sp,
                             lineHeight = if (compactHeader) 8.sp else 9.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.widthIn(max = if (compactHeader) 180.dp else 220.dp)
                         )
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-                    if (!compactHeader) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .clip(CircleShape)
-                                        .background(if (uiState.isProcessing) primaryAccent else textDim)
-                                )
-                                Text(
-                                    text = if (uiState.isProcessing) "RUNNING" else "IDLE",
-                                    color = if (uiState.isProcessing) primaryAccent else textDim,
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
                     }
                 }
             }
@@ -1729,152 +1765,127 @@ fun CliCodeBlockContainer(
         1f
     }
 
-    val blockBg = if (isDark) NightBackground else DayBackground
-    val headerBg = if (isDark) NightSurface else DaySurfaceVariant
-    val borderColor = if (isDark) NightOutlineVariant else DayOutlineVariant
     val langAccent = MaterialTheme.colorScheme.primary
     val pathColor = if (isDark) NightTertiary else DayTertiary
     val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
 
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = blockBg,
-        border = BorderStroke(1.dp, borderColor)
     ) {
-        Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                    .background(headerBg)
-                    .clipToBounds()
-                    .padding(horizontal = 8.dp),
+                modifier = Modifier.weight(1f, fill = false),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Row(
-                    modifier = Modifier.weight(1f, fill = false),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
+                Text(
+                    text = language.uppercase().ifBlank { "CODE" },
+                    color = langAccent,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+                if (!filePath.isNullOrBlank()) {
                     Text(
-                        text = "┌──",
-                        color = textDim,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = language.uppercase().ifBlank { "CODE" },
-                        color = langAccent,
+                        text = filePath,
+                        color = pathColor,
                         fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
-                    )
-                    if (!filePath.isNullOrBlank()) {
-                        Text(
-                            text = "•",
-                            color = textDim,
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = filePath,
-                            color = pathColor,
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (isStreaming) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(4.5.dp)
-                                    .alpha(livePulse)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                            Text(
-                                text = "LIVE",
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                letterSpacing = 0.04.em,
-                                maxLines = 1
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = if (copied) "[COPIED]" else "[COPY]",
-                        color = if (copied) MaterialTheme.colorScheme.primary else textDim,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
-                        modifier = Modifier
-                            .clickable {
-                                clipboard.setText(AnnotatedString(code))
-                                copied = true
-                                coroutineScope.launch {
-                                    delay(1800)
-                                    copied = false
-                                }
-                            }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-
-                    Text(
-                        text = if (isExpanded) "[HIDE CODE]" else "[SHOW CODE]",
-                        color = textDim,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .clickable { userExpanded = !isExpanded }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            AnimatedVisibility(visible = isExpanded) {
-                val highlighted = remember(code, language, isDark) {
-                    SyntaxHighlighter.highlight(code, language, isDark)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isStreaming) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(4.5.dp)
+                                .alpha(livePulse)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                        )
+                        Text(
+                            text = "LIVE",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.04.em,
+                            maxLines = 1
+                        )
+                    }
                 }
-                Box(
+
+                Text(
+                    text = if (copied) "[COPIED]" else "[COPY]",
+                    color = if (copied) MaterialTheme.colorScheme.primary else textDim,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clipToBounds()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = highlighted,
-                        fontSize = 11.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 15.5.sp,
-                        color = if (isDark) NightOnBackground else DayOnBackground
-                    )
-                }
+                        .clickable {
+                            clipboard.setText(AnnotatedString(code))
+                            copied = true
+                            coroutineScope.launch {
+                                delay(1800)
+                                copied = false
+                            }
+                        }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+
+                Text(
+                    text = if (isExpanded) "[HIDE CODE]" else "[SHOW CODE]",
+                    color = textDim,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clickable { userExpanded = !isExpanded }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = isExpanded) {
+            val highlighted = remember(code, language, isDark) {
+                SyntaxHighlighter.highlight(code, language, isDark)
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clipToBounds()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 4.dp)
+            ) {
+                Text(
+                    text = highlighted,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 15.5.sp,
+                    style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
+                    color = if (isDark) NightOnBackground else DayOnBackground
+                )
             }
         }
     }
@@ -2086,10 +2097,10 @@ fun CliLogMessageView(
                         isRtl = isLogArabic,
                         color = userMessageColor,
                         fontSize = 13.sp,
-                        lineHeight = if (isLogArabic) 19.sp else 18.sp,
+                        lineHeight = if (isLogArabic) 24.sp else 18.sp,
                         textAlign = TextAlign.Start,
                         modifier = Modifier.fillMaxWidth(),
-                        markdownStyler = { txt, _, rtl -> AnnotatedString(if (rtl) applyBidiIsolation(txt) else txt) }
+                        markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
                     )
                 }
 
@@ -2168,6 +2179,7 @@ fun CliLogMessageView(
                             is StreamDemultiplexer.DemuxBlock.Prose -> "prose_${block.text.hashCode()}"
                             is StreamDemultiplexer.DemuxBlock.Image -> "image_${block.prompt.hashCode()}_${block.imageBytes.size}"
                             is StreamDemultiplexer.DemuxBlock.FileArtifact -> block.executionId
+                            is StreamDemultiplexer.DemuxBlock.VisualArtifact -> block.executionId
                         }) {
                             when (block) {
                                 is StreamDemultiplexer.DemuxBlock.Prose -> {
@@ -2197,7 +2209,10 @@ fun CliLogMessageView(
                                     )
                                 }
                                 is StreamDemultiplexer.DemuxBlock.FileArtifact -> {
-                                    CliFileArtifactCard(block, isDark)
+                                    UniversalFilePreviewCard(block)
+                                }
+                                is StreamDemultiplexer.DemuxBlock.VisualArtifact -> {
+                                    CliVisualArtifactCard(block, isDark)
                                 }
                             }
                         }
@@ -2485,6 +2500,211 @@ private fun CliFileArtifactCard(
     }
 }
 
+@Composable
+private fun CliVisualArtifactCard(
+    artifact: StreamDemultiplexer.DemuxBlock.VisualArtifact,
+    isDark: Boolean
+) {
+    val payload = remember(artifact.payloadJson) {
+        try {
+            org.json.JSONObject(artifact.payloadJson).optJSONObject("data")
+        } catch (_: org.json.JSONException) {
+            null
+        }
+    }
+    var selectedItem by remember(artifact.executionId) { mutableStateOf<Int?>(null) }
+    val accent = MaterialTheme.colorScheme.primary
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f))
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = artifact.title,
+                color = onSurface,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            if (payload == null) {
+                Text("Artifact data is invalid.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+            } else when (artifact.type) {
+                "bar_chart", "line_chart" -> {
+                    val labels = payload.optJSONArray("labels")
+                    val values = payload.optJSONArray("values")
+                    if (labels == null || values == null || labels.length() == 0 || labels.length() != values.length()) {
+                        Text("Chart data is incomplete.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                    } else {
+                        val chartValues = (0 until values.length()).map { values.optDouble(it, 0.0) }
+                        val maximum = chartValues.maxOrNull()?.coerceAtLeast(1.0) ?: 1.0
+                        androidx.compose.foundation.Canvas(
+                            modifier = Modifier.fillMaxWidth().height(132.dp)
+                        ) {
+                            val bottom = size.height - 4.dp.toPx()
+                            val step = size.width / chartValues.size
+                            drawLine(
+                                color = secondary.copy(alpha = 0.5f),
+                                start = Offset(0f, bottom),
+                                end = Offset(size.width, bottom),
+                                strokeWidth = 1.dp.toPx()
+                            )
+                            if (artifact.type == "bar_chart") {
+                                chartValues.forEachIndexed { index, value ->
+                                    val barWidth = (step * 0.56f).coerceAtLeast(2.dp.toPx())
+                                    val barHeight = ((value / maximum).toFloat() * (bottom - 4.dp.toPx()))
+                                        .coerceAtLeast(1.dp.toPx())
+                                    drawRoundRect(
+                                        color = accent,
+                                        topLeft = Offset(index * step + (step - barWidth) / 2f, bottom - barHeight),
+                                        size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+                                    )
+                                }
+                            } else if (chartValues.size > 1) {
+                                val points = chartValues.mapIndexed { index, value ->
+                                    Offset(
+                                        x = index * step + step / 2f,
+                                        y = bottom - (value / maximum).toFloat() * (bottom - 4.dp.toPx())
+                                    )
+                                }
+                                points.zipWithNext().forEach { (start, end) ->
+                                    drawLine(accent, start, end, strokeWidth = 2.dp.toPx())
+                                }
+                                points.forEach { point ->
+                                    drawCircle(accent, radius = 3.dp.toPx(), center = point)
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            repeat(labels.length()) { index ->
+                                val label = labels.optString(index)
+                                val selected = selectedItem == index
+                                Surface(
+                                    modifier = Modifier.clickable { selectedItem = index },
+                                    color = if (selected) accent.copy(alpha = 0.18f) else Color.Transparent,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = label.take(18),
+                                        color = if (selected) accent else secondary,
+                                        fontSize = 9.sp,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                        selectedItem?.let { index ->
+                            Text(
+                                "${labels.optString(index)}: ${chartValues[index]}${payload.optString("unit")}",
+                                color = onSurface,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+                "table" -> {
+                    val columns = payload.optJSONArray("columns")
+                    val rows = payload.optJSONArray("rows")
+                    if (columns == null || rows == null) {
+                        Text("Table data is incomplete.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                    } else {
+                        Column(Modifier.horizontalScroll(rememberScrollState())) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                repeat(columns.length()) { index ->
+                                    Text(
+                                        columns.optString(index).take(32),
+                                        color = accent,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.widthIn(min = 72.dp, max = 140.dp)
+                                    )
+                                }
+                            }
+                            repeat(rows.length()) { rowIndex ->
+                                val row = rows.optJSONArray(rowIndex)
+                                if (row != null) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        repeat(minOf(columns.length(), row.length())) { columnIndex ->
+                                            Text(
+                                                row.optString(columnIndex).take(80),
+                                                color = onSurface,
+                                                fontSize = 10.sp,
+                                                modifier = Modifier.widthIn(min = 72.dp, max = 140.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "mermaid" -> {
+                    val nodes = payload.optJSONArray("nodes")
+                    val edges = payload.optJSONArray("edges")
+                    if (nodes == null || edges == null) {
+                        Text("Diagram data is incomplete.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            repeat(nodes.length()) { nodeIndex ->
+                                val node = nodes.optJSONObject(nodeIndex) ?: return@repeat
+                                val nodeId = node.optString("id")
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().clickable { selectedItem = nodeIndex },
+                                    color = if (selectedItem == nodeIndex) accent.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, accent.copy(alpha = 0.25f))
+                                ) {
+                                    Text(
+                                        "${node.optString("label")}  [$nodeId]",
+                                        color = onSurface,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                    )
+                                }
+                                val outgoing = (0 until edges.length()).mapNotNull { edgeIndex ->
+                                    val edge = edges.optJSONArray(edgeIndex) ?: return@mapNotNull null
+                                    if (edge.optString(0) == nodeId) edge.optString(1) else null
+                                }
+                                outgoing.forEach { target ->
+                                    val targetLabel = (0 until nodes.length())
+                                        .mapNotNull { targetIndex -> nodes.optJSONObject(targetIndex) }
+                                        .firstOrNull { it.optString("id") == target }
+                                        ?.optString("label")
+                                        ?: target
+                                    Text(
+                                        "↓  $targetLabel",
+                                        color = secondary,
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.padding(start = 14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                else -> Text("Unsupported visual artifact type: ${artifact.type}", color = MaterialTheme.colorScheme.error)
+            }
+            Text(
+                "LOCAL STRUCTURED ARTIFACT",
+                color = secondary,
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+    }
+}
+
 private fun officeArtifactFile(path: String, format: String): File? = runCatching {
     require(format.equals("docx", true) || format.equals("xlsx", true))
     val documentsDir = File(ToolExecutor.BASE_DIR, "documents").canonicalFile
@@ -2494,6 +2714,62 @@ private fun officeArtifactFile(path: String, format: String): File? = runCatchin
     require(candidate.isFile && candidate.length() <= 50L * 1024L * 1024L)
     candidate
 }.getOrNull()
+
+private fun stageChatAttachment(context: Context, uri: Uri): StreamDemultiplexer.DemuxBlock.FileArtifact {
+    val displayName = context.contentResolver.query(
+        uri,
+        arrayOf(OpenableColumns.DISPLAY_NAME),
+        null,
+        null,
+        null
+    )?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    }?.takeIf { it.isNotBlank() } ?: uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
+    val safeName = displayName.substringAfterLast('/').substringAfterLast('\\')
+        .replace(Regex("""[^\p{L}\p{N}._-]"""), "_")
+        .take(120)
+        .ifBlank { "attachment" }
+    val format = safeName.substringAfterLast('.', "").lowercase(Locale.ROOT).ifBlank {
+        context.contentResolver.getType(uri)
+            ?.substringAfter('/')
+            ?.substringBefore('+')
+            ?.lowercase(Locale.ROOT)
+            ?: "bin"
+    }
+    val directory = File(context.cacheDir, "atlas-chat-previews").apply {
+        if (!exists() && !mkdirs()) error("Could not create the private attachment preview folder.")
+    }
+    val destination = File(directory, "${UUID.randomUUID()}.$format")
+    try {
+        val input = context.contentResolver.openInputStream(uri)
+            ?: error("Could not open the selected attachment.")
+        input.use { source ->
+            destination.outputStream().use { output ->
+                val buffer = ByteArray(8192)
+                var totalBytes = 0L
+                while (true) {
+                    val count = source.read(buffer)
+                    if (count < 0) break
+                    totalBytes += count
+                    require(totalBytes <= 50L * 1024L * 1024L) {
+                        "Attachments larger than 50 MB cannot be previewed."
+                    }
+                    output.write(buffer, 0, count)
+                }
+            }
+        }
+        return StreamDemultiplexer.DemuxBlock.FileArtifact(
+            executionId = UUID.randomUUID().toString(),
+            path = destination.absolutePath,
+            fileName = safeName,
+            format = format,
+            preview = ""
+        )
+    } catch (failure: Exception) {
+        destination.delete()
+        throw failure
+    }
+}
 
 @Composable
 fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark: Boolean) {
@@ -2520,22 +2796,14 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
         }
     }
 
-    val obsidianBg = NightBackground
-    val subtleBorder = Color.White.copy(alpha = 0.08f)
     val terminalText = MaterialTheme.colorScheme.onSurfaceVariant
     val terminalAccent = MaterialTheme.colorScheme.primary
 
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        color = obsidianBg
+            .padding(vertical = 2.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 9.dp, vertical = 7.dp)
-        ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2592,9 +2860,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                     }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
-                Divider(color = subtleBorder, thickness = 0.5.dp)
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(3.dp))
 
                 if (isExpanded) {
                     Column(
@@ -2686,11 +2952,10 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                                 .clickable { userExpanded = true }
                                 .padding(vertical = 2.dp)
                         )
-                    }
                 }
             }
         }
-    }
+}
 
 @Composable
 fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boolean) {
@@ -2710,39 +2975,32 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
         append(statusSuffix)
     }
 
-    Surface(
-        color = if (isDark) DayOnBackground.copy(alpha = 0.85f) else Color(0xFFF1F5F9),
-        shape = RoundedCornerShape(4.dp),
-        border = BorderStroke(0.5.dp, toolAccent.copy(alpha = 0.35f)),
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (isRunning) {
-                NeonDottedSpinner(modifier = Modifier.size(14.dp))
-            } else {
-                Text(
-                    text = "✔",
-                    color = completedColor,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+        if (isRunning) {
+            NeonDottedSpinner(modifier = Modifier.size(14.dp))
+        } else {
             Text(
-                text = displayText,
-                color = if (isRunning) toolAccent else completedColor,
+                text = "✔",
+                color = completedColor,
                 fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                fontWeight = FontWeight.Bold
             )
         }
+        Text(
+            text = displayText,
+            color = if (isRunning) toolAccent else completedColor,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -2859,7 +3117,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             isRtl = isLineArabic,
                             color = headingColor,
                             fontSize = 13.5.sp,
-                            lineHeight = if (isLineArabic) 21.sp else 19.sp,
+                            lineHeight = if (isLineArabic) 24.sp else 19.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2894,7 +3152,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                                 isRtl = isLineArabic,
                                 color = textBright,
                                 fontSize = 12.5.sp,
-                                lineHeight = if (isLineArabic) 20.sp else 18.sp,
+                                lineHeight = if (isLineArabic) 24.sp else 18.sp,
                                 textAlign = TextAlign.Start,
                                 modifier = Modifier.weight(1f),
                                 markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
@@ -2908,7 +3166,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             isRtl = isLineArabic,
                             color = textBright,
                             fontSize = 12.5.sp,
-                            lineHeight = if (isLineArabic) 20.sp else 18.sp,
+                            lineHeight = if (isLineArabic) 24.sp else 18.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier.fillMaxWidth(),
                             markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
@@ -2945,13 +3203,13 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
         when {
             v.startsWith("/sdcard/") || v.startsWith("/data/") || v.startsWith("/storage/") -> {
                 builder.pushStyle(SpanStyle(color = pathColor, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
-                builder.append("\u2068$v\u2069")
+                builder.append("\u2066$v\u2069")
                 builder.pop()
             }
             v.startsWith("`") && v.endsWith("`") && v.length >= 2 -> {
                 val codeContent = v.substring(1, v.length - 1)
                 builder.pushStyle(SpanStyle(color = codeColor, background = codeBg, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold))
-                builder.append(if (isRtl) "\u2068 $codeContent \u2069" else " $codeContent ")
+                builder.append(if (isRtl) " \u2066$codeContent\u2069 " else " $codeContent ")
                 builder.pop()
             }
             v.startsWith("**") && v.endsWith("**") && v.length >= 4 -> {
@@ -2986,7 +3244,7 @@ fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = f
             builder.append(if (isRtl) applyBidiIsolation(part) else part)
         }
         builder.pushStyle(SpanStyle(color = pathColor, background = pathBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
-        builder.append("\u2068${match.value}\u2069")
+        builder.append("\u2066${match.value}\u2069")
         builder.pop()
         lastIndex = match.range.last + 1
     }

@@ -28,7 +28,8 @@ object ChatTemplateEngine {
         val archName: String = "gemma",
         val modelName: String = "Gemma",
         val chatTemplate: String? = "gemma",
-        val contextLength: Int = 4096
+        val contextLength: Int = 4096,
+        val blockCount: Int? = null
     )
 
     const val ATLAS_SYSTEM_DIRECTIVE = """[SYSTEM DIRECTIVE]: You are ATLAS-AI, a state-of-the-art edge AI assistant engineered for high-performance, offline execution. You are highly intelligent, analytical, and concise. You provide professional, elite-level technical and general assistance.
@@ -123,6 +124,7 @@ SYSTEM STATE GUARDRAIL: When analyzing command observations in <observation>...<
         var archName = detectedArch.tag
         var chatTemplate: String? = detectedArch.templateName
         var ctxLength = 4096
+        var blockCount: Int? = null
 
         try {
             if (file.exists() && file.length() > 24) {
@@ -171,6 +173,8 @@ SYSTEM STATE GUARDRAIL: When analyzing command observations in <observation>...<
                                     val u32Val = readLittleEndianInt(raf)
                                     if (key.endsWith(".context_length")) {
                                         ctxLength = u32Val
+                                    } else if (key.endsWith(".block_count") && u32Val in 1..512) {
+                                        blockCount = u32Val
                                     }
                                 }
                                 10 -> { // UINT64
@@ -204,7 +208,8 @@ SYSTEM STATE GUARDRAIL: When analyzing command observations in <observation>...<
             archName = archName,
             modelName = fileName,
             chatTemplate = chatTemplate ?: detectedArch.templateName,
-            contextLength = ctxLength.coerceIn(2048, 8192)
+            contextLength = ctxLength.coerceIn(2048, 8192),
+            blockCount = blockCount
         )
     }
 
