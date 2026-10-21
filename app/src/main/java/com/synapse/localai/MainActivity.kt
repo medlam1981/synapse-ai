@@ -2183,42 +2183,57 @@ fun CliLogMessageView(
 
     when {
         isUser -> {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 3.dp)
-                    .padding(horizontal = 12.dp)
-                    .padding(
-                        start = if (isLogArabic) 0.dp else 36.dp,
-                        end = if (isLogArabic) 36.dp else 0.dp
-                    )
+            CompositionLocalProvider(
+                LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
             ) {
-                CompositionLocalProvider(
-                    LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
-                ) {
-                    CliMathFormattedText(
-                        text = log.text,
-                        isDark = isDark,
-                        isRtl = isLogArabic,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp,
-                        lineHeight = 19.5.sp,
-                        textAlign = TextAlign.Start,
-                        modifier = Modifier.fillMaxWidth(),
-                        markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
-                    )
-                }
-
-                Text(
-                    text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
-                    color = textDim.copy(alpha = 0.35f),
-                    fontSize = 8.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
+                Row(
                     modifier = Modifier
-                        .align(Alignment.End)
-                        .padding(top = 1.dp)
-                )
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp)
+                        .padding(horizontal = 12.dp)
+                        .padding(
+                            start = if (isLogArabic) 0.dp else 36.dp,
+                            end = if (isLogArabic) 36.dp else 0.dp
+                        ),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = if (isLogArabic) "\u2066>>\u2069" else "\u2066<<\u2069",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = if (isLogArabic) Alignment.End else Alignment.Start
+                    ) {
+                        CliMathFormattedText(
+                            text = log.text,
+                            isDark = isDark,
+                            isRtl = isLogArabic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp,
+                            lineHeight = 19.5.sp,
+                            textAlign = TextAlign.Start,
+                            modifier = Modifier.fillMaxWidth(),
+                            markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
+                        )
+
+                        Text(
+                            text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
+                            color = textDim.copy(alpha = 0.35f),
+                            fontSize = 8.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .padding(top = 1.dp)
+                        )
+                    }
+                }
             }
         }
 

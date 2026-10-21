@@ -233,6 +233,7 @@ class AgentViewModel : ViewModel() {
         private const val MAX_HISTORY_MESSAGES = 48
         private const val MAX_TASK_ITERATIONS = 128
         private const val MAX_TOOL_CALLS_PER_TURN = 32
+        private const val MAX_AUTO_CONTINUATIONS_PER_TURN = 4
         private const val AGENTS_DIR = "/sdcard/atlas-ai/Agents"
         private const val BACKGROUND_PROGRESS_POLL_MS = 5_000L
         private const val BACKGROUND_PROGRESS_REMINDER_MS = 30_000L
@@ -1837,6 +1838,7 @@ $languageEnforcement""".trimIndent()
                 var toolsUsedThisTurn = false
                 var lastActionUsed: String? = null
                 var toolCallCount = 0
+                var autoContinuationCount = 0
                 var forceFinalTurn = false
                 var activeGgufPromptPrefix: String? = null
 
@@ -2011,7 +2013,28 @@ $languageEnforcement""".trimIndent()
                             }
 
                             pushUiUpdate(responseSb.toString())
-                            continueRecursion = false
+                            val hasPendingToolCall = !forceFinalTurn &&
+                                StreamDemultiplexer.hasCompletedToolCall(responseSb.takeLast(350).toString())
+                            val hitOutputLimit = when (modelType) {
+                                ModelType.GGUF -> ggufClient?.lastFinishReason == "MAX_TOKENS"
+                                ModelType.GEMINI -> geminiClient?.lastFinishReason == "MAX_TOKENS"
+                            }
+                            if (
+                                !streamInterrupted &&
+                                !hasPendingToolCall &&
+                                hitOutputLimit &&
+                                responseSb.isNotBlank() &&
+                                autoContinuationCount < MAX_AUTO_CONTINUATIONS_PER_TURN
+                            ) {
+                                autoContinuationCount++
+                                continuationCycle++
+                                continueRecursion = true
+                                _uiState.update {
+                                    it.copy(activeStatusDetail = "Continuing response (${autoContinuationCount}/$MAX_AUTO_CONTINUATIONS_PER_TURN)...")
+                                }
+                            } else {
+                                continueRecursion = false
+                            }
                         }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         if (e is SynchronousToolBarrierException || e.message?.contains("Synchronous ReAct Barrier") == true) {
@@ -2317,7 +2340,8 @@ $langFinalInstruction"""
                                 ggufClient?.lastFinishReason == "MAX_TOKENS"
                             } else {
                                 geminiClient?.lastFinishReason == "MAX_TOKENS"
-                            })
+                            }) &&
+                            autoContinuationCount < MAX_AUTO_CONTINUATIONS_PER_TURN
                         ) {
                             val partialReply = cleanVisibleText(stripThinkingForHistory(fullResponse))
                             _uiState.update { state ->
@@ -2360,6 +2384,23 @@ $langFinalInstruction"""
                                 )
                             }
                             keepGoing = true
+                            activeGgufPromptPrefix = null
+                        } else if (
+                            fullResponse.isNotBlank() &&
+                            (if (modelType == ModelType.GGUF) {
+                                ggufClient?.lastFinishReason == "MAX_TOKENS"
+                            } else {
+                                geminiClient?.lastFinishReason == "MAX_TOKENS"
+                            })
+                        ) {
+                            val pauseText = when (detectLanguage(command)) {
+                                DetectedLanguage.ARABIC -> "⚠️ أُوقفت المتابعة التلقائية بعد $MAX_AUTO_CONTINUATIONS_PER_TURN دفعات حفاظاً على موارد الجهاز. الرد السابق غير مكتمل."
+                                DetectedLanguage.FRENCH -> "⚠️ La continuation automatique s'est arrêtée après $MAX_AUTO_CONTINUATIONS_PER_TURN lots pour préserver les ressources de l'appareil. La réponse précédente est incomplète."
+                                DetectedLanguage.SPANISH -> "⚠️ La continuación automática se detuvo después de $MAX_AUTO_CONTINUATIONS_PER_TURN bloques para proteger los recursos del dispositivo. La respuesta anterior está incompleta."
+                                DetectedLanguage.ENGLISH -> "⚠️ Automatic continuation stopped after $MAX_AUTO_CONTINUATIONS_PER_TURN chunks to protect device resources. The response above is incomplete."
+                            }
+                            addLog(LogEntry(sender = "SYSTEM", text = pauseText, isError = true))
+                            keepGoing = false
                             activeGgufPromptPrefix = null
                         } else {
                             _uiState.update { it.copy(currentPhase = AgentActionPhase.COMPLETING) }
