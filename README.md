@@ -20,7 +20,7 @@
 
 Download and install the latest compiled release:
 
-👉 **[Download Latest APK (`releases/app-debug.apk`)](https://github.com/medlam1981/synapse-ai/raw/main/releases/app-debug.apk)**
+👉 **[Download Latest APK (`releases/app-debug.apk`)](https://media.githubusercontent.com/media/medlam1981/synapse-ai/main/releases/app-debug.apk)**
 
 > Requires Android 10+ (API 29+) on ARM64 device. Enable "Install from Unknown Sources" before installing.
 
