@@ -26,6 +26,7 @@ import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.LayoutDirection
@@ -154,6 +155,7 @@ fun CliMathFormattedText(
                                 color = color,
                                 fontSize = fontSize,
                                 fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
                                 lineHeight = lineHeight,
                                 textAlign = textAlign,
                                 style = TextStyle(
@@ -224,6 +226,7 @@ private fun RenderInlineMathLine(
             color = color,
             fontSize = fontSize,
             fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
             lineHeight = lineHeight,
             textAlign = textAlign,
             style = TextStyle(
@@ -306,6 +309,7 @@ private fun RenderInlineMathLine(
         color = color,
         fontSize = fontSize,
         fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.SemiBold,
         lineHeight = lineHeight,
         textAlign = textAlign,
         style = TextStyle(
