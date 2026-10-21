@@ -743,7 +743,7 @@ fun SettingsScreenContent(
                 titleColor = primary,
                 statusDot = when {
                     uiState.localModelLoaded && config.preferredModelType == ModelType.GGUF -> primary
-                    uiState.localModelLoading -> Color.Yellow
+                    uiState.localModelLoading -> MaterialTheme.colorScheme.statusWarning
                     else -> MaterialTheme.colorScheme.error
                 },
                 statusText = if (uiState.localModelLoading) "LOADING..." else if (uiState.localModelLoaded) "LOADED" else "OFFLINE"

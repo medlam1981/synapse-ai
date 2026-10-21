@@ -27,7 +27,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.synapse.localai.ui.theme.surfaceContainerLow
 import java.io.File
 
 private const val DESKTOP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -68,8 +68,8 @@ fun LiveCanvasDrawer(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF1E1E24), // Obsidian dark (#111827)
-        contentColor = Color(0xFFE2E8F0),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         dragHandle = null,
         modifier = Modifier
             .fillMaxWidth()
@@ -225,7 +225,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         Icon(
                             imageVector = Icons.Filled.Refresh,
                             contentDescription = "Reload",
-                            tint = Color(0xFFA1A1AA),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -265,7 +265,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                         Icon(
                             imageVector = Icons.Outlined.OpenInBrowser,
                             contentDescription = "Open in Chrome",
-                            tint = Color(0xFFA1A1AA),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -290,7 +290,7 @@ fun LiveCanvasContent(onClose: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF090D16)),
+                .background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.Center
         ) {
             if (!activeFile.exists()) {
@@ -302,14 +302,14 @@ fun LiveCanvasContent(onClose: () -> Unit) {
                 ) {
                     Text(
                         text = "No webapp/index.html detected",
-                        color = Color(0xFFE2E8F0),
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "Generate web applications using /code or asking MEDLAM AI to build in /sdcard/atlas-ai/webapp/.",
-                        color = Color(0xFF71717A),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center

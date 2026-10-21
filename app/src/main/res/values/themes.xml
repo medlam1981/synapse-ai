@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MedlamAI" parent="android:Theme.Material.NoActionBar">
-        <item name="android:colorBackground">@color/dark_bg</item>
-        <item name="android:windowBackground">@color/dark_bg</item>
-        <item name="android:statusBarColor">@color/dark_bg</item>
-        <item name="android:navigationBarColor">@color/dark_bg</item>
-        <item name="android:windowLightStatusBar">false</item>
+    <style name="Theme.MedlamAI" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorBackground">@android:color/white</item>
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>

@@ -10,6 +10,8 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
+import com.synapse.localai.ui.theme.surfaceContainerLow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
@@ -35,7 +37,7 @@ import androidx.compose.ui.unit.sp
  * Visual Display Equation Box for Block Math ($$...$$).
  *
  * Enforces LTR layout direction, provides horizontal scrolling for wide formulas,
- * and maintains dark theme styling (#ECEFF4 crisp symbol color).
+ * and derives foreground, surface, and border colors from the active Material theme.
  */
 @Composable
 fun CliBlockMathFormula(
@@ -45,9 +47,9 @@ fun CliBlockMathFormula(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current.density
-    val textColor = if (isDark) Color(0xFFECEFF4) else Color(0xFF1E293B)
-    val cardBg = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
-    val borderColor = if (isDark) Color(0xFF35353D) else Color(0xFFCBD5E1)
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val cardBg = MaterialTheme.colorScheme.surfaceContainerLow
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
 
     // Render formula using MathRenderer with 44px text size for display math
     val rendered = remember(formula, isDark, density) {
@@ -93,7 +95,7 @@ fun CliBlockMathFormula(
                     // Fallback to monospace raw text if LaTeX syntax fails to parse
                     Text(
                         text = rawText.ifBlank { "$$ $formula $$" },
-                        color = if (isDark) Color(0xFFA1A1AA) else Color(0xFF71717A),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center
@@ -122,7 +124,7 @@ fun CliMathFormattedText(
     markdownStyler: (String, Boolean, Boolean) -> AnnotatedString
 ) {
     val density = LocalDensity.current
-    val textColorArgb = if (isDark) Color(0xFFECEFF4).toArgb() else color.toArgb()
+    val textColorArgb = color.toArgb()
     val fontSizePx = with(density) { fontSize.toPx() }
 
     // Streaming-safe segmentation of math and plain text

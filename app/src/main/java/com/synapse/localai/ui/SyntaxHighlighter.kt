@@ -1,7 +1,6 @@
 package com.synapse.localai.ui
 
-import com.synapse.localai.ui.theme.WarningAmber
-import androidx.compose.ui.graphics.Color
+import com.synapse.localai.ui.theme.*
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -13,24 +12,6 @@ import java.util.regex.Pattern
  * SyntaxHighlighter — IDE-grade regex tokenizer for code syntax highlighting in Compose.
  */
 object SyntaxHighlighter {
-
-    // Dark Theme IDE Colors (GitHub Dark / VS Code Dark style)
-    private val DarkKeyword = Color(0xFFFF7B72)
-    private val DarkString = WarningAmber
-    private val DarkComment = Color(0xFF8B949E)
-    private val DarkNumber = WarningAmber
-    private val DarkFunction = Color(0xFFD2A8FF)
-    private val DarkType = Color(0xFFFFA657)
-    private val DarkBase = Color(0xFFE6EDF3)
-
-    // Light Theme IDE Colors (GitHub Light / VS Code Light style)
-    private val LightKeyword = Color(0xFFCF222E)
-    private val LightString = Color(0xFF065F46)
-    private val LightComment = Color(0xFF6E7781)
-    private val LightNumber = Color(0xFF9A5B00)
-    private val LightFunction = Color(0xFF7E22CE)
-    private val LightType = Color(0xFF953800)
-    private val LightBase = Color(0xFF1F2328)
 
     private val KEYWORDS = setOf(
         // Kotlin / Java
@@ -63,13 +44,13 @@ object SyntaxHighlighter {
      * Highlights code snippet with full IDE colorization according to theme.
      */
     fun highlight(code: String, language: String, isDark: Boolean): AnnotatedString {
-        val keywordColor = if (isDark) DarkKeyword else LightKeyword
-        val stringColor = if (isDark) DarkString else LightString
-        val commentColor = if (isDark) DarkComment else LightComment
-        val numberColor = if (isDark) DarkNumber else LightNumber
-        val functionColor = if (isDark) DarkFunction else LightFunction
-        val typeColor = if (isDark) DarkType else LightType
-        val baseColor = if (isDark) DarkBase else LightBase
+        val keywordColor = if (isDark) DarkCodeKeyword else LightCodeKeyword
+        val stringColor = if (isDark) DarkCodeString else LightCodeString
+        val commentColor = if (isDark) DarkCodeComment else LightCodeComment
+        val numberColor = if (isDark) DarkCodeString else LightCodeNumber
+        val functionColor = if (isDark) DarkCodeFunction else LightCodeFunction
+        val typeColor = if (isDark) DarkCodeType else LightCodeType
+        val baseColor = if (isDark) DarkCodeBase else LightCodeBase
 
         return buildAnnotatedString {
             append(code)

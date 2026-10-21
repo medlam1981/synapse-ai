@@ -1,6 +1,7 @@
 @file:OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
-    androidx.compose.ui.ExperimentalComposeUiApi::class
+    androidx.compose.ui.ExperimentalComposeUiApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
 )
 
 package com.synapse.localai
@@ -72,8 +73,12 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -87,6 +92,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import com.synapse.localai.ui.theme.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.lifecycle.lifecycleScope
@@ -135,9 +141,9 @@ private fun usagePercent(used: Long, total: Long): Int? {
 }
 
 private fun metricGradientColor(percentage: Int, higherIsBetter: Boolean): Color {
-    val lowColor = if (higherIsBetter) Color(0xFFF44336) else Color(0xFF4CAF50)
-    val middleColor = Color(0xFFFFEB3B)
-    val highColor = if (higherIsBetter) Color(0xFF4CAF50) else Color(0xFFF44336)
+    val lowColor = if (higherIsBetter) ErrorCrimson else SuccessGreen
+    val middleColor = WarningAmber
+    val highColor = if (higherIsBetter) SuccessGreen else ErrorCrimson
     val fraction = percentage.coerceIn(0, 100) / 100f
     return if (fraction <= 0.5f) {
         lerp(lowColor, middleColor, fraction * 2f)
@@ -284,27 +290,6 @@ fun getSystemStats(context: Context): SystemStats {
         storageUsedPercent = storageStats.second,
         networkConnected = networkConnected
     )
-}
-
-fun isRtlText(text: String): Boolean {
-    val arabicRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]")
-    val firstChar = text.trim().firstOrNull { it.isLetter() } ?: return false
-    return arabicRegex.matches(firstChar.toString())
-}
-
-fun isArabic(text: String): Boolean = isRtlText(text)
-
-fun applyBidiIsolation(text: String): String {
-    if (text.isBlank()) return text
-
-    val ltrRun = Regex(
-        """(?<![\p{L}\p{N}])(?:https?://[^\s<>]+|[\(\[\{]?[A-Za-z0-9][A-Za-z0-9_./:@+\-]*(?:[ \t]+(?:[,;!?][ \t]*)?[A-Za-z0-9][A-Za-z0-9_./:@+\-]*)*[\)\]\}]?[,;.!?]?)(?![\p{L}\p{N}])"""
-    )
-    return ltrRun.replace(text) { match ->
-        val value = match.value
-        if (value.startsWith("\u2066") || value.startsWith("\u2068")) value
-        else "\u2066$value\u2069"
-    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -673,8 +658,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = 12.dp),
                             shape = RoundedCornerShape(6.dp),
-                            color = if (isDark) Color(0xFF161B22).copy(alpha = 0.95f) else Color(0xFFF1F5F9).copy(alpha = 0.95f),
-                            border = BorderStroke(1.dp, if (isDark) Color(0xFF30363D) else DayOutlineVariant)
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -684,7 +669,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                 Icon(Icons.Filled.ArrowDownward, null, tint = primaryAccent, modifier = Modifier.size(11.dp))
                                 Text(
                                     text = if (uiState.isProcessing) "● Live Stream Tail ↓" else "Jump to Latest ↓",
-                                    color = primaryAccent,
+                                    color = MaterialTheme.colorScheme.headerModel,
                                     fontSize = 9.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
@@ -713,8 +698,8 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                         "Idle / Ready"
                     }
 
-                    val dotColor = if (isBusy) primaryAccent else MaterialTheme.colorScheme.primary
-                    val textColor = if (isBusy) primaryAccent else textDim
+                    val dotColor = if (isBusy) primaryAccent else MaterialTheme.colorScheme.statusIdle
+                    val textColor = if (isBusy) primaryAccent else MaterialTheme.colorScheme.statusIdle
 
                     Row(
                         modifier = Modifier
@@ -857,7 +842,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         onValueChange = { textInput = it },
                                         enabled = isInputReady,
                                         textStyle = TextStyle(
-                                            color = textBright,
+                                            color = MaterialTheme.colorScheme.headerModel,
                                             fontSize = 13.5.sp,
                                             fontFamily = if (inputIsArabic) FontFamily.SansSerif else FontFamily.Monospace,
                                             textAlign = TextAlign.Start
@@ -1013,7 +998,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.95f))
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.92f))
                     .clickable { viewingImageBytes = null },
                 contentAlignment = Alignment.Center
             ) {
@@ -1045,7 +1030,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close",
-                        tint = Color.White
+                        tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -1065,22 +1050,31 @@ private fun DashboardMetric(
     onClick: (() -> Unit)? = null
 ) {
     val metricValue = percentage?.coerceIn(0, 100)
-    val normalColor = MaterialTheme.colorScheme.primary
-    val warningColor = Color(0xFFFFB74D)
-    val criticalColor = Color(0xFFEF5350)
-    val metricColor = when {
+    val normalColor = when (label) {
+        "MEM", "SWAP" -> MaterialTheme.colorScheme.headerSecondary
+        "CPU", "NET" -> MaterialTheme.colorScheme.headerActive
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val warningColor = MaterialTheme.colorScheme.statusWarning
+    val criticalColor = MaterialTheme.colorScheme.error
+    val targetMetricColor = when {
         label == "TEMP" && temperatureCelsius != null -> when {
-            temperatureCelsius < 50 -> Color(0xFF4CAF50)
+            temperatureCelsius < 50 -> MaterialTheme.colorScheme.statusSuccess
             temperatureCelsius < 70 -> warningColor
             else -> criticalColor
         }
         label == "MEM" && metricValue != null ->
             if (metricValue < 15) criticalColor else normalColor
-        label == "NET" -> if (value == "ON") Color(0xFF4CAF50) else criticalColor
+        label == "NET" -> if (value == "ON") MaterialTheme.colorScheme.headerActive else criticalColor
         metricValue != null && metricValue > 85 -> criticalColor
         metricValue != null && metricValue > 70 -> warningColor
         else -> normalColor
     }
+    val metricColor by animateColorAsState(
+        targetValue = targetMetricColor,
+        animationSpec = tween(220),
+        label = "telemetryMetricColor"
+    )
     val rowModifier = modifier
         .then(
             if (onClick != null) {
@@ -1096,14 +1090,19 @@ private fun DashboardMetric(
 
     Surface(
         modifier = rowModifier,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDark) 0.48f else 0.62f),
+        color = MaterialTheme.colorScheme.headerChipBackground,
         shape = RoundedCornerShape(6.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 24.dp, max = 26.dp)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .heightIn(min = 26.dp)
+                .border(
+                    width = 0.7.dp,
+                    color = MaterialTheme.colorScheme.headerChipBorder.copy(alpha = if (isDark) 0.25f else 1f),
+                    shape = RoundedCornerShape(6.dp)
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1162,7 +1161,7 @@ private fun DashboardGaugeRow(
             modifier = modifier
                 .fillMaxWidth()
                 .heightIn(max = 26.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             metrics.forEach { metric ->
                 DashboardMetric(
@@ -1266,10 +1265,12 @@ fun AtlasAiBranding(
     lineHeight: Dp = 2.5.dp,
     spacing: Dp = 1.5.dp,
     showAgent: Boolean = true,
-    strokeWidth: Float = 2.5f
+    strokeWidth: Float = 2.5f,
+    primaryColorOverride: Color? = null,
+    secondaryColorOverride: Color? = null
 ) {
-    val primaryColor = MaterialTheme.colorScheme.onSurface
-    val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val primaryColor = primaryColorOverride ?: MaterialTheme.colorScheme.onSurface
+    val secondaryColor = secondaryColorOverride ?: MaterialTheme.colorScheme.onSurfaceVariant
 
     Text(
         text = androidx.compose.ui.text.buildAnnotatedString {
@@ -1301,6 +1302,10 @@ fun AtlasAiBranding(
     )
 }
 
+/**
+ * Fixed HUD above the weighted chat viewport; it is deliberately not attached
+ * to the LazyColumn scroll state so model and telemetry context remains visible.
+ */
 @Composable
 fun ConsolidatedMasterHeader(
     context: Context,
@@ -1313,7 +1318,6 @@ fun ConsolidatedMasterHeader(
     var taskStripExpanded by remember { mutableStateOf(false) }
     val compactHeader = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
         configuration.screenWidthDp >= 600
-    val headerBg = MaterialTheme.colorScheme.surfaceContainer
     val subCardBg = MaterialTheme.colorScheme.surfaceContainerHigh
     val textBright = MaterialTheme.colorScheme.onSurface
     val textDim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1368,14 +1372,25 @@ fun ConsolidatedMasterHeader(
     val modelDetailsStart = modelDetails.indexOf(modelName)
     val modelDetailsEnd = modelDetailsStart + modelName.length
 
+    val headerShape = RoundedCornerShape(12.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 4.dp, bottom = 4.dp)
-            .background(headerBg)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .clip(headerShape)
+            .background(MaterialTheme.colorScheme.headerBackground)
+            .border(
+                width = 0.7.dp,
+                color = MaterialTheme.colorScheme.headerBottomBorder.copy(alpha = if (isDark) 0.15f else 0.5f),
+                shape = headerShape
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1421,7 +1436,7 @@ fun ConsolidatedMasterHeader(
 
                     Column(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1429,11 +1444,18 @@ fun ConsolidatedMasterHeader(
                         ) {
                             AtlasAiBranding(
                                 fontSize = if (compactHeader) 11.sp else 16.sp,
-                                lineHeight = 2.dp
+                                lineHeight = 2.dp,
+                                primaryColorOverride = MaterialTheme.colorScheme.headerTitle,
+                                secondaryColorOverride = MaterialTheme.colorScheme.headerTitle
                             )
                             Surface(
                                 shape = RoundedCornerShape(50),
-                                color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.15f) else subCardBg
+                                color = if (uiState.isProcessing) primaryAccent.copy(alpha = 0.14f) else subCardBg,
+                                border = BorderStroke(
+                                    0.7.dp,
+                                    (if (uiState.isProcessing) primaryAccent else MaterialTheme.colorScheme.outlineVariant)
+                                        .copy(alpha = 0.48f)
+                                )
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
@@ -1444,11 +1466,11 @@ fun ConsolidatedMasterHeader(
                                         modifier = Modifier
                                             .size(5.dp)
                                             .clip(CircleShape)
-                                            .background(if (uiState.isProcessing) primaryAccent else textDim)
+                                            .background(if (uiState.isProcessing) ThinkingCyan else IdleSlate)
                                     )
                                     Text(
                                         text = if (uiState.isProcessing) "RUNNING" else "IDLE",
-                                        color = if (uiState.isProcessing) primaryAccent else textDim,
+                                        color = if (uiState.isProcessing) ThinkingCyan else textDim,
                                         fontSize = 8.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace,
@@ -1463,7 +1485,7 @@ fun ConsolidatedMasterHeader(
                                 if (modelDetailsStart >= 0) {
                                     addStyle(
                                         SpanStyle(
-                                            color = primaryAccent,
+                                            color = MaterialTheme.colorScheme.headerModel,
                                             fontWeight = FontWeight.Bold
                                         ),
                                         modelDetailsStart,
@@ -1471,7 +1493,7 @@ fun ConsolidatedMasterHeader(
                                     )
                                 }
                             },
-                            color = textBright,
+                            color = MaterialTheme.colorScheme.headerModel,
                             fontSize = if (compactHeader) 7.sp else 8.sp,
                             lineHeight = if (compactHeader) 8.sp else 9.sp,
                             fontWeight = FontWeight.Bold,
@@ -1609,9 +1631,9 @@ fun CliThoughtContainer(
         0f
     }
 
-    val traceColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val traceColor = MaterialTheme.colorScheme.onSurfaceVariant
     val traceAccent = MaterialTheme.colorScheme.primary
-    val gutterColor = if (isDark) NightOutlineVariant else DayOutlineVariant
+    val gutterColor = MaterialTheme.colorScheme.outlineVariant
     val amberBullet = MaterialTheme.colorScheme.secondary
 
     Column(
@@ -1725,9 +1747,68 @@ fun CliThoughtContainer(
                         fontSize = 11.5.sp,
                         fontFamily = FontFamily.Monospace,
                         fontStyle = FontStyle.Italic,
-                        lineHeight = if (isThoughtRtl) 18.sp else 16.5.sp,
+                        lineHeight = 17.25.sp,
                         textAlign = TextAlign.Start,
+                        style = TextStyle(
+                            textDirection = if (isThoughtRtl) {
+                                androidx.compose.ui.text.style.TextDirection.ContentOrRtl
+                            } else {
+                                androidx.compose.ui.text.style.TextDirection.ContentOrLtr
+                            }
+                        ),
                         modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccessibleIconAction(
+    icon: ImageVector,
+    description: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    var showTooltip by remember(description) { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(showTooltip) {
+        if (showTooltip) {
+            delay(1400)
+            showTooltip = false
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showTooltip = true
+                }
+            )
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(17.dp))
+        if (showTooltip) {
+            Popup(
+                alignment = Alignment.TopCenter,
+                onDismissRequest = { showTooltip = false }
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shadowElevation = 4.dp
+                ) {
+                    Text(
+                        description,
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }
             }
@@ -1748,6 +1829,7 @@ fun CliCodeBlockContainer(
     var copied by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
 
     val livePulse = if (isStreaming) {
         val transition = rememberInfiniteTransition(label = "code_live_pulse")
@@ -1766,8 +1848,8 @@ fun CliCodeBlockContainer(
     }
 
     val langAccent = MaterialTheme.colorScheme.primary
-    val pathColor = if (isDark) NightTertiary else DayTertiary
-    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val pathColor = MaterialTheme.colorScheme.tertiary
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(
         modifier = Modifier
@@ -1834,36 +1916,28 @@ fun CliCodeBlockContainer(
                     }
                 }
 
-                Text(
-                    text = if (copied) "[COPIED]" else "[COPY]",
-                    color = if (copied) MaterialTheme.colorScheme.primary else textDim,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clickable {
-                            clipboard.setText(AnnotatedString(code))
-                            copied = true
-                            coroutineScope.launch {
-                                delay(1800)
-                                copied = false
-                            }
-                        }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
+                AccessibleIconAction(
+                    icon = Icons.Filled.ContentCopy,
+                    description = if (copied) "Code copied" else "Copy code",
+                    tint = if (copied) MaterialTheme.colorScheme.primary else textDim
+                ) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    clipboard.setText(AnnotatedString(code))
+                    copied = true
+                    coroutineScope.launch {
+                        delay(1800)
+                        copied = false
+                    }
+                }
 
-                Text(
-                    text = if (isExpanded) "[HIDE CODE]" else "[SHOW CODE]",
-                    color = textDim,
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clickable { userExpanded = !isExpanded }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
+                AccessibleIconAction(
+                    icon = if (isExpanded) Icons.Filled.VisibilityOff else Icons.Filled.Code,
+                    description = if (isExpanded) "Hide code" else "Show code",
+                    tint = if (isExpanded) MaterialTheme.colorScheme.primary else textDim
+                ) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    userExpanded = !isExpanded
+                }
             }
         }
 
@@ -1871,21 +1945,31 @@ fun CliCodeBlockContainer(
             val highlighted = remember(code, language, isDark) {
                 SyntaxHighlighter.highlight(code, language, isDark)
             }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clipToBounds()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 4.dp)
-            ) {
-                Text(
-                    text = highlighted,
-                    fontSize = 11.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 15.5.sp,
-                    style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
-                    color = if (isDark) NightOnBackground else DayOnBackground
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.codeSurface,
+                border = BorderStroke(
+                    0.8.dp,
+                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.58f)
                 )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clipToBounds()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        text = highlighted,
+                        fontSize = 11.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 15.5.sp,
+                        style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }
@@ -1968,12 +2052,14 @@ fun CliTerminalToolLine(
                       rawLine.contains("Orchestrator:", ignoreCase = true) || rawLine.contains("Verifier:", ignoreCase = true) ||
                       rawLine.contains("Production Sync:", ignoreCase = true) || rawLine.contains("Status:", ignoreCase = true)
 
-    val cmdColor = if (isDark) NightOnBackground else DayOnBackground
-    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val cmdColor = MaterialTheme.colorScheme.onSurface
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val bulletColor = textDim
-    val gutterColor = if (isDark) NightOutlineVariant else DayOutlineVariant
+    val gutterColor = MaterialTheme.colorScheme.outlineVariant
 
     val displayText = rawLine.trim().replace(Regex("^[●*•⚡\\s]+"), "")
+    val isDisplayRtl = isArabic(displayText)
+    val mainDisplayText = if (isTelemetry) displayText else displayText.substringBefore(" -> ")
     val hasExpandableOutput = !isTelemetry && (displayText.contains(" -> ") || displayText.contains("\n"))
 
     Column(
@@ -2014,11 +2100,19 @@ fun CliTerminalToolLine(
                 )
             }
             Text(
-                text = if (isTelemetry) displayText else displayText.substringBefore(" -> "),
+                text = if (isDisplayRtl) applyBidiIsolation(mainDisplayText) else mainDisplayText,
                 color = cmdColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.Start,
+                style = TextStyle(
+                    textDirection = if (isDisplayRtl) {
+                        androidx.compose.ui.text.style.TextDirection.ContentOrRtl
+                    } else {
+                        androidx.compose.ui.text.style.TextDirection.ContentOrLtr
+                    }
+                ),
                 modifier = Modifier.weight(1f, fill = false)
             )
 
@@ -2052,11 +2146,19 @@ fun CliTerminalToolLine(
                             .background(gutterColor)
                     )
                     Text(
-                        text = output,
+                        text = if (isDisplayRtl) applyBidiIsolation(output) else output,
                         color = textDim,
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 14.sp
+                        lineHeight = 15.sp,
+                        textAlign = TextAlign.Start,
+                        style = TextStyle(
+                            textDirection = if (isDisplayRtl) {
+                                androidx.compose.ui.text.style.TextDirection.ContentOrRtl
+                            } else {
+                                androidx.compose.ui.text.style.TextDirection.ContentOrLtr
+                            }
+                        )
                     )
                 }
             }
@@ -2074,9 +2176,8 @@ fun CliLogMessageView(
     val isUser = log.sender == "USER"
     val isSystem = log.sender == "SYSTEM"
 
-    val textBright = if (isDark) NightOnBackground else DayOnBackground
-    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
-    val userMessageColor = if (isDark) UserMessageDark else UserMessageLight
+    val textBright = MaterialTheme.colorScheme.onSurface
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
 
     val isLogArabic = isArabic(log.text)
 
@@ -2086,7 +2187,11 @@ fun CliLogMessageView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 3.dp)
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                    .padding(horizontal = 12.dp)
+                    .padding(
+                        start = if (isLogArabic) 0.dp else 36.dp,
+                        end = if (isLogArabic) 36.dp else 0.dp
+                    )
             ) {
                 CompositionLocalProvider(
                     LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -2095,9 +2200,9 @@ fun CliLogMessageView(
                         text = log.text,
                         isDark = isDark,
                         isRtl = isLogArabic,
-                        color = userMessageColor,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp,
-                        lineHeight = if (isLogArabic) 24.sp else 18.sp,
+                        lineHeight = 19.5.sp,
                         textAlign = TextAlign.Start,
                         modifier = Modifier.fillMaxWidth(),
                         markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
@@ -2109,6 +2214,7 @@ fun CliLogMessageView(
                     color = textDim.copy(alpha = 0.35f),
                     fontSize = 8.5.sp,
                     fontFamily = FontFamily.Monospace,
+                    style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
                     modifier = Modifier
                         .align(Alignment.End)
                         .padding(top = 1.dp)
@@ -2121,28 +2227,41 @@ fun CliLogMessageView(
             val bulletColor = textDim
             val marker = if (isError) "✖ Error:" else "● System:"
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            CompositionLocalProvider(
+                LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
             ) {
-                Text(
-                    text = marker,
-                    color = bulletColor,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = log.text,
-                    color = if (isError) MaterialTheme.colorScheme.error else textDim,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 15.sp,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "\u2066$marker\u2069",
+                        color = bulletColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
+                    )
+                    Text(
+                        text = if (isLogArabic) applyBidiIsolation(log.text) else log.text,
+                        color = if (isError) MaterialTheme.colorScheme.error else textDim,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 16.5.sp,
+                        textAlign = TextAlign.Start,
+                        style = TextStyle(
+                            textDirection = if (isLogArabic) {
+                                androidx.compose.ui.text.style.TextDirection.ContentOrRtl
+                            } else {
+                                androidx.compose.ui.text.style.TextDirection.ContentOrLtr
+                            }
+                        ),
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
             }
         }
 
@@ -2275,9 +2394,9 @@ fun CliInlineImage(
         }
     }
 
-    val borderColor = if (isDark) NightOutlineVariant else NightOnBackground
-    val cardBg = if (isDark) NightBackground else DayBackground
-    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
+    val cardBg = MaterialTheme.colorScheme.surfaceContainerLow
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(
         modifier = Modifier
@@ -2344,7 +2463,7 @@ fun CliInlineImage(
         } else {
             Surface(
                 shape = RoundedCornerShape(8.dp),
-                color = if (isDark) NightSurfaceContainer else DaySurfaceContainer,
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -2416,7 +2535,7 @@ private fun CliFileArtifactCard(
                 Column(Modifier.weight(1f)) {
                     Text(
                         artifact.fileName,
-                        color = if (isDark) Color.White else DayOnBackground,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Medium,
                         fontSize = 13.sp,
                         maxLines = 1,
@@ -2424,7 +2543,7 @@ private fun CliFileArtifactCard(
                     )
                     Text(
                         "${artifact.format.uppercase()} · ${artifact.path}",
-                        color = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -2829,7 +2948,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                     ) {
                         Text(
                             text = if (copiedRecently) "[COPIED]" else "[COPY]",
-                            color = if (copiedRecently) MaterialTheme.colorScheme.primary else NightOnSurfaceVariant,
+                            color = if (copiedRecently) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
@@ -2849,7 +2968,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
 
                         Text(
                             text = if (isExpanded) "[HIDE]" else "[SHOW]",
-                            color = if (isExpanded) MaterialTheme.colorScheme.primary else DayOutlineVariant,
+                            color = if (isExpanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
@@ -2865,7 +2984,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                 if (isExpanded) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         Row(modifier = Modifier.fillMaxWidth()) {
                             Text(
@@ -2877,7 +2996,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             )
                             Text(
                                 text = block.command,
-                                color = Color(0xFFF1F5F9),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = 16.sp
@@ -2897,7 +3016,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
                                 text = if (rawOutput.isNotBlank()) rawOutput else "[No output returned]",
-                                color = NightOnSurfaceVariant,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
@@ -2909,7 +3028,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "[-] Hide",
-                                color = DayOnSurfaceVariant,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Medium,
@@ -2934,7 +3053,7 @@ fun CliTerminalFrame(block: StreamDemultiplexer.DemuxBlock.TerminalFrame, isDark
                             )
                             Text(
                                 text = cmdLines.firstOrNull() ?: block.command,
-                                color = Color(0xFFF1F5F9),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 maxLines = 1,
@@ -2962,7 +3081,7 @@ fun CliToolCallEvent(block: StreamDemultiplexer.DemuxBlock.ToolCall, isDark: Boo
     val paramStr = block.params.entries.joinToString(", ") { "${it.key}: \"${it.value}\"" }
     val isRunning = !block.isClosed
     val statusSuffix = if (isRunning) " -> Dispatched" else " -> Completed"
-    val toolAccent = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val toolAccent = MaterialTheme.colorScheme.onSurfaceVariant
     val completedColor = toolAccent
     val displayText = buildString {
         append("Tool(")
@@ -3009,8 +3128,8 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
     val text = remember(raw) { StreamDemultiplexer.sanitizeProse(raw).trim() }
     if (text.isBlank()) return
 
-    val textBright = if (isDark) NightOnBackground else DayOnBackground
-    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val textBright = MaterialTheme.colorScheme.onSurface
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
     val headingColor = textBright
 
     Column(
@@ -3088,25 +3207,28 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                                 .padding(vertical = 4.dp)
                         ) {
                             Text(
-                                text = "┌── EXECUTIVE DEPLOYMENT CONFIRMATION ────────────────────────",
+                                text = "\u2066┌── EXECUTIVE DEPLOYMENT CONFIRMATION ────────────────────────\u2069",
                                 color = headingColor,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = FontFamily.Monospace,
+                                style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
                             )
                             Text(
-                                text = "│ Status: Synced & Verified on Device Storage",
+                                text = "\u2066│ Status: Synced & Verified on Device Storage\u2069",
                                 color = textDim,
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
+                                style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
                                 modifier = Modifier.padding(vertical = 1.dp)
                             )
                             Text(
-                                text = "└────────────────────────────────────────────────────────────",
+                                text = "\u2066└────────────────────────────────────────────────────────────\u2069",
                                 color = headingColor,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = FontFamily.Monospace,
+                                style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
                             )
                         }
                     }
@@ -3117,7 +3239,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             isRtl = isLineArabic,
                             color = headingColor,
                             fontSize = 13.5.sp,
-                            lineHeight = if (isLineArabic) 24.sp else 19.sp,
+                            lineHeight = 20.25.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -3139,11 +3261,12 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             verticalAlignment = Alignment.Top
                         ) {
                             Text(
-                                text = bulletMarker,
+                                text = "\u2066$bulletMarker\u2069",
                                 color = headingColor,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,
+                                style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
                                 modifier = Modifier.padding(end = 4.dp)
                             )
                             CliMathFormattedText(
@@ -3152,7 +3275,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                                 isRtl = isLineArabic,
                                 color = textBright,
                                 fontSize = 12.5.sp,
-                                lineHeight = if (isLineArabic) 24.sp else 18.sp,
+                                lineHeight = 18.75.sp,
                                 textAlign = TextAlign.Start,
                                 modifier = Modifier.weight(1f),
                                 markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
@@ -3166,7 +3289,7 @@ fun CliFormattedBody(raw: String, isDark: Boolean) {
                             isRtl = isLineArabic,
                             color = textBright,
                             fontSize = 12.5.sp,
-                            lineHeight = if (isLineArabic) 24.sp else 18.sp,
+                            lineHeight = 18.75.sp,
                             textAlign = TextAlign.Start,
                             modifier = Modifier.fillMaxWidth(),
                             markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
@@ -3186,8 +3309,8 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
     val combinedRegex = Regex("$pathRegex|$inlineCodeRegex|$boldRegex")
 
     val pathColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
-    val pathBg = if (isDark) NightSurfaceContainer else DaySurfaceContainer
-    val codeBg = if (isDark) NightSurface else DaySurfaceContainer
+    val pathBg = if (isDark) NightSurfaceContainerHigh else DaySurfaceContainerHigh
+    val codeBg = if (isDark) NightSurfaceContainerLow else DaySurfaceContainerLow
     val codeColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
 
     val builder = AnnotatedString.Builder()
@@ -3234,7 +3357,7 @@ fun buildOrganizedMarkdownString(text: String, isDark: Boolean, isRtl: Boolean =
 fun buildPathHighlightedString(text: String, isDark: Boolean, isRtl: Boolean = false): AnnotatedString {
     val pathRegex = Regex("(/sdcard/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*|/(?:data|storage|system|etc|proc|sys)/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)")
     val pathColor = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
-    val pathBg = if (isDark) Color(0xFF1B2332) else NightOnBackground
+    val pathBg = if (isDark) NightSurfaceContainerHigh else DaySurfaceContainerHigh
     val builder = AnnotatedString.Builder()
     var lastIndex = 0
 
@@ -3344,7 +3467,7 @@ fun CliWelcomeScreen(
                 }
 
                 Surface(
-                    color = Color(0x33FF2A4D),
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(4.dp),
                     border = BorderStroke(0.5.dp, crimsonRed.copy(alpha = 0.5f))
                 ) {
@@ -3494,8 +3617,8 @@ private fun InitializationStateItem(
 ) {
     val electricCyan = MaterialTheme.colorScheme.primary
     val neonGreen = MaterialTheme.colorScheme.primary
-    val textBright = if (isDark) Color(0xFFF8FAFC) else DayOnBackground
-    val textDim = if (isDark) NightOnSurfaceVariant else DayOnSurfaceVariant
+    val textBright = MaterialTheme.colorScheme.onSurface
+    val textDim = MaterialTheme.colorScheme.onSurfaceVariant
 
     val titleColor = when {
         isCompleted -> neonGreen

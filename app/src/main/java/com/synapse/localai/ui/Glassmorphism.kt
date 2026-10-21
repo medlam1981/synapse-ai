@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -27,7 +28,7 @@ fun Modifier.tactileCardElevation(
     cornerRadius: Dp = 16.dp,
     elevation: Dp = if (isDark) 3.dp else 2.dp
 ): Modifier {
-    val shadowColor = if (isDark) Color(0x8C000000) else Color(0x140F172A)
+    val shadowColor = MaterialTheme.colorScheme.scrim.copy(alpha = if (isDark) 0.42f else 0.08f)
     return this.shadow(
         elevation = elevation,
         shape = RoundedCornerShape(cornerRadius),
