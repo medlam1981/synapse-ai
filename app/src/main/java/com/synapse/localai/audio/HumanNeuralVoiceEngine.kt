@@ -1,10 +1,12 @@
 package com.synapse.localai.audio
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import com.synapse.localai.VoiceAudioRoute
 import com.synapse.localai.AtlasLog as Log
 import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -30,6 +32,8 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
     private var tts: TextToSpeech? = null
     private val isReady = AtomicBoolean(false)
     private val pendingQueue = ConcurrentLinkedQueue<String>()
+    private var audioRoute: VoiceAudioRoute? = null
+    private var queuedUtterances = 0
     private var utteranceCounter = 0L
 
     init {
@@ -39,16 +43,10 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
     private fun initializeTts() {
         val ctx = context?.applicationContext ?: return
         try {
-            // First try Google's Neural TTS engine
             tts = TextToSpeech(ctx, this, GOOGLE_TTS_PACKAGE)
             Log.i(TAG, "Initializing TextToSpeech with Google TTS engine")
         } catch (e: Exception) {
-            Log.w(TAG, "Google TTS engine init failed, falling back to default: ${e.message}")
-            try {
-                tts = TextToSpeech(ctx, this)
-            } catch (e2: Exception) {
-                Log.e(TAG, "Failed to initialize default TextToSpeech: ${e2.message}", e2)
-            }
+            Log.e(TAG, "Google TTS engine initialization failed: ${e.message}", e)
         }
     }
 
@@ -58,6 +56,12 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
             isReady.set(true)
             Log.i(TAG, "TextToSpeech initialized successfully (Default engine: ${engine.defaultEngine})")
 
+            engine.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
             // Configure natural human conversational settings
             configureHumanTimbre(engine)
 
@@ -69,10 +73,16 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
 
                 override fun onDone(utteranceId: String?) {
                     Log.d(TAG, "✓ Completed utterance: $utteranceId")
+                    onUtteranceFinished()
                 }
 
                 override fun onError(utteranceId: String?) {
                     Log.w(TAG, "⚠ Utterance error: $utteranceId")
+                    onUtteranceFinished()
+                }
+
+                override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                    onUtteranceFinished()
                 }
             })
 
@@ -160,11 +170,12 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
     /**
      * Finds and applies the highest-fidelity male neural voice for the given locale.
      */
-    private fun selectBestVoice(engine: TextToSpeech, locale: Locale) {
+    private fun selectBestVoice(engine: TextToSpeech, locale: Locale): Boolean {
         try {
-            val availableVoices = engine.voices ?: return
-            val matchingVoices = availableVoices.filter { 
-                it.locale.language.equals(locale.language, ignoreCase = true) 
+            val availableVoices = engine.voices ?: return false
+            val matchingVoices = availableVoices.filter {
+                it.locale.language.equals(locale.language, ignoreCase = true) &&
+                    !it.isNetworkConnectionRequired
             }
 
             if (matchingVoices.isNotEmpty()) {
@@ -189,17 +200,14 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
                     engine.voice = bestVoice
                     engine.setPitch(currentPitch)
                     Log.i(TAG, "Selected male neural voice: ${bestVoice.name} (locale=${bestVoice.locale}, pitch=$currentPitch)")
-                    return
+                    return true
                 }
             }
-            engine.language = locale
-            engine.setPitch(currentPitch)
+            Log.w(TAG, "No installed offline TTS voice for locale ${locale.toLanguageTag()}")
+            return false
         } catch (e: Exception) {
             Log.w(TAG, "Voice selection notice: ${e.message}")
-            try {
-                engine.language = locale
-                engine.setPitch(currentPitch)
-            } catch (_: Exception) {}
+            return false
         }
     }
 
@@ -257,7 +265,7 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
      * Queues sentences seamlessly for cascade streaming.
      */
     fun speak(sentence: String) {
-        val text = sentence.trim()
+        val text = SpeechTextSanitizer.sanitize(sentence)
         if (text.isBlank()) return
 
         if (!isReady.get() || tts == null) {
@@ -268,6 +276,20 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
         val engine = tts ?: return
 
         try {
+            synchronized(this) {
+                if (queuedUtterances == 0) {
+                    val ctx = context?.applicationContext
+                    if (ctx != null) {
+                        audioRoute = VoiceAudioRoute(ctx).also { route ->
+                            if (!route.activate()) {
+                                route.close()
+                                audioRoute = null
+                            }
+                        }
+                    }
+                }
+                queuedUtterances++
+            }
             // Apply current speech rate and pitch
             try {
                 engine.setSpeechRate(currentSpeechRate)
@@ -277,9 +299,15 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
             // Detect or apply target language across all languages
             val targetLocale = detectTextLocale(text)
 
-            // Adjust voice/language if needed
-            if (engine.voice?.locale?.language != targetLocale.language) {
-                selectBestVoice(engine, targetLocale)
+            // Never fall back to a network-dependent voice in the local voice pipeline.
+            if (
+                engine.voice?.locale?.language != targetLocale.language ||
+                engine.voice?.isNetworkConnectionRequired != false
+            ) {
+                if (!selectBestVoice(engine, targetLocale)) {
+                    onUtteranceFinished()
+                    return
+                }
             }
 
             val utteranceId = "synapse_tts_${++utteranceCounter}"
@@ -292,9 +320,20 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
                 Log.d(TAG, "⚡ Queued human voice sentence: \"$text\" (locale=${targetLocale.language})")
             } else {
                 Log.w(TAG, "TextToSpeech.speak returned error code: $result")
+                onUtteranceFinished()
             }
         } catch (e: Exception) {
+            onUtteranceFinished()
             Log.e(TAG, "Error speaking sentence: ${e.message}", e)
+        }
+    }
+
+    @Synchronized
+    private fun onUtteranceFinished() {
+        queuedUtterances = (queuedUtterances - 1).coerceAtLeast(0)
+        if (queuedUtterances == 0) {
+            audioRoute?.close()
+            audioRoute = null
         }
     }
 
@@ -307,6 +346,12 @@ class HumanNeuralVoiceEngine(private val context: Context?) : TextToSpeech.OnIni
             tts?.stop()
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping TTS: ${e.message}")
+        } finally {
+            synchronized(this) {
+                queuedUtterances = 0
+                audioRoute?.close()
+                audioRoute = null
+            }
         }
     }
 

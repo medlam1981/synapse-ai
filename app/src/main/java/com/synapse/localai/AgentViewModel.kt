@@ -62,6 +62,7 @@ import com.synapse.localai.repository.ImageResult
 import com.synapse.localai.repository.ImageState
 import com.synapse.localai.repository.GeminiImageGenerator
 import com.synapse.localai.repository.LocalDiffusionGenerator
+import com.synapse.localai.audio.HumanNeuralVoiceEngine
 
 enum class ModelType { GGUF, GEMINI }
 
@@ -342,9 +343,28 @@ class AgentViewModel : ViewModel() {
     private val configLoadLock = Any()
     private var configLoadStarted = false
 
-    // دوال توافقية فارغة لضمان عدم حدوث أي خطأ في البناء
-    fun toggleTts() {}
-    fun testVoice(context: Context, sampleText: String? = null) {}
+    private var voiceReplyEngine: HumanNeuralVoiceEngine? = null
+
+    fun toggleTts() {
+        _uiState.update { it.copy(isTtsEnabled = !it.isTtsEnabled) }
+    }
+
+    fun testVoice(context: Context, sampleText: String? = null) {
+        val engine = voiceReplyEngine ?: HumanNeuralVoiceEngine(context.applicationContext).also {
+            voiceReplyEngine = it
+        }
+        engine.setLanguageMode("AUTO")
+        engine.speak(sampleText ?: "مرحباً، أنا أطلس. الصوت يعمل.")
+    }
+
+    private fun speakVoiceReply(context: Context?, text: String) {
+        if (context == null || text.isBlank()) return
+        val engine = voiceReplyEngine ?: HumanNeuralVoiceEngine(context.applicationContext).also {
+            voiceReplyEngine = it
+        }
+        engine.setLanguageMode("AUTO")
+        engine.speak(text)
+    }
     fun getAcousticModels(context: Context): List<File> = emptyList()
     fun getVocoderModels(context: Context): List<File> = emptyList()
     fun getSpeakerEmbeddings(context: Context): List<File> = emptyList()
@@ -493,7 +513,7 @@ class AgentViewModel : ViewModel() {
     private var schedulerJob: Job? = null
     private val scheduledTasks = Collections.synchronizedList(mutableListOf<ScheduledTask>())
     private val workflows = Collections.synchronizedMap(mutableMapOf<String, String>())
-    private data class PendingCommand(val command: String, val fileUri: Uri?)
+    private data class PendingCommand(val command: String, val fileUri: Uri?, val speakResponse: Boolean)
     private val pendingCommands = Collections.synchronizedList(mutableListOf<PendingCommand>())
     private val conversationHistory = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
     private var conversationContextSummary = ""
@@ -1638,7 +1658,12 @@ $languageEnforcement""".trimIndent()
         return compiled
     }
 
-    fun sendCommand(command: String, fileUri: Uri? = null, context: Context? = null) {
+    fun sendCommand(
+        command: String,
+        fileUri: Uri? = null,
+        context: Context? = null,
+        speakResponse: Boolean = false
+    ) {
         if (command.isBlank() && fileUri == null) return
         val actualContext = context ?: MainActivity.instance
         val trimmed = command.trim()
@@ -1682,7 +1707,7 @@ $languageEnforcement""".trimIndent()
         }
 
         if (_uiState.value.isProcessing) {
-            synchronized(pendingCommands) { pendingCommands.add(PendingCommand(command, fileUri)) }
+            synchronized(pendingCommands) { pendingCommands.add(PendingCommand(command, fileUri, speakResponse)) }
             addLog(LogEntry(sender = "SYSTEM", text = "Command queued (${pendingCommands.size} in queue)"))
             return
         }
@@ -2108,6 +2133,9 @@ $languageEnforcement""".trimIndent()
                                     conversationHistory.add("model" to cleanDisplay)
                                     trimConversationHistoryToContextLimit()
                                 }
+                                if (speakResponse) {
+                                    speakVoiceReply(actualContext, cleanDisplay)
+                                }
                             }
                             keepGoing = false
                         } else if (validToolCalls.isNotEmpty() && !forceFinalTurn) {
@@ -2489,7 +2517,12 @@ $langFinalInstruction"""
         if (nextCommand != null) {
             viewModelScope.launch(Dispatchers.IO) {
                 delay(500)
-                sendCommand(nextCommand.command, nextCommand.fileUri, context)
+                sendCommand(
+                    nextCommand.command,
+                    nextCommand.fileUri,
+                    context,
+                    nextCommand.speakResponse
+                )
             }
         }
     }
@@ -3776,6 +3809,8 @@ $evidence
 
     override fun onCleared() { 
         super.onCleared()
+        voiceReplyEngine?.release()
+        voiceReplyEngine = null
         taskEngine?.stop()
         closeAllModels() 
     }

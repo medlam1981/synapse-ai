@@ -1,10 +1,16 @@
 package com.synapse.localai
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.app.role.RoleManager
+import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -99,6 +105,31 @@ fun SettingsScreenContent(
 ) {
     val isDark = isSystemInDarkTheme()
     val coroutineScope = rememberCoroutineScope()
+    val assistantRoleLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val message = if (result.resultCode == android.app.Activity.RESULT_OK) {
+            "Synapse AI is now the selected voice assistant."
+        } else {
+            "Voice assistant selection was not changed."
+        }
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    }
+    val voicePermissionsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            requestSynapseAssistantRole(context, assistantRoleLauncher::launch)
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice invocation.", Toast.LENGTH_LONG).show()
+        }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            results[Manifest.permission.BLUETOOTH_CONNECT] != true
+        ) {
+            Toast.makeText(context, "Bluetooth permission is needed to use a paired headset microphone.", Toast.LENGTH_LONG).show()
+        }
+    }
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
     var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
     var acousticModels by remember { mutableStateOf<List<File>>(emptyList()) }
@@ -197,6 +228,49 @@ fun SettingsScreenContent(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             SettingsCard(
+                title = "HANDS-FREE VOICE ASSISTANT",
+                titleColor = primary
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Select Synapse AI as the system assistant to let Android route supported headset assistant presses to the voice session. Headset behavior depends on the device and firmware.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                    Button(
+                        onClick = {
+                            if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                val missingBluetoothPermission =
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                        context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                                if (missingBluetoothPermission) {
+                                    voicePermissionsLauncher.launch(
+                                        arrayOf(Manifest.permission.BLUETOOTH_CONNECT)
+                                    )
+                                } else {
+                                    requestSynapseAssistantRole(context, assistantRoleLauncher::launch)
+                                }
+                            } else {
+                                val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.BLUETOOTH_CONNECT)
+                                } else {
+                                    arrayOf(Manifest.permission.RECORD_AUDIO)
+                                }
+                                voicePermissionsLauncher.launch(permissions)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = primaryContainer,
+                            contentColor = onPrimaryContainer
+                        )
+                    ) {
+                        Text("Enable headset voice assistant", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            SettingsCard(
                 title = "OPT-IN SYSTEM EVENT WATCHERS",
                 titleColor = primary,
                 statusText = if (systemWatchersEnabled) "FOREGROUND ONLY" else "OFF"
@@ -233,6 +307,7 @@ fun SettingsScreenContent(
                                 SystemEventMonitor.stop()
                             }
                         }
+
                     )
                 }
             }
@@ -1805,6 +1880,24 @@ private fun UnifiedPersonaCard(
             }
         }
     }
+}
+
+private fun requestSynapseAssistantRole(
+    context: Context,
+    launchRoleRequest: (Intent) -> Unit
+) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val roleManager = context.getSystemService(RoleManager::class.java)
+        if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+            if (roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+                Toast.makeText(context, "Synapse AI is already the selected voice assistant.", Toast.LENGTH_SHORT).show()
+            } else {
+                launchRoleRequest(roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
+            }
+            return
+        }
+    }
+    context.startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
 }
 
 @Composable

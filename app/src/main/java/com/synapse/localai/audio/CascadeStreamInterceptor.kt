@@ -23,9 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class CascadeStreamInterceptor(
     context: Context? = null,
-    private val ttsEngine: OnnxTtsEngine = OnnxTtsEngine(context),
-    private val humanVoiceEngine: HumanNeuralVoiceEngine = HumanNeuralVoiceEngine(context),
-    private val audioPlayer: AudioStreamPlayer = AudioStreamPlayer(sampleRate = OnnxTtsEngine.SAMPLE_RATE)
+    private val humanVoiceEngine: HumanNeuralVoiceEngine = HumanNeuralVoiceEngine(context)
 ) {
 
     companion object {
@@ -42,8 +40,6 @@ class CascadeStreamInterceptor(
     private val inThinkingBlock = AtomicBoolean(false)
     private val isEnabled = AtomicBoolean(true)
     private val isRunning = AtomicBoolean(false)
-    @Volatile
-    private var engineType: String = "HUMAN_NEURAL"
 
     init {
         startWorker()
@@ -51,38 +47,14 @@ class CascadeStreamInterceptor(
 
     fun applyConfig(config: com.synapse.localai.AgentConfig) {
         setEnabled(config.ttsEnabled)
-        engineType = config.ttsEngineType
         humanVoiceEngine.setSpeechRate(config.ttsSpeechRate)
         humanVoiceEngine.setPitch(config.ttsPitch)
         humanVoiceEngine.setLanguageMode(config.ttsVoiceLanguage)
-        if (config.ttsEngineType == "EDGE_ONNX") {
-            ttsEngine.initialize()
-            ttsEngine.setCustomModels(
-                acousticPath = config.customAcousticModelPath,
-                vocoderPath = config.customVocoderModelPath,
-                speakerPath = config.customSpeakerEmbeddingPath
-            )
-            audioPlayer.updateSampleRate(ttsEngine.currentSampleRate)
-        } else {
-            // Relieve RAM: unload ONNX models when Human Neural Voice is active
-            ttsEngine.releaseSessionsIfLowMemory()
-        }
     }
 
     fun testVoice(sampleText: String? = null) {
         val text = sampleText ?: "مرحباً بك، أنا وكيلك الذكي بنظام Medlam AI. الصوت يعمل بنجاح وبدقة عالية."
-        when (engineType) {
-            "EDGE_ONNX" -> {
-                ttsEngine.synthesizeSentence(
-                    text,
-                    onPcmBytes = { pcm -> audioPlayer.writePcmBytes(pcm) },
-                    onPcmChunk = { shorts -> audioPlayer.writePcmChunk(shorts) }
-                )
-            }
-            else -> {
-                humanVoiceEngine.speak(text)
-            }
-        }
+        humanVoiceEngine.speak(text)
     }
 
     @Synchronized
@@ -91,31 +63,17 @@ class CascadeStreamInterceptor(
 
         workerJob = scope.launch {
             isRunning.set(true)
-            if (engineType == "EDGE_ONNX") {
-                ttsEngine.initialize()
-            }
-            Log.i(TAG, "Cascade stream worker active on Dispatchers.IO (Engine: $engineType)")
+            Log.i(TAG, "Cascade stream worker active on Dispatchers.IO (Google TTS)")
 
             try {
                 for (sentence in sentenceChannel) {
                     if (!isActive) break
-                    val cleanText = sanitizeForSpeech(sentence)
+                    val cleanText = SpeechTextSanitizer.sanitize(sentence)
                     if (cleanText.isBlank()) continue
 
-                    Log.d(TAG, "⚡ Synthesizing sentence ($engineType): \"$cleanText\"")
+                    Log.d(TAG, "⚡ Synthesizing sentence with Google TTS: \"$cleanText\"")
                     if (isActive && isEnabled.get()) {
-                        when (engineType) {
-                            "EDGE_ONNX" -> {
-                                ttsEngine.synthesizeSentence(
-                                    cleanText,
-                                    onPcmBytes = { pcm -> audioPlayer.writePcmBytes(pcm) },
-                                    onPcmChunk = { shorts -> audioPlayer.writePcmChunk(shorts) }
-                                )
-                            }
-                            else -> {
-                                humanVoiceEngine.speak(cleanText)
-                            }
-                        }
+                        humanVoiceEngine.speak(cleanText)
                     }
                 }
             } catch (e: Exception) {
@@ -218,21 +176,6 @@ class CascadeStreamInterceptor(
     /**
      * Sanitizes markdown, symbols, and formatting for clean natural vocalization.
      */
-    private fun sanitizeForSpeech(raw: String): String {
-        var text = raw
-        // Strip markdown bold/italics/code
-        text = text.replace(Regex("""[*_#`~]"""), "")
-        // Strip URLs
-        text = text.replace(Regex("""https?://\S+"""), "")
-        // Strip terminal / tool tags
-        text = text.replace(Regex("""<[^>]+>"""), "")
-        // Strip emojis
-        text = text.replace(Regex("""[\uD83C-\uDBFF\uDC00-\uDFFF]+"""), "")
-        // Normalize whitespace
-        text = text.replace(Regex("""\s+"""), " ")
-        return text.trim()
-    }
-
     /**
      * Cancels active playback and flushes all audio buffers (e.g. user interruption).
      */
@@ -243,7 +186,6 @@ class CascadeStreamInterceptor(
         // Drain pending channel items
         while (sentenceChannel.tryReceive().isSuccess) {}
         humanVoiceEngine.stop()
-        audioPlayer.pauseAndFlush()
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -259,7 +201,5 @@ class CascadeStreamInterceptor(
         stopAndFlush()
         workerJob?.cancel()
         humanVoiceEngine.release()
-        ttsEngine.close()
-        audioPlayer.release()
     }
 }

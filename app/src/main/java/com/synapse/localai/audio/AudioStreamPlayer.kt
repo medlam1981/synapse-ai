@@ -72,7 +72,7 @@ class AudioStreamPlayer(
             val bufferSize = maxOf(minBufferSize * 3, 16384)
 
             val attributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
 

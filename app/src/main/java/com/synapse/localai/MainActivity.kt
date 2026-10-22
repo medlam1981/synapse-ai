@@ -12,6 +12,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.app.KeyguardManager
 import android.speech.RecognizerIntent
 import android.view.WindowManager
 import android.widget.Toast
@@ -294,6 +295,7 @@ fun getSystemStats(context: Context): SystemStats {
 
 class MainActivity : ComponentActivity() {
     private val viewModel: AgentViewModel by viewModels()
+    private var assistantMicRequest by mutableIntStateOf(0)
 
     companion object {
         var instance: MainActivity? = null
@@ -303,6 +305,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         instance = this
+        handleVoiceAssistantIntent(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -364,10 +367,49 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = bgColor
                 ) {
-                    CliWorkspaceScreen(viewModel)
+                    CliWorkspaceScreen(viewModel, assistantMicRequest)
                 }
             }
         }
+        handleVoiceAssistantIntent(intent)
+    }
+
+    private fun handleVoiceAssistantIntent(incoming: Intent?) {
+        when (incoming?.action) {
+            VoiceAssistantContract.ACTION_REQUEST_MIC_PERMISSION,
+            VoiceAssistantContract.ACTION_VOICE_COMMAND,
+            VoiceAssistantContract.ACTION_ASSIST -> startVoiceCaptureFromActivity()
+            VoiceAssistantContract.ACTION_SUBMIT_COMMAND -> {
+                val command = incoming.getStringExtra(VoiceAssistantContract.EXTRA_COMMAND)?.trim().orEmpty()
+                if (command.isNotBlank()) {
+                    val keyguard = getSystemService(KeyguardManager::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && keyguard?.isDeviceLocked == true) {
+                        keyguard.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                            override fun onDismissSucceeded() {
+                                viewModel.sendCommand(command, context = this@MainActivity, speakResponse = true)
+                            }
+
+                            override fun onDismissCancelled() {
+                                Toast.makeText(this@MainActivity, "Unlock the device to run this voice command.", Toast.LENGTH_SHORT).show()
+                            }
+
+                            override fun onDismissError() {
+                                Toast.makeText(this@MainActivity, "Could not unlock the device; voice command was not run.", Toast.LENGTH_LONG).show()
+                            }
+                        })
+                    } else {
+                        viewModel.sendCommand(command, context = this, speakResponse = true)
+                    }
+                }
+            }
+            else -> return
+        }
+        incoming.action = null
+        incoming.removeExtra(VoiceAssistantContract.EXTRA_COMMAND)
+    }
+
+    private fun startVoiceCaptureFromActivity() {
+        assistantMicRequest++
     }
 
     override fun onResume() {
@@ -436,7 +478,7 @@ private data class SlashCommandItem(
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-fun CliWorkspaceScreen(viewModel: AgentViewModel) {
+fun CliWorkspaceScreen(viewModel: AgentViewModel, assistantMicRequest: Int = 0) {
     val isDark = isSystemInDarkTheme()
     val uiState by viewModel.uiState.collectAsState()
     val systemStats by viewModel.systemStats.collectAsState()
@@ -537,6 +579,26 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                 selectedPreviewArtifact = null
             }
         }
+    }
+
+    val startVoiceInput = {
+        isRecording = true
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...")
+        }
+        try {
+            speechLauncher.launch(intent)
+        } catch (e: Exception) {
+            isRecording = false
+            Log.e("MainActivity", "Could not open the system speech input", e)
+            Toast.makeText(context, "Could not start voice input.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(assistantMicRequest) {
+        if (assistantMicRequest > 0) startVoiceInput()
     }
 
     LaunchedEffect(Unit) {
@@ -725,8 +787,30 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
+                        if (isBusy) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .clickable(
+                                        role = Role.Button,
+                                        onClickLabel = "Stop current task",
+                                        onClick = { viewModel.stopAgent() }
+                                    )
+                                    .semantics { contentDescription = "Stop current task" },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(11.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(MaterialTheme.colorScheme.error)
+                                )
+                            }
+                        }
                     }
 
                     if (textInput.startsWith("/")) {
@@ -798,8 +882,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                     }
 
                     val inputIsArabic = isArabic(textInput)
-                    val isInputReady = !uiState.isProcessing
-                    val canSend = isInputReady && (textInput.isNotBlank() || selectedFileUri != null)
+                    val canSend = textInput.isNotBlank() || selectedFileUri != null
 
                     selectedPreviewArtifact?.let { artifact ->
                         UniversalFilePreviewCard(artifact)
@@ -840,7 +923,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                     BasicTextField(
                                         value = textInput,
                                         onValueChange = { textInput = it },
-                                        enabled = isInputReady,
+                                        enabled = true,
                                         textStyle = TextStyle(
                                             color = MaterialTheme.colorScheme.headerModel,
                                             fontSize = 13.5.sp,
@@ -912,15 +995,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                         modifier = Modifier
                                             .size(30.dp)
                                             .clip(CircleShape)
-                                            .clickable {
-                                                isRecording = true
-                                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-MA")
-                                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...")
-                                                }
-                                                try { speechLauncher.launch(intent) } catch (_: Exception) { isRecording = false }
-                                            },
+                                            .clickable { startVoiceInput() },
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
@@ -938,9 +1013,7 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                             .size(30.dp)
                                             .clip(CircleShape)
                                             .clickable(enabled = uiState.isProcessing || canSend) {
-                                                if (uiState.isProcessing) {
-                                                    viewModel.stopAgent()
-                                                } else if (canSend) {
+                                                if (canSend) {
                                                     val cmd = textInput
                                                     textInput = ""
                                                     focusManager.clearFocus()
@@ -951,21 +1024,12 @@ fun CliWorkspaceScreen(viewModel: AgentViewModel) {
                                             },
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (uiState.isProcessing) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(11.dp)
-                                                    .clip(RoundedCornerShape(2.dp))
-                                                    .background(MaterialTheme.colorScheme.error)
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Default.ArrowUpward,
-                                                contentDescription = "Send",
-                                                tint = if (canSend) cyanAccent else textDim.copy(alpha = 0.35f),
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowUpward,
+                                            contentDescription = "Send",
+                                            tint = if (canSend) cyanAccent else textDim.copy(alpha = 0.35f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
                                 }
                             }
@@ -2186,7 +2250,7 @@ fun CliLogMessageView(
             CompositionLocalProvider(
                 LocalLayoutDirection provides if (isLogArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 3.dp)
@@ -2194,22 +2258,21 @@ fun CliLogMessageView(
                         .padding(
                             start = if (isLogArabic) 0.dp else 36.dp,
                             end = if (isLogArabic) 36.dp else 0.dp
-                        ),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.Top
+                        )
                 ) {
-                    Text(
-                        text = if (isLogArabic) "\u2066>>\u2069" else "\u2066<<\u2069",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        horizontalAlignment = if (isLogArabic) Alignment.End else Alignment.Start
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.Top
                     ) {
+                        Text(
+                            text = if (isLogArabic) "\u2066>>\u2069" else "\u2066<<\u2069",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
+                        )
                         CliMathFormattedText(
                             text = log.text,
                             isDark = isDark,
@@ -2218,21 +2281,21 @@ fun CliLogMessageView(
                             fontSize = 13.sp,
                             lineHeight = 19.5.sp,
                             textAlign = TextAlign.Start,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.weight(1f),
                             markdownStyler = { txt, dark, rtl -> buildOrganizedMarkdownString(txt, dark, rtl) }
                         )
-
-                        Text(
-                            text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
-                            color = textDim.copy(alpha = 0.35f),
-                            fontSize = 8.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
-                            modifier = Modifier
-                                .align(Alignment.End)
-                                .padding(top = 1.dp)
-                        )
                     }
+
+                    Text(
+                        text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.timestamp)),
+                        color = textDim.copy(alpha = 0.35f),
+                        fontSize = 8.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        style = TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .padding(top = 1.dp)
+                    )
                 }
             }
         }
