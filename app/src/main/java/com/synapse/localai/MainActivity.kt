@@ -1111,11 +1111,12 @@ private fun DashboardMetric(
     percentage: Int?,
     value: String,
     contentDescription: String,
-    isDark: Boolean,
-    modifier: Modifier = Modifier,
+    compact: Boolean,
     temperatureCelsius: Int? = null,
     onClick: (() -> Unit)? = null
 ) {
+    val metricFontSize = if (compact) 9.sp else 10.sp
+    val metricLineHeight = if (compact) 10.sp else 11.sp
     val metricValue = percentage?.coerceIn(0, 100)
     val normalColor = when (label) {
         "MEM", "SWP" -> MaterialTheme.colorScheme.headerSecondary
@@ -1141,7 +1142,7 @@ private fun DashboardMetric(
         animationSpec = tween(220),
         label = "telemetryMetricColor"
     )
-    val rowModifier = modifier
+    val rowModifier = Modifier
         .then(
             if (onClick != null) {
                 Modifier.clickable(
@@ -1154,59 +1155,42 @@ private fun DashboardMetric(
             }
         )
 
-    Surface(
+    Row(
         modifier = rowModifier,
-        color = MaterialTheme.colorScheme.headerChipBackground,
-        shape = RoundedCornerShape(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 26.dp)
-                .border(
-                    width = 0.7.dp,
-                    color = MaterialTheme.colorScheme.headerChipBorder.copy(alpha = if (isDark) 0.25f else 1f),
-                    shape = RoundedCornerShape(6.dp)
-                )
-                .padding(horizontal = 3.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 11.sp,
-                lineHeight = 12.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                letterSpacing = 0.sp,
-                maxLines = 1,
-                textAlign = TextAlign.Start,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = value,
-                color = metricColor,
-                fontSize = 11.sp,
-                lineHeight = 12.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                letterSpacing = 0.sp,
-                maxLines = 1,
-                softWrap = false,
-                textAlign = TextAlign.Start,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 52.dp)
-            )
-        }
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = metricFontSize,
+            lineHeight = metricLineHeight,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 0.sp,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip
+        )
+        Text(
+            text = value,
+            color = metricColor,
+            fontSize = metricFontSize,
+            lineHeight = metricLineHeight,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 0.sp,
+            maxLines = 1,
+            softWrap = false,
+            textAlign = TextAlign.Start,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
 @Composable
 private fun DashboardGaugeRow(
     stats: SystemStats,
-    isDark: Boolean,
     totalTasks: Int,
     modifier: Modifier = Modifier,
     taskStripExpanded: Boolean = false,
@@ -1232,35 +1216,57 @@ private fun DashboardGaugeRow(
             contentDescription = "Swap: ${stats.swapUsage}"
         ),
         DashboardMetricData(
-                "KEY",
-                null,
-                "${stats.currentKeyIndex}/${stats.totalKeys}",
-                contentDescription = "Gemini API key ${stats.currentKeyIndex} of ${stats.totalKeys}"
+            "KEY",
+            null,
+            "${stats.currentKeyIndex}/${stats.totalKeys}",
+            contentDescription = "Gemini API key ${stats.currentKeyIndex} of ${stats.totalKeys}"
         )
     )
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Row(
-            modifier = modifier
-                .fillMaxWidth()
-                .heightIn(max = 26.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            metrics.forEach { metric ->
-                DashboardMetric(
-                    label = metric.label,
-                    percentage = metric.percentage,
-                    value = metric.value,
-                    temperatureCelsius = metric.temperatureCelsius,
-                    contentDescription = if (metric.label == "TASK") {
-                        if (taskStripExpanded) "Hide active task details" else "Show active task details"
-                    } else {
-                        metric.contentDescription
-                    },
-                    isDark = isDark,
-                    modifier = Modifier.weight(if (metric.label == "KEY") 1.12f else 1f),
-                    onClick = if (metric.label == "TASK") onTaskGaugeClick else null
-                )
+        BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+            val compact = maxWidth < 360.dp
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(50),
+                tonalElevation = 1.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    metrics.forEachIndexed { index, metric ->
+                        if (index > 0) {
+                            Text(
+                                text = "|",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                                fontSize = if (compact) 9.sp else 10.sp,
+                                lineHeight = if (compact) 10.sp else 11.sp,
+                                fontWeight = FontWeight.Normal,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.sp,
+                                maxLines = 1
+                            )
+                        }
+                        DashboardMetric(
+                            label = metric.label,
+                            percentage = metric.percentage,
+                            value = metric.value,
+                            temperatureCelsius = metric.temperatureCelsius,
+                            contentDescription = if (metric.label == "TASK") {
+                                if (taskStripExpanded) "Hide active task details" else "Show active task details"
+                            } else {
+                                metric.contentDescription
+                            },
+                            compact = compact,
+                            onClick = if (metric.label == "TASK") onTaskGaugeClick else null
+                        )
+                    }
+                }
             }
         }
     }
@@ -1592,7 +1598,6 @@ fun ConsolidatedMasterHeader(
 
             DashboardGaugeRow(
                 stats = stats,
-                isDark = isDark,
                 totalTasks = totalTasks,
                 modifier = Modifier.fillMaxWidth(),
                 taskStripExpanded = taskStripExpanded,
