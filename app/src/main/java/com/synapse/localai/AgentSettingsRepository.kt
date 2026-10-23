@@ -76,6 +76,8 @@ object AgentSettingsRepository {
             putInt("sd_threads", config.sdThreads)
             putString("sd_engine_mode", config.sdEngineMode)
             putString("sd_compute_device", config.sdComputeDevice)
+            putString("sd_model_path", config.sdModelPath)
+            putBoolean("sd_use_local_model_for_images", config.sdUseLocalModelForImages)
         }.commit()
 
         try {

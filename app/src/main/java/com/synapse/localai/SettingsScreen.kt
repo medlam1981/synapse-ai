@@ -77,6 +77,25 @@ private fun formatSize(bytes: Long): String {
     return if (mb >= 1024) String.format("%.1f GB", mb / 1024.0) else String.format("%.0f MB", mb)
 }
 
+private fun imageDiffusionModels(files: List<File>, selectedPath: String): List<File> {
+    val selectedFile = File(selectedPath).takeIf { selectedPath.isNotBlank() && it.isFile }
+    val candidates = files + listOfNotNull(selectedFile)
+    return candidates.distinctBy { it.absolutePath }.mapNotNull { file ->
+        GgufHeaderParser.parse(file)
+            ?.takeIf { it.capability == ModelCapability.IMAGE_DIFFUSION }
+            ?.file
+    }.distinctBy { it.absolutePath }
+}
+
+private data class SettingsModelSnapshot(
+    val baseModels: List<File>,
+    val mtpModels: List<File>,
+    val imageModels: List<File>,
+    val acousticModels: List<File>,
+    val vocoderModels: List<File>,
+    val speakerModels: List<File>
+)
+
 @Composable
 fun SettingsScreen(
     viewModel: AgentViewModel,
@@ -131,6 +150,7 @@ fun SettingsScreenContent(
         }
     }
     var models by remember { mutableStateOf<List<File>>(emptyList()) }
+    var imageModels by remember { mutableStateOf<List<File>>(emptyList()) }
     var mtpModels by remember { mutableStateOf<List<File>>(emptyList()) }
     var acousticModels by remember { mutableStateOf<List<File>>(emptyList()) }
     var vocoderModels by remember { mutableStateOf<List<File>>(emptyList()) }
@@ -164,6 +184,22 @@ fun SettingsScreenContent(
     }
 
     LaunchedEffect(Unit) {
+        isScanning = true
+        val discovered = withContext(Dispatchers.IO) {
+            val baseModels = ModelScanner.getBaseModels(context, forceRescan = false)
+            val mtp = ModelScanner.getMtpModels(context, forceRescan = false)
+            val selectedImage = imageDiffusionModels(baseModels, config.sdModelPath)
+            val acoustic = ModelScanner.getAcousticModels(context, forceRescan = false)
+            val vocoder = ModelScanner.getVocoderModels(context, forceRescan = false)
+            val speakers = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
+            SettingsModelSnapshot(baseModels, mtp, selectedImage, acoustic, vocoder, speakers)
+        }
+        models = discovered.baseModels
+        mtpModels = discovered.mtpModels
+        imageModels = discovered.imageModels
+        acousticModels = discovered.acousticModels
+        vocoderModels = discovered.vocoderModels
+        speakerModels = discovered.speakerModels
         isScanning = false
     }
 
@@ -1218,16 +1254,29 @@ fun SettingsScreenContent(
                         onClick = {
                             isScanning = true
                             coroutineScope.launch {
-                                val (freshBase, freshMtp) = withContext(Dispatchers.IO) {
-                                    viewModel.rescanModels(context)
+                                val discovered = withContext(Dispatchers.IO) {
+                                    val (freshBase, freshMtp) = viewModel.rescanModels(context)
+                                    SettingsModelSnapshot(
+                                        baseModels = freshBase,
+                                        mtpModels = freshMtp,
+                                        imageModels = imageDiffusionModels(freshBase, config.sdModelPath),
+                                        acousticModels = ModelScanner.getAcousticModels(context, forceRescan = false),
+                                        vocoderModels = ModelScanner.getVocoderModels(context, forceRescan = false),
+                                        speakerModels = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
+                                    )
                                 }
-                                models = freshBase
-                                mtpModels = freshMtp
-                                acousticModels = ModelScanner.getAcousticModels(context, forceRescan = false)
-                                vocoderModels = ModelScanner.getVocoderModels(context, forceRescan = false)
-                                speakerModels = ModelScanner.getSpeakerEmbeddings(context, forceRescan = false)
+                                models = discovered.baseModels
+                                mtpModels = discovered.mtpModels
+                                imageModels = discovered.imageModels
+                                acousticModels = discovered.acousticModels
+                                vocoderModels = discovered.vocoderModels
+                                speakerModels = discovered.speakerModels
                                 isScanning = false
-                                Toast.makeText(context, "Discovered ${freshBase.size} base, ${freshMtp.size} MTP", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    "Discovered ${discovered.baseModels.size} base, ${discovered.mtpModels.size} MTP",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -1735,6 +1784,137 @@ fun SettingsScreenContent(
                 context = context
             )
         } // End of Local GGUF else block
+
+            SettingsCard(
+                title = "LOCAL IMAGE MODEL",
+                titleColor = primary,
+                statusDot = if (config.sdModelPath.isNotBlank() && File(config.sdModelPath).isFile) {
+                    primary
+                } else {
+                    MaterialTheme.colorScheme.statusWarning
+                },
+                statusText = if (config.sdModelPath.isBlank()) "AUTO SELECT" else File(config.sdModelPath).name
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "Choose a dedicated Stable Diffusion GGUF model. It is loaded only for image generation and released afterward.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(surfaceContainer)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Use local model for image requests",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Also routes image requests locally while Gemini Cloud is active.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp
+                            )
+                        }
+                        Switch(
+                            checked = config.sdUseLocalModelForImages,
+                            onCheckedChange = { enabled ->
+                                viewModel.saveConfig(
+                                    context,
+                                    config.copy(sdUseLocalModelForImages = enabled)
+                                )
+                            }
+                        )
+                    }
+
+                    val selectedImageModel = imageModels.firstOrNull {
+                        it.absolutePath == config.sdModelPath
+                    }
+                    if (selectedImageModel != null) {
+                        Text(
+                            "Selected: ${selectedImageModel.name} • ${formatSize(selectedImageModel.length())}",
+                            color = primary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    } else if (config.sdModelPath.isNotBlank()) {
+                        Text(
+                            "The saved model path is unavailable. Select a discovered model or re-scan storage.",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 10.sp
+                        )
+                    }
+
+                    if (isScanning) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = primary)
+                    } else if (imageModels.isEmpty()) {
+                        Text(
+                            "No Stable Diffusion GGUF models found. Add one to your models or Download folder, then re-scan.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    } else {
+                        imageModels.forEach { file ->
+                            val selected = file.absolutePath == config.sdModelPath
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) primaryContainer else surfaceContainer)
+                                    .clickable {
+                                        viewModel.saveConfig(context, config.copy(sdModelPath = file.absolutePath))
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = selected,
+                                    onClick = {
+                                        viewModel.saveConfig(context, config.copy(sdModelPath = file.absolutePath))
+                                    },
+                                    colors = RadioButtonDefaults.colors(selectedColor = primary)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        file.name,
+                                        color = if (selected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        formatSize(file.length()) + " • " + file.parent,
+                                        color = if (selected) onPrimaryContainer.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 9.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (config.sdModelPath.isNotBlank()) {
+                        TextButton(
+                            onClick = { viewModel.saveConfig(context, config.copy(sdModelPath = "")) }
+                        ) {
+                            Text("Use automatic model selection", fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(40.dp))
         }

@@ -242,14 +242,32 @@ object DynamicMediaBroker {
         val userHeight = ((requestedHeight * scale).toInt() / 64 * 64).coerceAtLeast(256)
 
         // Step 1: Resilient Dynamic Discovery
-        var modelDesc = GgufCapabilityRegistry.getBestImageModel(context)
-        if (modelDesc == null) {
+        val configuredModelPath = prefs.getString("sd_model_path", "").orEmpty()
+        val configuredModel = configuredModelPath
+            .takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?.takeIf { it.isFile && it.extension.equals("gguf", ignoreCase = true) }
+        if (configuredModelPath.isNotBlank() && configuredModel == null) {
+            return@withContext MediaResult.Error(
+                "The selected image model is unavailable or is not a GGUF file: $configuredModelPath"
+            )
+        }
+        val configuredDescriptor = configuredModel?.let { GgufHeaderParser.parse(it) }
+        if (configuredModel != null &&
+            (configuredDescriptor == null || configuredDescriptor.capability != ModelCapability.IMAGE_DIFFUSION)
+        ) {
+            return@withContext MediaResult.Error(
+                "The selected image model is not a valid Stable Diffusion GGUF model: ${configuredModel.name}"
+            )
+        }
+        var modelDesc = configuredDescriptor ?: GgufCapabilityRegistry.getBestImageModel(context)
+        if (modelDesc == null && configuredModel == null) {
             Log.i(TAG, "No image model registered in cache. Triggering live on-demand storage scan...")
             GgufCapabilityRegistry.scanStorage(context, forceRefresh = true)
             modelDesc = GgufCapabilityRegistry.getBestImageModel(context)
         }
 
-        val modelFile: File? = modelDesc?.file ?: findAnyDiffusionModel(context)
+        val modelFile: File? = configuredModel ?: modelDesc?.file ?: findAnyDiffusionModel(context)
         val isAllInOne: Boolean = modelDesc?.isAllInOne ?: true
 
         // Step 2: Graceful Conversational Fallback if missing

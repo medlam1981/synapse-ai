@@ -167,7 +167,9 @@ data class AgentConfig(
     val sdLowMemoryMode: Boolean = true,
     val sdThreads: Int = 4,
     val sdEngineMode: String = "SD_TURBO",
-    val sdComputeDevice: String = "AUTO"
+    val sdComputeDevice: String = "AUTO",
+    val sdModelPath: String = "",
+    val sdUseLocalModelForImages: Boolean = false
 )
 
 enum class EngineState { IDLE, RUNNING }
@@ -467,7 +469,7 @@ class AgentViewModel : ViewModel() {
         val targetContext = appContext ?: MainActivity.instance
 
         if (!imageRepository.localDiffusionEngine.hasModelWeights()) {
-            return@withContext imageRepository.generateImage(prompt)
+            return@withContext imageRepository.localDiffusionEngine.generateImage(prompt)
         }
 
         if (hadLocalModel) {
@@ -1195,6 +1197,8 @@ class AgentViewModel : ViewModel() {
                     sdThreads = prefs.getInt("sd_threads", 4),
                     sdEngineMode = prefs.getString("sd_engine_mode", "SD_TURBO") ?: "SD_TURBO",
                     sdComputeDevice = prefs.getString("sd_compute_device", "AUTO") ?: "AUTO",
+                    sdModelPath = prefs.getString("sd_model_path", "") ?: "",
+                    sdUseLocalModelForImages = prefs.getBoolean("sd_use_local_model_for_images", false),
                     ttsEnabled = false
                 )
 
@@ -1821,7 +1825,13 @@ $languageEnforcement""".trimIndent()
                             _uiState.update { it.copy(logs = it.logs + initialLiveLog, currentPhase = AgentActionPhase.EXECUTING_TOOL) }
                             
                             val isCloud = modelType == ModelType.GEMINI && _uiState.value.config.geminiApiKeys.isNotBlank()
-                            val result = if (isCloud) imageRepository.generateImage(rawImagePrompt) else executeSequentialImageSynthesis(rawImagePrompt)
+                            val useLocalImageModel =
+                                !isCloud || _uiState.value.config.sdUseLocalModelForImages
+                            val result = if (useLocalImageModel) {
+                                executeSequentialImageSynthesis(rawImagePrompt)
+                            } else {
+                                imageRepository.generateImage(rawImagePrompt)
+                            }
                             
                             when (result) {
                                 is ImageResult.Success -> {

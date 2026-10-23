@@ -42,6 +42,11 @@ class LocalDiffusionGenerator(
     private var ortSession: OrtSession? = null
 
     fun hasModelWeights(): Boolean {
+        val configuredPath = context
+            ?.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+            ?.getString("sd_model_path", "")
+            .orEmpty()
+        if (configuredPath.isNotBlank() && File(configuredPath).isFile) return true
         val ggufModel = GgufCapabilityRegistry.getBestImageModel(context)
         if (ggufModel != null) return true
         return findDynamicDiffusionWeights() != null
@@ -74,8 +79,14 @@ class LocalDiffusionGenerator(
     fun loadDiffusionModel(): Boolean {
         Log.i(TAG, "Scanning for authentic local media models via capability registry...")
 
-        val ggufModel = GgufCapabilityRegistry.getBestImageModel(context)
-        val locatedModel = ggufModel?.file?.absolutePath ?: findDynamicDiffusionWeights()?.absolutePath
+        val configuredPath = context
+            ?.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+            ?.getString("sd_model_path", "")
+            .orEmpty()
+        val configuredModel = File(configuredPath).takeIf { configuredPath.isNotBlank() && it.isFile }
+        val locatedModel = configuredModel?.absolutePath
+            ?: GgufCapabilityRegistry.getBestImageModel(context)?.file?.absolutePath
+            ?: findDynamicDiffusionWeights()?.absolutePath
         activeModelPath = locatedModel
 
         if (locatedModel == null) {
