@@ -212,9 +212,8 @@ fun getSystemStats(context: Context): SystemStats {
     val swapUsage = if (swapTotalKb > 0L) {
         String.format(
             Locale.US,
-            "%.1f / %.1f GB",
-            swapUsedKb / 1024.0 / 1024.0,
-            swapTotalKb / 1024.0 / 1024.0
+            "%.1fGB",
+            swapUsedKb / 1024.0 / 1024.0
         )
     } else {
         "Unavailable"
@@ -234,8 +233,12 @@ fun getSystemStats(context: Context): SystemStats {
 
     val prefs = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
     val geminiKeys = prefs.getString("gemini_api_keys", "") ?: ""
-    val totalKeys = if (geminiKeys.isBlank()) 0 else geminiKeys.split(",").filter { it.trim().isNotEmpty() }.size
-    val currentKeyIndex = if (totalKeys > 0) (prefs.getInt("current_key_index", 0) + 1) else 0
+    val totalKeys = geminiKeys.split(",").map { it.trim() }.count { it.isNotEmpty() }
+    val currentKeyIndex = if (totalKeys > 0) {
+        prefs.getInt("current_key_index", 0).coerceIn(0, totalKeys - 1) + 1
+    } else {
+        0
+    }
 
     val maxTemp = DeviceProfile.readDeviceTemperature()
 
@@ -1115,21 +1118,20 @@ private fun DashboardMetric(
 ) {
     val metricValue = percentage?.coerceIn(0, 100)
     val normalColor = when (label) {
-        "MEM", "SWAP" -> MaterialTheme.colorScheme.headerSecondary
-        "CPU", "NET" -> MaterialTheme.colorScheme.headerActive
+        "MEM", "SWP" -> MaterialTheme.colorScheme.headerSecondary
+        "CPU", "KEY" -> MaterialTheme.colorScheme.headerActive
         else -> MaterialTheme.colorScheme.primary
     }
     val warningColor = MaterialTheme.colorScheme.statusWarning
     val criticalColor = MaterialTheme.colorScheme.error
     val targetMetricColor = when {
-        label == "TEMP" && temperatureCelsius != null -> when {
+        label == "TMP" && temperatureCelsius != null -> when {
             temperatureCelsius < 50 -> MaterialTheme.colorScheme.statusSuccess
             temperatureCelsius < 70 -> warningColor
             else -> criticalColor
         }
         label == "MEM" && metricValue != null ->
             if (metricValue < 15) criticalColor else normalColor
-        label == "NET" -> if (value == "ON") MaterialTheme.colorScheme.headerActive else criticalColor
         metricValue != null && metricValue > 85 -> criticalColor
         metricValue != null && metricValue > 70 -> warningColor
         else -> normalColor
@@ -1166,32 +1168,36 @@ private fun DashboardMetric(
                     color = MaterialTheme.colorScheme.headerChipBorder.copy(alpha = if (isDark) 0.25f else 1f),
                     shape = RoundedCornerShape(6.dp)
                 )
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                .padding(horizontal = 3.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = label,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 9.sp,
-                lineHeight = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                lineHeight = 12.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
+                letterSpacing = 0.sp,
                 maxLines = 1,
                 textAlign = TextAlign.Start,
-                overflow = TextOverflow.Clip
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = value,
                 color = metricColor,
-                fontSize = 10.sp,
-                lineHeight = 11.sp,
+                fontSize = 11.sp,
+                lineHeight = 12.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
+                letterSpacing = 0.sp,
                 maxLines = 1,
-                textAlign = TextAlign.End,
-                overflow = TextOverflow.Clip,
-                modifier = Modifier.weight(1f)
+                softWrap = false,
+                textAlign = TextAlign.Start,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 52.dp)
             )
         }
     }
@@ -1207,17 +1213,30 @@ private fun DashboardGaugeRow(
     onTaskGaugeClick: () -> Unit = {}
 ) {
     val metrics = listOf(
-        DashboardMetricData("CPU", stats.cpuUsagePercent, stats.cpuUsagePercent?.let { "$it%" } ?: "--"),
+        DashboardMetricData("TASK", (totalTasks.coerceIn(0, 10) * 10), totalTasks.toString()),
+        DashboardMetricData("CPU", stats.cpuUsagePercent, stats.cpuUsage),
         DashboardMetricData("MEM", stats.ramUsedPercent?.let { 100 - it }, stats.ramFree.replace("GB", "G")),
         DashboardMetricData(
-            "TEMP",
+            "TMP",
             stats.cpuTempInt.takeIf { it > 0 }?.let(::temperatureLoadPercent),
-            if (stats.cpuTemp == "--") "--" else stats.cpuTemp.removeSuffix("°C") + "°",
+            stats.cpuTemp,
             temperatureCelsius = stats.cpuTempInt.takeIf { it > 0 }
         ),
-        DashboardMetricData("SWAP", stats.swapUsedPercent, stats.swapUsedPercent?.let { "$it%" } ?: "--"),
-        DashboardMetricData("TASK", (totalTasks.coerceIn(0, 10) * 10), totalTasks.toString()),
-        DashboardMetricData("NET", if (stats.networkConnected) 100 else 0, if (stats.networkConnected) "ON" else "OFF")
+        DashboardMetricData(
+            "SWP",
+            stats.swapUsedPercent,
+            stats.swapUsage
+                .takeUnless { it == "Unavailable" }
+                ?.replace(" GB", "GB")
+                ?: "--",
+            contentDescription = "Swap: ${stats.swapUsage}"
+        ),
+        DashboardMetricData(
+                "KEY",
+                null,
+                "${stats.currentKeyIndex}/${stats.totalKeys}",
+                contentDescription = "Gemini API key ${stats.currentKeyIndex} of ${stats.totalKeys}"
+        )
     )
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -1225,7 +1244,7 @@ private fun DashboardGaugeRow(
             modifier = modifier
                 .fillMaxWidth()
                 .heightIn(max = 26.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             metrics.forEach { metric ->
                 DashboardMetric(
@@ -1236,10 +1255,10 @@ private fun DashboardGaugeRow(
                     contentDescription = if (metric.label == "TASK") {
                         if (taskStripExpanded) "Hide active task details" else "Show active task details"
                     } else {
-                        metric.label
+                        metric.contentDescription
                     },
                     isDark = isDark,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(if (metric.label == "KEY") 1.12f else 1f),
                     onClick = if (metric.label == "TASK") onTaskGaugeClick else null
                 )
             }
@@ -1251,7 +1270,8 @@ private data class DashboardMetricData(
     val label: String,
     val percentage: Int?,
     val value: String,
-    val temperatureCelsius: Int? = null
+    val temperatureCelsius: Int? = null,
+    val contentDescription: String = label
 )
 
 @Composable
@@ -1448,7 +1468,7 @@ fun ConsolidatedMasterHeader(
                 color = MaterialTheme.colorScheme.headerBottomBorder.copy(alpha = if (isDark) 0.15f else 0.5f),
                 shape = headerShape
             )
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Column(

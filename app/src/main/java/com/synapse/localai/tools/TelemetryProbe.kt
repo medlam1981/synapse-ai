@@ -17,6 +17,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.NetworkInterface
+import java.util.Locale
 
 object TelemetryProbe {
 
@@ -47,11 +48,73 @@ object TelemetryProbe {
             .put("total_ram_bytes", memory.totalMem)
             .put("low_memory", memory.lowMemory)
             .put("processor_count", Runtime.getRuntime().availableProcessors())
+            .put("gemini_api_keys", geminiKeyMetrics(context))
+            .put("swap", swapMetrics())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             metrics.put("thermal_status", power.currentThermalStatus)
         }
         return metrics
+    }
+
+    private fun geminiKeyMetrics(context: Context): JSONObject {
+        val preferences = context.getSharedPreferences("synapse_config", Context.MODE_PRIVATE)
+        val configuredKeys = preferences.getString("gemini_api_keys", "")
+            .orEmpty()
+            .split(",")
+            .map { it.trim() }
+            .count { it.isNotEmpty() }
+        val activeKeyIndex = if (configuredKeys > 0) {
+            preferences.getInt("current_key_index", 0).coerceIn(0, configuredKeys - 1) + 1
+        } else {
+            0
+        }
+
+        return JSONObject()
+            .put("current_index", activeKeyIndex)
+            .put("total_count", configuredKeys)
+            .put("display", "$activeKeyIndex/$configuredKeys")
+    }
+
+    private fun swapMetrics(): JSONObject {
+        val memoryFields = try {
+            File("/proc/meminfo").useLines { lines ->
+                lines.mapNotNull { line ->
+                    val name = line.substringBefore(':')
+                    val valueKb = line.substringAfter(':', "")
+                        .trim()
+                        .split(Regex("\\s+"))
+                        .firstOrNull()
+                        ?.toLongOrNull()
+                    if (name.isBlank() || valueKb == null) null else name to valueKb
+                }.toMap()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("TelemetryProbe", "Could not read swap counters from /proc/meminfo", e)
+            emptyMap()
+        }
+
+        val totalKb = memoryFields["SwapTotal"] ?: return JSONObject()
+            .put("total_kb", JSONObject.NULL)
+            .put("free_kb", JSONObject.NULL)
+            .put("used_kb", JSONObject.NULL)
+            .put("used_gb", JSONObject.NULL)
+            .put("used_display", "Unavailable")
+        val freeKb = memoryFields["SwapFree"] ?: return JSONObject()
+            .put("total_kb", totalKb)
+            .put("free_kb", JSONObject.NULL)
+            .put("used_kb", JSONObject.NULL)
+            .put("used_gb", JSONObject.NULL)
+            .put("used_display", "Unavailable")
+        val usedKb = (totalKb - freeKb).coerceAtLeast(0L)
+        val usedGb = usedKb / 1024.0 / 1024.0
+
+        return JSONObject()
+            .put("total_kb", totalKb)
+            .put("free_kb", freeKb)
+            .put("used_kb", usedKb)
+            .put("used_gb", usedGb)
+            .put("used_display", String.format(Locale.US, "%.1fGB", usedGb))
     }
 
     private fun networkMetrics(context: Context): JSONObject {
@@ -112,6 +175,12 @@ object TelemetryProbe {
             .put("plugged", plugged != 0)
             .put("voltage_mv", voltageMv.takeIf { it >= 0 } ?: JSONObject.NULL)
             .put("battery_temperature_c", temperatureTenthsC.takeIf { it >= 0 }?.div(10f) ?: JSONObject.NULL)
+            .put(
+                "battery_temperature_display",
+                temperatureTenthsC.takeIf { it >= 0 }
+                    ?.let { String.format(Locale.US, "%.1f°C", it / 10f) }
+                    ?: "Unavailable"
+            )
             .put(
                 "thermal_status",
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
